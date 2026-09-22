@@ -53,9 +53,9 @@ pub trait ShapeInnerBuilder<
     /// ridge is actually in there. Returning the wrong `c` puts a term
     /// growing like λ into a gradient whose true value decays.
     ///
-    /// Default `0.0` — `PirlsInner` hands back the **unridged** factor
-    /// (its 1e-12 ridge is applied to a copy used only for the β̂ solve,
-    /// `linalg.rs::factor_and_solve_with_ridge`). `OcatInner` overrides.
+    /// Default `0.0` — `PirlsInner` hands back an **unridged** factor, the
+    /// one β̂ was solved with (`linalg.rs::factor_and_solve`). `OcatInner`
+    /// overrides.
     fn score_ridge_scale(&self, _n_terms: usize) -> f64 {
         0.0
     }

@@ -325,41 +325,28 @@ pub struct LuFactorState {
 }
 
 // =============================================================================
-// Backend-agnostic factor-and-solve with mgcv-style 1e-12·max_diag ridge.
+// Backend-agnostic factor-and-solve.
 // =============================================================================
 
-/// Factor `A` two ways and return `(unridged_factor, β̂)`:
-///   * `unridged_factor = S::factorize(A)` — kept on the `GaussianInnerFit`,
-///     fed to `log|H|` / `tr(H⁻¹S)` and any downstream score consumer.
-///   * `β̂` is solved via `S::factorize(A + ridge·I)` with
-///     `ridge = 1e-12·max(|A_ii|, 1)`, mirroring v0.x's
-///     `src/reml/system.rs:374-381`. v0.x adds the same ridge before
-///     calling LAPACK `dgesv` (LU) for β̂ and `dgetri` (LU) for tr_a;
-///     gamrs does the same for either backend.
+/// Factor `A` once and return `(factor, β̂)`; the same factor goes on the
+/// `GaussianInnerFit` and feeds `log|H|` / `tr(H⁻¹S)`.
 ///
-/// Without the ridge, gamrs's pure-Cholesky β̂ was bit-different from v0.x's
-/// LU+ridge β̂ on ill-conditioned fixtures (e.g. `low_signal_n1000_k10`).
-/// With the ridge, the §C4-note Gaussian byte-equivalence gap closes
-/// while keeping every score-side formula on the unridged factorisation.
-///
-/// `max_diag` clamps the diag-max at ≥ 1.0 to match v0.x's
-/// `fold(1.0_f64, f64::max)` start value — defensive against pathological
-/// near-zero diagonals.
-pub fn factor_and_solve_with_ridge<S: LinearSolver>(
+/// β̂ used to be solved from a second factorisation of `A + 1e-12·max|A_ii|·I`
+/// (a v0.x byte-parity habit). That ridge is uniform across the diagonal, so
+/// the moment one penalty block dwarfs the rest it stops being a rounding
+/// perturbation: on a 10-term house-price scat fit a lot-size term with
+/// `max diag S = 2.5e10` at its `λ = 1e6` start made the ridge 25,000 against
+/// an intercept diagonal of 2,147, β̂ came back at 0.078× the response level,
+/// PIRLS could not move off it (every Newton step re-solves the same ridged
+/// system), and the outer Newton optimised a criterion whose inner solution
+/// was not the penalised-deviance argmin. The unridged factor has already
+/// succeeded by the time a ridge could matter, so it never bought safety —
+/// only a β̂ that was not the solution of `A`.
+pub fn factor_and_solve<S: LinearSolver>(
     a: &Array2<f64>,
     rhs: ArrayView1<f64>,
 ) -> Result<(S::Factorization, Array1<f64>)> {
-    let p = a.nrows();
-    // Unridged factor for score-side consumers.
-    let fact_unridged = S::factorize(a.clone())?;
-    // Ridged copy used only for β̂.
-    let max_diag = a.diag().iter().map(|x| x.abs()).fold(1.0_f64, f64::max);
-    let ridge = 1e-12 * max_diag;
-    let mut a_solve = a.clone();
-    for i in 0..p {
-        a_solve[[i, i]] += ridge;
-    }
-    let fact_ridged = S::factorize(a_solve)?;
-    let beta = S::solve(&fact_ridged, rhs);
-    Ok((fact_unridged, beta))
+    let factor = S::factorize(a.clone())?;
+    let beta = S::solve(&factor, rhs);
+    Ok((factor, beta))
 }

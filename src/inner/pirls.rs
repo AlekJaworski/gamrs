@@ -9,8 +9,8 @@ use crate::family::Family;
 use crate::traits::{InnerSolver, Link, Loss, VarianceFn};
 
 use super::{
-    add_penalty, beta_sbeta, factor_and_solve_with_ridge, halve_until_valid, weighted_xt,
-    CholeskySolver, GaussianInnerFit, LinearSolver,
+    add_penalty, beta_sbeta, factor_and_solve, halve_until_valid, weighted_xt, CholeskySolver,
+    GaussianInnerFit, LinearSolver,
 };
 
 /// Vectorised Newton score weights `w_newton[i] = wf · α` at converged β.
@@ -590,13 +590,12 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver> I
         let xtwz = xtw.dot(&working_response);
         let mut a = xtwx.clone();
         add_penalty(&mut a, &s_total, 1.0);
-        let (factor, beta) =
-            factor_and_solve_with_ridge::<S>(&a, xtwz.view()).map_err(|e| match e {
-                GamrsError::SingularSystem(msg) => {
-                    GamrsError::SingularSystem(format!("PIRLS single-step factor: {msg}"))
-                }
-                other => other,
-            })?;
+        let (factor, beta) = factor_and_solve::<S>(&a, xtwz.view()).map_err(|e| match e {
+            GamrsError::SingularSystem(msg) => {
+                GamrsError::SingularSystem(format!("PIRLS single-step factor: {msg}"))
+            }
+            other => other,
+        })?;
 
         // Recompute (η, μ, deviance) at the new β so FS / downstream
         // consumers see a consistent state. O(n·p + n) — cheap.
@@ -823,16 +822,12 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
                 let xtwz = xtw.dot(&working_response);
                 let mut a = xtwx;
                 add_penalty(&mut a, &s_total, lambda);
-                // Phase-5b port — ridged factor used ONLY for β̂; the
-                // unridged factor is returned as `a_factor` and feeds
-                // log|H| / tr(H⁻¹S). See `gaussian_inner_solve`.
-                let (factor, b) =
-                    factor_and_solve_with_ridge::<S>(&a, xtwz.view()).map_err(|e| match e {
-                        GamrsError::SingularSystem(msg) => {
-                            GamrsError::SingularSystem(format!("PIRLS factor: {msg}"))
-                        }
-                        other => other,
-                    })?;
+                let (factor, b) = factor_and_solve::<S>(&a, xtwz.view()).map_err(|e| match e {
+                    GamrsError::SingularSystem(msg) => {
+                        GamrsError::SingularSystem(format!("PIRLS factor: {msg}"))
+                    }
+                    other => other,
+                })?;
                 (b, factor)
             };
 

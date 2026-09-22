@@ -31,8 +31,7 @@ pub use armijo::{ArmijoElfInner, ArmijoElfOpts};
 pub use closed_form::{gaussian_inner_solve, GaussianClosedFormInner};
 pub use gam_fit5::OcatInner;
 pub use linalg::{
-    chol_back_solve, chol_forward_solve, factor_and_solve_with_ridge, CholeskySolver, LinearSolver,
-    LuSolver,
+    chol_back_solve, chol_forward_solve, factor_and_solve, CholeskySolver, LinearSolver, LuSolver,
 };
 /// Diagnostic re-exports for the observed-curvature criterion's PD-fallback
 /// counters. These exist alongside the migration switch and go with it.
