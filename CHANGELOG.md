@@ -7,6 +7,50 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A `scat` fit whose intercept came back at a fraction of the response
+  level.** A 10-term `family="t-dist"` fit on ~1,800 house sales (raw prices,
+  identity link) returned `coef[0]` ≈ 56k on a 200k mean — fitted values at
+  0.08–0.28× the prices, `converged_ = False` after 9 outer iterations — on
+  0.13.2 through 0.14.2, while 0.13.1 returned 199.9k. Gaussian was fine on
+  every version.
+
+  The defect is in the inner solve, and it is old: β̂ was solved from a second
+  factorisation of `A + 1e-12·max|A_ii|·I`, a uniform ridge kept for v0.x
+  byte-parity. Uniform is the problem. The `lot_sqft` term (values 1.1e3 to
+  2.5e8, quantile knots leaving one interval ~1e4× longer than the rest) has a
+  penalty with `max diag S = 2.5e10`; `SmartInit` pins its λ at the 1e6 cap;
+  `A`'s largest diagonal is then 2.5e16 and the "rounding" ridge is 25,000 on
+  an intercept diagonal of 2,147. The very first PIRLS solve returns β̂ at
+  2147/(2147+25424) = 0.078 of the response level — the measured ratio to
+  three digits, and it tracks `2147/(2147 + 0.0254·λ)` across λ = 1e3…1e7 —
+  and PIRLS cannot leave it: every Newton step re-solves the same ridged
+  system and the penalised-deviance test rejects it, 50 iterations, not
+  converged. The outer Newton then optimises a criterion whose inner solution
+  is not the penalised-deviance argmin, and its own REML value at where it
+  stops (4028) is far above the value at 0.13.1's answer (1319).
+
+  Why 0.13.1 got away with it: its ρ-gradient carried the spurious
+  `½·c·λ·S[i*,i*]·tr(A⁻¹)` term 0.13.2 removed — proportional to λ, so on
+  this term it read ~1e4 and drove λ from 1e6 to 1e-7 in the first steps,
+  out of the regime where the ridge bites. Removing it was right; it exposed
+  the ridge. Restoring it on head makes the fit fail at iteration 1.
+
+  The unridged factor already had to succeed before the ridged one was ever
+  built, so the ridge never guarded against a singular system. β̂ is now
+  solved from the one factor the score reads
+  (`linalg.rs::factor_and_solve`). On the reported fit: intercept 56,103 →
+  199,853 (0.13.1: 199,869), mean(fitted)/mean(y) 0.280 → 0.999, corr 0.776
+  → 0.871, converged in 45 outer iterations; the inner PIRLS at the start
+  point goes from 50 iterations unconverged to 4. A synthetic two-term case
+  (`tests/tdist_intercept_collapse.rs`: one covariate integer-valued in a
+  narrow band with three far-out values, t₅ noise on a 200k level) goes from
+  intercept 158,622 to 200,251. Not `scat`-specific — the same solve serves
+  every PIRLS family and the Gaussian closed form; it needs one penalty
+  block ~1e13× the intercept's diagonal to matter, which is why 24 parity
+  fixtures never saw it.
+
 ## [0.14.2] — 2026-09-04
 
 ### Fixed
