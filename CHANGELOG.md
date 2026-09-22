@@ -51,6 +51,33 @@ is locked. Versions correspond to the published PyPI wheels.
   block ~1e13× the intercept's diagonal to matter, which is why 24 parity
   fixtures never saw it.
 
+- **The ρ box now ends where the factorisation stops being computable.**
+  Removing the ridge above exposed a second, older defect: `A = X'WX +
+  Σλ_jS_j` is factorised as is, so once `λ_j·S_j` dwarfs `X'WX` the penalty's
+  null-space directions (a smooth's linear part is not axis-aligned) are
+  recovered from a cancellation of order `eps·λ_j·max diag S_j / max diag
+  X'X`. Past `grad_tol / eps` (≈ 4.5e8) that round-off exceeds the gradient
+  tolerance and the REML surface grows a slope of its own. Measured on seed 29
+  of `tests/outer_indefinite_axis.rs` at fixed shape: `g_ρ` = −6.8e-6 at
+  ρ = 20, −1.1e-2 at 30, −11 at 38.6, where the true gradient decays like
+  1/λ; the outer followed it to λ = 5.7e16, edf 2.63 on a curve that is a
+  straight line at edf 2.0000, and reported `converged = false`. 0.14.2
+  never got there by accident: its ridge began crushing the intercept around
+  ρ = 25 (score 62 → 98 → 1,207 → 25,822 along ρ), a wall that stopped the
+  outer at ρ = 20.
+
+  `axis_bounds` now caps each ρ_j at `ln((grad_tol/eps)·max diag X'X / max
+  diag S_j)` (still at most the old 50); the lower bound stays at −50. mgcv
+  avoids the region by reparameterising (Wood 2011 Appendix B); until gamrs
+  does, the box ends where the arithmetic does. The 117-fit sweep: non-
+  converged 1 → 0, outer iterations 3,866 → 3,390. Seed 29 converges at
+  ρ = 22.7 with REML 62.2374 (0.14.2: 62.2384) and edf 2.0000, in 86 outer
+  iterations against 0.14.2's 13 — it now walks to the bound and settles ν
+  there rather than stopping on the ridge's wall. Draws whose λ̂ used to sit
+  above the new bound land on it and are classified converged by the
+  boundary KKT test; their fits are unchanged to the printed digits because
+  such a term is already at its null-space edf.
+
 ## [0.14.2] — 2026-09-04
 
 ### Fixed
