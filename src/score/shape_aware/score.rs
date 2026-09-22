@@ -194,11 +194,38 @@ where
     }
 
     fn axis_bounds(&self) -> Option<Vec<(f64, f64)>> {
-        // ρ axes: effectively unbounded (large range — log λ saturation
-        // is governed by the gradient flattening, not a hard cap). Shape
-        // axes: family-supplied (ocat θ ∈ [-10, 10] etc.).
-        let n_terms = self.s_list.len();
-        let mut bnds: Vec<(f64, f64)> = vec![(-50.0, 50.0); n_terms];
+        // ρ axes: bounded above where the criterion stops being computable.
+        // `A = X'WX + Σλ_jS_j` is factorised as is, so once λ_j·S_j dwarfs X'WX
+        // the penalty's null-space directions (a smooth's linear part is not
+        // axis-aligned) are recovered from a cancellation of order
+        // eps·λ_j·max diag S_j / max diag X'X. Past `grad_tol / eps` that
+        // round-off exceeds the gradient tolerance, the REML surface acquires
+        // a slope of its own, and the outer Newton follows it: on a n=66 scat
+        // draw the gradient at fixed shape read −6.8e-6 at ρ=20, −1.1e-2 at
+        // ρ=30, −11 at ρ=38.6 (the true gradient decays like 1/λ), and the
+        // fit came back at λ=5.7e16 with edf 2.63 on what is a straight line
+        // at edf 2.0000. mgcv avoids the region by reparameterising
+        // (Wood 2011 Appendix B); until gamrs does, the box ends where the
+        // arithmetic does. The lower bound stays wide: λ→0 costs nothing.
+        let p = self.x_design.ncols();
+        let xtx_diag_max = (0..p)
+            .map(|c| self.x_design.column(c).mapv(|v| v * v).sum())
+            .fold(0.0_f64, f64::max)
+            .max(f64::MIN_POSITIVE);
+        let cond_limit = crate::outer::NewtonOpts::default().grad_tol / f64::EPSILON;
+        let mut bnds: Vec<(f64, f64)> = self
+            .s_list
+            .iter()
+            .map(|s_j| {
+                let s_diag_max = s_j.diag().iter().cloned().fold(0.0_f64, f64::max);
+                let hi = if s_diag_max > 0.0 {
+                    (cond_limit * xtx_diag_max / s_diag_max).ln().min(50.0)
+                } else {
+                    50.0
+                };
+                (-50.0, hi)
+            })
+            .collect();
         bnds.extend(self.family_base.loss.shape_axis_bounds());
         Some(bnds)
     }
