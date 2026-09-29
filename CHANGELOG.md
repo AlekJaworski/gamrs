@@ -78,6 +78,31 @@ is locked. Versions correspond to the published PyPI wheels.
   boundary KKT test; their fits are unchanged to the printed digits because
   such a term is already at its null-space edf.
 
+- **`scat` now starts its smoothing parameters where mgcv does.** A 10-smooth
+  `family="t-dist"` fit on 1,000 house sales ended 15.3 REML units worse than
+  mgcv `gam(method="REML")`: `lot_sqft` came back a straight line (edf 1.00)
+  where mgcv fits a curve (edf 4.50). Both libraries score the same criterion
+  (mgcv at gamrs's point: 776.164; gamrs: 776.149). Along `lot_sqft` it has
+  two basins, a minimum at log λ −2.19 and, past a ridge near 6, a shelf as
+  λ → ∞. `SmartInit` divides every `‖S_j‖_F` by one global `‖X‖_F²` and
+  started that skewed term at 6.48; mgcv's `initial.sp` starts it at −0.11.
+  mgcv's own Newton, given gamrs's start, lands on the same shelf. The basin
+  boundary is between 5.00 and 5.25. With `converged_ = True` on the
+  tdist-intercept branch, the wrong answer was silent.
+
+  `scat` now uses `MgcvInit`, a port of mgcv 1.9-3's `initial.sp` on the
+  design `initial.spg` weights for an extended family (`½·Dmu2` at
+  `mustart`). It matches mgcv's own `initial.sp` to 1e-9 on mgcv's own `X`
+  and `S`, weighted and unweighted (`tests/initial_sp_parity.rs`). On the
+  heatmap benchmark's 16 fits (REML minus mgcv):
+  - m04 wide goes from +15.31 to +0.00;
+  - m01 wide goes from +14.32 to +3.28;
+  - m02 wide goes from −8.86 to +1.24, now mgcv's basin rather than a luckier one;
+  - the other 13 stay within 0.03.
+
+  NegBin, Tweedie and ocat keep `SmartInit`. Write-up:
+  `docs/scat_start_basin_bug.md`.
+
 ## [0.14.2] — 2026-09-04
 
 ### Fixed
