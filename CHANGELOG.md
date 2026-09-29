@@ -103,6 +103,20 @@ is locked. Versions correspond to the published PyPI wheels.
   NegBin, Tweedie and ocat keep `SmartInit`. Write-up:
   `docs/scat_start_basin_bug.md`.
 
+- **scat's default ν and σ² starts are mgcv's, and small responses are
+  standardized too.** Without `df=` or `sigma2=`, a scat fit now starts at
+  mgcv's `preinitialize`: ν = 3 + e^1.5 (was 5) and σ = 0.8·sd(y) (was
+  sd(y)). `scat_response_scale` dropped its sd ≥ 1 floor. Under the floor, a
+  response such as price/1e6 (sd ≈ 0.1) was left unstandardized, so its
+  O(1)-tuned σ² start was far off and the outer loop walked it down one capped
+  step at a time.
+
+  On the heatmap benchmark:
+  - m01 wide now matches mgcv (REML 16.594 vs 16.593); it was 3.3 behind with
+    the new λ start alone.
+  - Outer iterations fall on 12 of 16 fits (e.g. 200 → 16, 200 → 48).
+  - m18 wide now hits the 200 cap.
+
 ## [0.14.2] — 2026-09-04
 
 ### Fixed

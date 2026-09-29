@@ -332,7 +332,13 @@ impl<S: LinearSolver> FamilyFitWithSolver<LogLink, NegBinVariance, S> for NegBin
 }
 
 /// Response scale for scat's internal standardization — the sample standard
-/// deviation of `y` (ddof=1), floored at 1.0 so it never shrinks the data.
+/// deviation of `y` (ddof=1); 1.0 only when that is zero or not finite.
+///
+/// It used to be floored at 1.0 as well, so a response with sd < 1 (prices
+/// in millions, sd ≈ 0.1) was never standardized: the default σ² start of
+/// sd² then sat far from the O(1) scale everything else is tuned for, and the
+/// outer loop walked log σ² down one capped step per iteration — 40–200 outer
+/// iterations where mgcv takes 8–16 (docs/scat_start_basin_bug.md).
 ///
 /// scat's observed IRLS weight is `W = ½·Dμμ ~ 1/σ²`, and the inner solve
 /// forms `X'WX + λS` and Cholesky-factorizes it. A raw response with
@@ -351,7 +357,7 @@ pub(crate) fn scat_response_scale(y: ArrayView1<f64>) -> f64 {
     let mean = y.sum() / n as f64;
     let var = y.iter().map(|&yi| (yi - mean).powi(2)).sum::<f64>() / (n as f64 - 1.0);
     let sd = var.sqrt();
-    if sd.is_finite() && sd > 1.0 {
+    if sd.is_finite() && sd > 0.0 {
         sd
     } else {
         1.0

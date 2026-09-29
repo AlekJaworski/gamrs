@@ -281,7 +281,7 @@ fn observed_criterion_pd_fallback_rate_by_start() {
 }
 
 /// **Pre-standardizing the response by hand must be a no-op.** The fit core
-/// divides by `scat_response_scale(y)` = `sd(y)` (floored at 1) and rescales
+/// divides by `scat_response_scale(y)` = `sd(y)` and rescales
 /// out, so handing it `y/sd(y)` with a correspondingly scaled σ² start poses
 /// the identical problem. If the two disagree, the standardization round-trip
 /// is not exact and every measurement depends on which scale you happened to

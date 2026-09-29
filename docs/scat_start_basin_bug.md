@@ -138,6 +138,21 @@ iterations. That remainder is not a start problem, and is not investigated here.
 A committable restatement of the two-basin shape (synthetic data) is still
 missing. The parity test pins the start, not the basin.
 
+### Then the rest of mgcv's start (ν, σ², and no sd floor)
+
+gamrs's default scat start is now mgcv's `preinitialize` as well: ν = 3 + e^1.5, σ =
+0.8·sd(y). `scat_response_scale` no longer floors sd at 1, so a small-scale response is
+standardized too. On the same 16 fits:
+- m01 wide, which `MgcvInit` alone left +3.3 behind mgcv, now matches it: 16.594 vs 16.593
+  on the standardized response.
+- m04 wide still lands on 760.848.
+- Outer iterations drop on 12 of 16 (m04 filtered 200 → 16, m38 wide 200 → 48), but
+  m18 wide now hits the 200 cap (6.7 → 10.8 s).
+
+The other 14 have not been re-scored against mgcv on the standardized response
+(benchmarking stopped there). The outer gradient tolerance, tighter than mgcv's, is
+unchanged; it is shared by every family.
+
 ## Related, separate: slow `scat` fits on a small-scale response
 
 Found in the same investigation. It affects speed, not the answer.
