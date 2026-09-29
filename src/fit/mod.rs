@@ -60,7 +60,7 @@ pub mod shash;
 pub use canonical::{
     fit, fit_with, fit_with_design, fit_with_solver, FamilyFit, FamilyFitWithSolver, FitWithProfile,
 };
-pub use driver::{ExplicitInit, LambdaInit, SmartInit, ZeroInit};
+pub use driver::{ExplicitInit, LambdaInit, MgcvInit, SmartInit, ZeroInit};
 pub use gaulss::{fit_gaulss, GaulssFit, GaulssOpts};
 pub use shash::{fit_shash, ShashGamFit, ShashGamOpts};
 

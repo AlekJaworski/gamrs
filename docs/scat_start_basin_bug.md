@@ -1,9 +1,10 @@
-# `scat` multi-smooth fit starts one term past a ridge and ends on the wrong optimum (OPEN)
+# `scat` multi-smooth fit starts one term past a ridge and ends on the wrong optimum (FIX ON BRANCH)
 
-**Status: OPEN** — found 2026-09-29, reproduced on gamrs 0.14.2 (PyPI) and on the
-unreleased `fix/tdist-intercept-collapse` wheel. Not fixed. No committable
-regression test yet: the reproduction uses real housing sales, kept
-out of the repo under the gitignored `data/` (`data/SCAT_START_BASIN_REPRO.md`).
+**Status: FIX ON BRANCH** `fix/scat-start-basin` (on top of `fix/tdist-intercept-collapse`),
+unreleased. Found 2026-09-29, reproduced on gamrs 0.14.2 (PyPI) and on the
+`fix/tdist-intercept-collapse` wheel. The fix, `MgcvInit`, is mgcv's own start, pinned
+by `tests/initial_sp_parity.rs` against mgcv's `initial.sp` on mgcv's own design. The
+real-data reproduction stays in the gitignored `data/` (`data/SCAT_START_BASIN_REPRO.md`).
 
 ## The bug
 
@@ -93,22 +94,49 @@ in the model is this skewed. Why `SmartInit`'s formula
 (`λ = var(y)·‖S_j‖_F·n / ‖X‖_F²`, one global `‖X‖` for every term) puts this
 term ~7 log-units above the others has **not** been established.
 
-## Fix directions (not yet tried)
+## The fix: start where mgcv starts
 
-1. **Port mgcv's `initial.sp`.** It is term-local: it compares each term's own
-   block of `X'X` with its `S_j`, rather than dividing every `S_j` by one global
-   `‖X‖_F²`. On this data it starts every term in the right basin.
-2. **Probe the shelf.** When a term ends at edf ≈ 1 with its λ at or near the
-   ρ box and a vanishing gradient, re-evaluate from that term's
-   `initial.sp`-style start and keep the lower score. It costs one extra
-   outer run, and only on fits that land on a shelf.
-3. **Stop reporting `converged` on a shelf.** At minimum, the fix branch should
-   not report `converged_ = True` for a term whose gradient is zero only
-   because λ ran off to infinity.
+`scat` now starts from `MgcvInit` (`src/fit/driver.rs`), a port of mgcv 1.9-3's
+`initial.sp`, weighted as `initial.spg` weights an extended family. Every row gets
+`½·Dmu2` at `mustart = y + 0.1·[y == 0]` (`scat_initial_weights`). Each term's λ
+comes from its own block, the mean of `diag(X'WX)` over the mean of `diag(S_j)`,
+and then all λ are scaled together by powers of 10 until the penalised columns
+are ~40% data-dominated. gamrs's init ν and σ² still differ from mgcv's
+`preinitialize` (ν = 3 + e^1.5, σ = 0.8·sd(y)), which moves every starting log λ
+by the same constant. That doesn't change which basin any term starts in. NegBin,
+Tweedie and ocat still use `SmartInit`: nothing measured says they need to change.
 
-A committable restatement needs a synthetic design where one smooth's
-criterion has the same two-basin shape. That is the next step once a fix is
-chosen.
+On the reproduction the fit now lands exactly on mgcv's optimum: REML 760.848,
+`lot_sqft` edf 4.51 at log λ −2.185.
+
+The heatmap benchmark's 16 fits (8 markets × wide/filtered seed, y = price/1e6),
+REML minus mgcv `gam(REML)`. Lower is better; negative means gamrs beat mgcv:
+
+| fit | `fix/tdist-intercept-collapse` | + `MgcvInit` |
+|---|---|---|
+| m04 wide | +15.306 | **+0.001** |
+| m01 wide | +14.322 | **+3.275** |
+| m02 wide | **−8.856** | +1.244 |
+| other 13 | within ±0.03 | within ±0.03 |
+
+The start is mgcv's, not a better one. On m02 wide, mgcv's start leads to a
+worse basin than `SmartInit` found. gamrs now matches mgcv there instead of
+beating it. m01 wide is still 3.3 units behind mgcv, unconverged at 60 outer
+iterations. That remainder is not a start problem, and is not investigated here.
+
+### Considered and not done
+
+- **Refit from a second start and keep the lower score.** It would keep m02
+  wide's −8.9 as well as fixing m04. It costs a second fit on every `scat`
+  call and goes beyond mgcv parity.
+- **Report `converged_ = False` when a term ends on the shelf.** This can't be
+  made truthful: a term whose true optimum is a straight line sits on the same
+  shelf. On this very fit, `bathrooms` ends at edf 1.00, log λ 18.2, in both
+  mgcv and gamrs, and that is correct. mgcv reports full convergence on the
+  wrong shelf too.
+
+A committable restatement of the two-basin shape (synthetic data) is still
+missing. The parity test pins the start, not the basin.
 
 ## Related, separate: slow `scat` fits on a small-scale response
 

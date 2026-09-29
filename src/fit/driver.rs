@@ -82,6 +82,102 @@ impl LambdaInit for SmartInit {
     }
 }
 
+/// mgcv's `initial.sp` (mgcv 1.9-3) on the weighted design `√w·X` — what
+/// `initial.spg` does for an extended family such as `scat`. Each term's
+/// λ is set from its OWN block: the mean of `diag(X'WX)` over the columns
+/// its penalty acts on, over the mean of `diag(S_j)` there. All λ are then
+/// scaled together by powers of 10 until the penalised columns are about
+/// 40% data-dominated (`mean(xx/(xx+ss)) ≥ 0.4`).
+///
+/// [`SmartInit`] instead divides every `‖S_j‖_F` by one global `‖X‖_F²`,
+/// which can start a term on the wrong side of a ridge in the criterion:
+/// on a 1,000-sale `scat` fit it started `lot_sqft` at log λ 6.48 against
+/// mgcv's −0.11, past a basin boundary at ~5.1, and the fit ended with the
+/// term a straight line and REML 15 units worse
+/// (`docs/scat_start_basin_bug.md`).
+#[derive(Clone, Default)]
+pub struct MgcvInit {
+    /// Working weights `w_i` (not their square roots); `None` = all 1.
+    pub weights: Option<Array1<f64>>,
+}
+impl LambdaInit for MgcvInit {
+    fn init(
+        &self,
+        _y: ArrayView1<f64>,
+        x_design: &Array2<f64>,
+        s_list: &[Array2<f64>],
+    ) -> Array1<f64> {
+        let p = x_design.ncols();
+        let ldxx: Array1<f64> = (0..p)
+            .map(|c| match &self.weights {
+                Some(w) => x_design
+                    .column(c)
+                    .iter()
+                    .zip(w.iter())
+                    .map(|(v, wi)| wi * v * v)
+                    .sum(),
+                None => x_design.column(c).iter().map(|v| v * v).sum(),
+            })
+            .collect();
+        let mut ldss = Array1::<f64>::zeros(p);
+        let mut pen = vec![false; p];
+        let mut sp = Array1::<f64>::zeros(s_list.len());
+        for (j, s_j) in s_list.iter().enumerate() {
+            // mgcv's S[[i]] is the term's own block; ours is embedded in p×p, so
+            // its row/column means are taken over the block's width, not p.
+            let nonzero: Vec<usize> = (0..p)
+                .filter(|&r| s_j.row(r).iter().any(|&v| v != 0.0))
+                .collect();
+            let (Some(&first), Some(&last)) = (nonzero.first(), nonzero.last()) else {
+                continue; // an all-zero penalty penalises nothing; λ stays 1
+            };
+            let width = (last - first + 1) as f64;
+            let max_abs = s_j.iter().fold(0.0_f64, |m, &v| m.max(v.abs()));
+            let thresh = f64::EPSILON.powf(0.8) * max_abs;
+            let penalised: Vec<usize> = (first..=last)
+                .filter(|&r| {
+                    s_j.row(r).iter().map(|v| v.abs()).sum::<f64>() / width > thresh
+                        && s_j.column(r).iter().map(|v| v.abs()).sum::<f64>() / width > thresh
+                        && s_j[[r, r]].abs() > thresh
+                })
+                .collect();
+            let m = penalised.len() as f64;
+            let size_xx = penalised.iter().map(|&r| ldxx[r]).sum::<f64>() / m;
+            let size_s = penalised.iter().map(|&r| s_j[[r, r]]).sum::<f64>() / m;
+            if !(size_s > 0.0 && size_xx.is_finite()) {
+                continue; // mgcv stops here ("S not +ve definite"); λ stays 1
+            }
+            sp[j] = size_xx / size_s;
+            for &r in &penalised {
+                pen[r] = true;
+            }
+            for r in first..=last {
+                ldss[r] += sp[j] * s_j[[r, r]];
+            }
+        }
+        let cols: Vec<usize> = (0..p)
+            .filter(|&c| ldss[c] > 0.0 && pen[c] && ldxx[c] > 0.0)
+            .collect();
+        if !cols.is_empty() {
+            let data_share = |scale: f64| {
+                cols.iter()
+                    .map(|&c| ldxx[c] / (ldxx[c] + scale * ldss[c]))
+                    .sum::<f64>()
+                    / cols.len() as f64
+            };
+            let mut scale = 1.0_f64;
+            while data_share(scale) > 0.4 {
+                scale *= 10.0;
+            }
+            while data_share(scale) < 0.4 {
+                scale /= 10.0;
+            }
+            sp.mapv_inplace(|v| v * scale);
+        }
+        sp.mapv(|v| if v > 0.0 { v.ln() } else { 0.0 })
+    }
+}
+
 /// Caller-supplied ρ vector (e.g. from a pickled warm-restart or a
 /// hand-tuned starting point). The vector's length must equal the
 /// `s_list.len()` of the surrounding fit (debug-asserted).
