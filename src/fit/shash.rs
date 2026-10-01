@@ -221,7 +221,12 @@ fn build_block(
     terms: &[TermSpec],
     x: ArrayView2<f64>,
     block_name: &str,
-) -> Result<(Array2<f64>, Option<ShashPenalty>, Option<Predictor>, Vec<usize>)> {
+) -> Result<(
+    Array2<f64>,
+    Option<ShashPenalty>,
+    Option<Predictor>,
+    Vec<usize>,
+)> {
     if terms.is_empty() {
         // Intercept-only predictor — a column of ones (mgcv's `~ 1` block).
         let n = x.nrows();
@@ -254,7 +259,12 @@ fn build_block(
         // unpenalised, but still a real design (intercept + raw column).
         None
     };
-    Ok((prepared.x_design, penalty, Some(prepared.predictor), dropped))
+    Ok((
+        prepared.x_design,
+        penalty,
+        Some(prepared.predictor),
+        dropped,
+    ))
 }
 
 /// Fit a sinh-arcsinh (`shash`) GAMLSS end-to-end: build per-predictor designs
@@ -363,7 +373,12 @@ pub fn fit_shash(
     Ok(ShashGamFit {
         beta: ndarray::concatenate(
             ndarray::Axis(0),
-            &[blocks[0].beta.view(), blocks[1].beta.view(), blocks[2].beta.view(), blocks[3].beta.view()],
+            &[
+                blocks[0].beta.view(),
+                blocks[1].beta.view(),
+                blocks[2].beta.view(),
+                blocks[3].beta.view(),
+            ],
         )
         .expect("blocks are 1-D"),
         block_p: std::array::from_fn(|b| blocks[b].beta.len()),

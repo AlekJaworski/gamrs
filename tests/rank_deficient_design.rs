@@ -13,8 +13,12 @@ const N: usize = 120;
 
 /// Columns: 0 smooth covariate, 1 sparse tag, 2 a count in {1, 2}.
 fn base() -> (Vec<f64>, Vec<f64>, Vec<f64>) {
-    let x: Vec<f64> = (0..N).map(|i| ((i as f64) * 0.618_033_988_75).fract()).collect();
-    let tag: Vec<f64> = (0..N).map(|i| if i % 17 == 3 { 1.0 } else { 0.0 }).collect();
+    let x: Vec<f64> = (0..N)
+        .map(|i| ((i as f64) * 0.618_033_988_75).fract())
+        .collect();
+    let tag: Vec<f64> = (0..N)
+        .map(|i| if i % 17 == 3 { 1.0 } else { 0.0 })
+        .collect();
     let count: Vec<f64> = (0..N).map(|i| if i % 9 == 0 { 1.0 } else { 2.0 }).collect();
     (x, tag, count)
 }
@@ -30,7 +34,11 @@ fn response(x: &[f64], tag: &[f64], count: &[f64]) -> Array1<f64> {
 }
 
 fn terms(n_parametric: usize) -> Vec<TermSpec> {
-    let mut t = vec![TermSpec::Cr { col: 0, k: 8, pc: None }];
+    let mut t = vec![TermSpec::Cr {
+        col: 0,
+        k: 8,
+        pc: None,
+    }];
     t.extend((1..=n_parametric).map(|col| TermSpec::Parametric { col }));
     t
 }
@@ -57,7 +65,11 @@ fn duplicate_tag_fits_as_if_the_copy_were_absent() {
     .unwrap();
 
     let p = dup.beta.len();
-    assert_eq!(dup.aliased_coefficients(), vec![p - 1], "the later copy is the one zeroed");
+    assert_eq!(
+        dup.aliased_coefficients(),
+        vec![p - 1],
+        "the later copy is the one zeroed"
+    );
     assert_eq!(dup.beta[p - 1], 0.0);
     assert!(dup.vcov.row(p - 1).iter().all(|&v| v == 0.0));
     assert!(reduced.aliased_coefficients().is_empty());
@@ -91,7 +103,13 @@ fn counts_summing_to_a_constant_keep_the_intercept() {
 fn binomial_with_a_duplicate_tag_fits() {
     let (x, tag, count) = base();
     let y: Array1<f64> = (0..N)
-        .map(|i| if (6.0 * x[i]).sin() + 0.4 * tag[i] > 0.1 * ((i % 5) as f64) { 1.0 } else { 0.0 })
+        .map(|i| {
+            if (6.0 * x[i]).sin() + 0.4 * tag[i] > 0.1 * ((i % 5) as f64) {
+                1.0
+            } else {
+                0.0
+            }
+        })
         .collect();
     let fit = fit_with_design(
         bernoulli_logit(),
@@ -115,8 +133,16 @@ fn two_smooths_of_one_covariate_fit() {
         gaussian_identity(),
         Additive {
             terms: vec![
-                TermSpec::Cr { col: 0, k: 8, pc: None },
-                TermSpec::Cr { col: 1, k: 8, pc: None },
+                TermSpec::Cr {
+                    col: 0,
+                    k: 8,
+                    pc: None,
+                },
+                TermSpec::Cr {
+                    col: 1,
+                    k: 8,
+                    pc: None,
+                },
             ],
         },
         columns(&[&x, &x]).view(),
@@ -125,5 +151,9 @@ fn two_smooths_of_one_covariate_fit() {
     )
     .unwrap();
     assert_eq!(fit.aliased_coefficients().len(), 1);
-    assert!(fit.predict(columns(&[&x, &x]).view()).unwrap().iter().all(|v| v.is_finite()));
+    assert!(fit
+        .predict(columns(&[&x, &x]).view())
+        .unwrap()
+        .iter()
+        .all(|v| v.is_finite()));
 }

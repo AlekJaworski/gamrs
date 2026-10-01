@@ -160,8 +160,14 @@ pub(crate) fn without_columns(prep: PreparedDesign, dropped: &[usize]) -> Result
     let mut log_pseudo_det_s_list = prep.log_pseudo_det_s_list;
     let mut s_list = Vec::with_capacity(prep.s_list.len());
     for (j, s_j) in prep.s_list.iter().enumerate() {
-        let reduced = s_j.select(Axis(0), &keep).select(Axis(1), &keep).as_standard_layout().into_owned();
-        let touched = dropped.iter().any(|&i| s_j.row(i).iter().any(|&v| v != 0.0));
+        let reduced = s_j
+            .select(Axis(0), &keep)
+            .select(Axis(1), &keep)
+            .as_standard_layout()
+            .into_owned();
+        let touched = dropped
+            .iter()
+            .any(|&i| s_j.row(i).iter().any(|&v| v != 0.0));
         if touched {
             let (rank, log_det) = rank_and_log_pseudo_det(reduced.view())?;
             rank_s_list[j] = rank;
@@ -171,7 +177,11 @@ pub(crate) fn without_columns(prep: PreparedDesign, dropped: &[usize]) -> Result
     }
     let mp = keep.len().saturating_sub(rank_s_list.iter().sum::<usize>());
     Ok(PreparedDesign {
-        x_design: prep.x_design.select(Axis(1), &keep).as_standard_layout().into_owned(),
+        x_design: prep
+            .x_design
+            .select(Axis(1), &keep)
+            .as_standard_layout()
+            .into_owned(),
         s_list,
         rank_s_list,
         log_pseudo_det_s_list,
@@ -218,14 +228,23 @@ mod tests {
 
     #[test]
     fn well_posed_design_drops_nothing() {
-        let x = design(&[vec![1.0; 4], vec![0.0, 1.0, 0.0, 1.0], vec![1.0, 2.0, 4.0, 3.0]]);
+        let x = design(&[
+            vec![1.0; 4],
+            vec![0.0, 1.0, 0.0, 1.0],
+            vec![1.0, 2.0, 4.0, 3.0],
+        ]);
         assert!(aliased_columns(&x, &[], None).unwrap().is_empty());
     }
 
     #[test]
     fn exact_copy_drops_the_later_column() {
         let tag = vec![0.0, 1.0, 0.0, 0.0, 1.0, 0.0];
-        let x = design(&[vec![1.0; 6], tag.clone(), vec![3.0, 1.0, 4.0, 1.0, 5.0, 9.0], tag]);
+        let x = design(&[
+            vec![1.0; 6],
+            tag.clone(),
+            vec![3.0, 1.0, 4.0, 1.0, 5.0, 9.0],
+            tag,
+        ]);
         assert_eq!(aliased_columns(&x, &[], None).unwrap(), vec![3]);
     }
 
@@ -258,7 +277,11 @@ mod tests {
     #[test]
     fn zero_weight_rows_do_not_identify() {
         // The two columns differ only on a row with prior weight 0.
-        let x = design(&[vec![1.0; 4], vec![0.0, 1.0, 0.0, 1.0], vec![0.0, 1.0, 0.0, 0.0]]);
+        let x = design(&[
+            vec![1.0; 4],
+            vec![0.0, 1.0, 0.0, 1.0],
+            vec![0.0, 1.0, 0.0, 0.0],
+        ]);
         let w = array![1.0, 1.0, 1.0, 0.0];
         assert!(aliased_columns(&x, &[], None).unwrap().is_empty());
         assert_eq!(aliased_columns(&x, &[], Some(w.view())).unwrap(), vec![2]);
