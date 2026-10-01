@@ -54,6 +54,114 @@ is locked. Versions correspond to the published PyPI wheels.
   design pays one Cholesky of `X'X + ΣS` for the check, with no measurable
   change in fit time.
 
+- **A `scat` fit whose intercept came back at a fraction of the response
+  level.** A 10-term `family="t-dist"` fit on ~1,800 house sales (raw prices,
+  identity link) returned `coef[0]` ≈ 56k on a 200k mean — fitted values at
+  0.08–0.28× the prices, `converged_ = False` after 9 outer iterations — on
+  0.13.2 through 0.14.2, while 0.13.1 returned 199.9k. Gaussian was fine on
+  every version.
+
+  The defect is in the inner solve, and it is old: β̂ was solved from a second
+  factorisation of `A + 1e-12·max|A_ii|·I`, a uniform ridge kept for v0.x
+  byte-parity. Uniform is the problem. The `lot_sqft` term (values 1.1e3 to
+  2.5e8, quantile knots leaving one interval ~1e4× longer than the rest) has a
+  penalty with `max diag S = 2.5e10`; `SmartInit` pins its λ at the 1e6 cap;
+  `A`'s largest diagonal is then 2.5e16 and the "rounding" ridge is 25,000 on
+  an intercept diagonal of 2,147. The very first PIRLS solve returns β̂ at
+  2147/(2147+25424) = 0.078 of the response level — the measured ratio to
+  three digits, and it tracks `2147/(2147 + 0.0254·λ)` across λ = 1e3…1e7 —
+  and PIRLS cannot leave it: every Newton step re-solves the same ridged
+  system and the penalised-deviance test rejects it, 50 iterations, not
+  converged. The outer Newton then optimises a criterion whose inner solution
+  is not the penalised-deviance argmin, and its own REML value at where it
+  stops (4028) is far above the value at 0.13.1's answer (1319).
+
+  Why 0.13.1 got away with it: its ρ-gradient carried the spurious
+  `½·c·λ·S[i*,i*]·tr(A⁻¹)` term 0.13.2 removed — proportional to λ, so on
+  this term it read ~1e4 and drove λ from 1e6 to 1e-7 in the first steps,
+  out of the regime where the ridge bites. Removing it was right; it exposed
+  the ridge. Restoring it on head makes the fit fail at iteration 1.
+
+  The unridged factor already had to succeed before the ridged one was ever
+  built, so the ridge never guarded against a singular system. β̂ is now
+  solved from the one factor the score reads
+  (`linalg.rs::factor_and_solve`). On the reported fit: intercept 56,103 →
+  199,853 (0.13.1: 199,869), mean(fitted)/mean(y) 0.280 → 0.999, corr 0.776
+  → 0.871, converged in 45 outer iterations; the inner PIRLS at the start
+  point goes from 50 iterations unconverged to 4. A synthetic two-term case
+  (`tests/tdist_intercept_collapse.rs`: one covariate integer-valued in a
+  narrow band with three far-out values, t₅ noise on a 200k level) goes from
+  intercept 158,622 to 200,251. Not `scat`-specific — the same solve serves
+  every PIRLS family and the Gaussian closed form; it needs one penalty
+  block ~1e13× the intercept's diagonal to matter, which is why 24 parity
+  fixtures never saw it.
+
+- **The ρ box now ends where the factorisation stops being computable.**
+  Removing the ridge above exposed a second, older defect: `A = X'WX +
+  Σλ_jS_j` is factorised as is, so once `λ_j·S_j` dwarfs `X'WX` the penalty's
+  null-space directions (a smooth's linear part is not axis-aligned) are
+  recovered from a cancellation of order `eps·λ_j·max diag S_j / max diag
+  X'X`. Past `grad_tol / eps` (≈ 4.5e8) that round-off exceeds the gradient
+  tolerance and the REML surface grows a slope of its own. Measured on seed 29
+  of `tests/outer_indefinite_axis.rs` at fixed shape: `g_ρ` = −6.8e-6 at
+  ρ = 20, −1.1e-2 at 30, −11 at 38.6, where the true gradient decays like
+  1/λ; the outer followed it to λ = 5.7e16, edf 2.63 on a curve that is a
+  straight line at edf 2.0000, and reported `converged = false`. 0.14.2
+  never got there by accident: its ridge began crushing the intercept around
+  ρ = 25 (score 62 → 98 → 1,207 → 25,822 along ρ), a wall that stopped the
+  outer at ρ = 20.
+
+  `axis_bounds` now caps each ρ_j at `ln((grad_tol/eps)·max diag X'X / max
+  diag S_j)` (still at most the old 50); the lower bound stays at −50. mgcv
+  avoids the region by reparameterising (Wood 2011 Appendix B); until gamrs
+  does, the box ends where the arithmetic does. The 117-fit sweep: non-
+  converged 1 → 0, outer iterations 3,866 → 3,390. Seed 29 converges at
+  ρ = 22.7 with REML 62.2374 (0.14.2: 62.2384) and edf 2.0000, in 86 outer
+  iterations against 0.14.2's 13 — it now walks to the bound and settles ν
+  there rather than stopping on the ridge's wall. Draws whose λ̂ used to sit
+  above the new bound land on it and are classified converged by the
+  boundary KKT test; their fits are unchanged to the printed digits because
+  such a term is already at its null-space edf.
+
+- **`scat` now starts its smoothing parameters where mgcv does.** A 10-smooth
+  `family="t-dist"` fit on 1,000 house sales ended 15.3 REML units worse than
+  mgcv `gam(method="REML")`: `lot_sqft` came back a straight line (edf 1.00)
+  where mgcv fits a curve (edf 4.50). Both libraries score the same criterion
+  (mgcv at gamrs's point: 776.164; gamrs: 776.149). Along `lot_sqft` it has
+  two basins, a minimum at log λ −2.19 and, past a ridge near 6, a shelf as
+  λ → ∞. `SmartInit` divides every `‖S_j‖_F` by one global `‖X‖_F²` and
+  started that skewed term at 6.48; mgcv's `initial.sp` starts it at −0.11.
+  mgcv's own Newton, given gamrs's start, lands on the same shelf. The basin
+  boundary is between 5.00 and 5.25. With `converged_ = True` on the
+  tdist-intercept branch, the wrong answer was silent.
+
+  `scat` now uses `MgcvInit`, a port of mgcv 1.9-3's `initial.sp` on the
+  design `initial.spg` weights for an extended family (`½·Dmu2` at
+  `mustart`). It matches mgcv's own `initial.sp` to 1e-9 on mgcv's own `X`
+  and `S`, weighted and unweighted (`tests/initial_sp_parity.rs`). On the
+  heatmap benchmark's 16 fits (REML minus mgcv):
+  - m04 wide goes from +15.31 to +0.00;
+  - m01 wide goes from +14.32 to +3.28;
+  - m02 wide goes from −8.86 to +1.24, now mgcv's basin rather than a luckier one;
+  - the other 13 stay within 0.03.
+
+  NegBin, Tweedie and ocat keep `SmartInit`. Write-up:
+  `docs/scat_start_basin_bug.md`.
+
+- **scat's default ν and σ² starts are mgcv's, and small responses are
+  standardized too.** Without `df=` or `sigma2=`, a scat fit now starts at
+  mgcv's `preinitialize`: ν = 3 + e^1.5 (was 5) and σ = 0.8·sd(y) (was
+  sd(y)). `scat_response_scale` dropped its sd ≥ 1 floor. Under the floor, a
+  response such as price/1e6 (sd ≈ 0.1) was left unstandardized, so its
+  O(1)-tuned σ² start was far off and the outer loop walked it down one capped
+  step at a time.
+
+  On the heatmap benchmark:
+  - m01 wide now matches mgcv (REML 16.594 vs 16.593); it was 3.3 behind with
+    the new λ start alone.
+  - Outer iterations fall on 12 of 16 fits (e.g. 200 → 16, 200 → 48).
+  - m18 wide now hits the 200 cap.
+
 ## [0.14.2] — 2026-09-04
 
 ### Fixed

@@ -37,6 +37,16 @@ use crate::family::{
 };
 use crate::fit::{scat_response_scale, FamilyFit, FittedGam, PredictScale};
 
+/// scat's default starting ν — mgcv's `scat()$preinitialize`, `Theta[1] = 1.5`
+/// on `log(ν − min.df)`, i.e. `ν = 3 + e^1.5`.
+const SCAT_DEFAULT_NU: f64 = 3.0 + 4.481_689_070_338_064_5;
+
+/// scat's default starting σ², in `y`'s units — mgcv's `preinitialize`,
+/// `σ = 0.8·sd(y)`.
+fn scat_default_sigma2(y: ArrayView1<f64>) -> f64 {
+    (0.8 * scat_response_scale(y)).powi(2)
+}
+
 // =============================================================================
 // Error mapping — GamrsError → PyValueError / PyRuntimeError.
 // =============================================================================
@@ -1151,13 +1161,11 @@ fn fit<'py>(
             fit_dispatch_design(py, negbin_log(theta_val), x_view, y_view, w_view, design, k)?
         }
         "tdist" | "scat" => {
-            let nu_val = nu.unwrap_or(5.0);
+            let nu_val = nu.unwrap_or(SCAT_DEFAULT_NU);
             // scat (TDist + identity) standardizes the response internally for
             // raw-scale conditioning — see `TDist::fit_from_prep_canonical`. We
-            // pass y and σ² in original units; σ² defaults to var(y) (the same
-            // value the previous standardized-1.0 default mapped to, and mgcv's
-            // data-scale dispersion init).
-            let sigma2_init = sigma2.unwrap_or_else(|| scat_response_scale(y_view).powi(2));
+            // pass y and σ² in original units; the defaults are mgcv's.
+            let sigma2_init = sigma2.unwrap_or_else(|| scat_default_sigma2(y_view));
             fit_dispatch_design(
                 py,
                 tdist_identity(nu_val, sigma2_init),
@@ -1591,10 +1599,10 @@ fn fit_additive<'py>(
             )?
         }
         "tdist" | "scat" => {
-            let nu_val = nu.unwrap_or(5.0);
+            let nu_val = nu.unwrap_or(SCAT_DEFAULT_NU);
             // scat standardizes the response in-core — see the single-smooth
             // arm above. Pass y / σ² in original units.
-            let sigma2_init = sigma2.unwrap_or_else(|| scat_response_scale(y_view).powi(2));
+            let sigma2_init = sigma2.unwrap_or_else(|| scat_default_sigma2(y_view));
             fit_additive_dispatch(
                 py,
                 tdist_identity(nu_val, sigma2_init),

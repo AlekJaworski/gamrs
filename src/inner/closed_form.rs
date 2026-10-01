@@ -23,9 +23,7 @@ use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use crate::error::Result;
 use crate::traits::InnerSolver;
 
-use super::{
-    factor_and_solve_with_ridge, xtwx_xtwy, CholeskySolver, GaussianInnerFit, LinearSolver,
-};
+use super::{factor_and_solve, xtwx_xtwy, CholeskySolver, GaussianInnerFit, LinearSolver};
 
 /// Solve `(X'WX + S_total) β = X'Wy` for the combined `S_total = Σ_j
 /// λ_j S_j`. `weights` is the prior weight vector; pass `None` for
@@ -139,10 +137,7 @@ fn gaussian_inner_solve_cached<S: LinearSolver>(
             a[[i, j]] += s_total[[i, j]];
         }
     }
-    // Phase-5b port — see `gaussian_inner_solve` for the two-factorisation
-    // rationale (ridged factor used ONLY for β̂; unridged factor kept as
-    // `a_factor` for log|H| / tr(H⁻¹S)).
-    let (a_factor, beta) = factor_and_solve_with_ridge::<S>(&a, xtwy)?;
+    let (a_factor, beta) = factor_and_solve::<S>(&a, xtwy)?;
 
     let mu = x_design.dot(&beta);
     let rss = if let Some(w) = weights {

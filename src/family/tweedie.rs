@@ -135,11 +135,11 @@ impl Loss for Tweedie {
     //     formula no longer compensates the unridged-vs-ridged `log|H|`
     //     gap. End-to-end μ-RMSE regresses from 0.0023% → 1.45%.
     //
-    // Ergo: rank_adj=0 is the right setting for Tweedie under gamrs's
-    // current `factor_and_solve_with_ridge` convention (1e-12 score-side
-    // ridge vs v0.x's `1e-5 · max_diag`). If gamrs ever lifts to v0.x's
-    // larger score-side ridge, revisit this with the diagnostic harness
-    // at `scripts/diagnostics/tweedie_parity_layered.py`.
+    // Ergo: rank_adj=0 is the right setting for Tweedie while gamrs's
+    // PIRLS factor is unridged (v0.x ridged its score-side factor by
+    // `1e-5 · max_diag`). If gamrs ever adopts a score-side ridge, revisit
+    // this with the diagnostic harness at
+    // `scripts/diagnostics/tweedie_parity_layered.py`.
 
     fn n_shape_params(&self) -> usize {
         // profile-p: [log φ, p_transform]; fixed-p: [log φ] only.

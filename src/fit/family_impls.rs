@@ -36,7 +36,7 @@ use crate::traits::{CoordsKind, InnerSolver, Loss, OuterSolver};
 
 use super::canonical::FamilyFitWithSolver;
 use super::driver::{fit_pirls_envelope, fit_shape_aware, make_pearson_scale_fn};
-use super::driver::{LambdaInit, SmartInit};
+use super::driver::{LambdaInit, MgcvInit, SmartInit};
 use super::gaussian::fit_gaussian_from_prep;
 use super::profile_shape::fit_shape_aware_profile;
 use super::quantile::fit_quantile_from_prep;
@@ -332,7 +332,13 @@ impl<S: LinearSolver> FamilyFitWithSolver<LogLink, NegBinVariance, S> for NegBin
 }
 
 /// Response scale for scat's internal standardization — the sample standard
-/// deviation of `y` (ddof=1), floored at 1.0 so it never shrinks the data.
+/// deviation of `y` (ddof=1); 1.0 only when that is zero or not finite.
+///
+/// It used to be floored at 1.0 as well, so a response with sd < 1 (prices
+/// in millions, sd ≈ 0.1) was never standardized: the default σ² start of
+/// sd² then sat far from the O(1) scale everything else is tuned for, and the
+/// outer loop walked log σ² down one capped step per iteration — 40–200 outer
+/// iterations where mgcv takes 8–16 (docs/scat_start_basin_bug.md).
 ///
 /// scat's observed IRLS weight is `W = ½·Dμμ ~ 1/σ²`, and the inner solve
 /// forms `X'WX + λS` and Cholesky-factorizes it. A raw response with
@@ -351,7 +357,7 @@ pub(crate) fn scat_response_scale(y: ArrayView1<f64>) -> f64 {
     let mean = y.sum() / n as f64;
     let var = y.iter().map(|&yi| (yi - mean).powi(2)).sum::<f64>() / (n as f64 - 1.0);
     let sd = var.sqrt();
-    if sd.is_finite() && sd > 1.0 {
+    if sd.is_finite() && sd > 0.0 {
         sd
     } else {
         1.0
@@ -378,6 +384,24 @@ fn rescale_scat_fit(mut fit: FittedGam, s: f64) -> FittedGam {
         fit.shape_params[0] += 2.0 * s.ln();
     }
     fit
+}
+
+/// The working weights mgcv's `initial.spg` puts on `scat`'s design:
+/// `½·Dmu2` at `mustart = y + 0.1·[y == 0]`, i.e.
+/// `(ν+1)(νσ² − r²)/(νσ² + r²)²` with `r = y − mustart`; if any row comes
+/// out negative, mgcv switches every row to the expected `½·EDmu2 =
+/// (ν+1)/((ν+3)σ²)`.
+fn scat_initial_weights(y: ArrayView1<f64>, nu: f64, sigma2: f64) -> Array1<f64> {
+    let ns2 = nu * sigma2;
+    let w: Array1<f64> = y.mapv(|yi| {
+        let r2 = if yi == 0.0 { 0.01 } else { 0.0 };
+        (nu + 1.0) * (ns2 - r2) / ((ns2 + r2) * (ns2 + r2))
+    });
+    if w.iter().any(|&wi| wi < 0.0) {
+        Array1::from_elem(y.len(), (nu + 1.0) / ((nu + 3.0) * sigma2))
+    } else {
+        w
+    }
 }
 
 // --- TDist (scat): identity link + T variance, shape-managed σ², ν ---
@@ -420,7 +444,10 @@ impl<S: LinearSolver> FamilyFitWithSolver<IdentityLink, TVariance, S> for TDist 
         let init_sigma2_std = init_sigma2 / (s * s);
 
         let n_terms = prep.s_list.len();
-        let rho_init = SmartInit.init(ys.view(), &prep.x_design, &prep.s_list);
+        let rho_init = MgcvInit {
+            weights: Some(scat_initial_weights(ys.view(), init_nu, init_sigma2_std)),
+        }
+        .init(ys.view(), &prep.x_design, &prep.s_list);
         let mut theta0_vec: Vec<f64> = rho_init.to_vec();
         theta0_vec.push(init_sigma2_std.ln());
         theta0_vec.push((init_nu - TDIST_MIN_DF).ln());

@@ -232,8 +232,7 @@ fn tdist_analytic_shape_grad_matches_fd() {
 /// it was wrong: `compute_rho_envelope_gradient` carried a
 /// `∂ridge/∂ρ_j · tr(H⁻¹)/2` term for a λ-dependent ridge that only
 /// `OcatInner` bakes into the factor the score reads (`PirlsInner` hands back
-/// an UNRIDGED factor — its 1e-12 ridge goes on a copy used for the β̂ solve
-/// only, `linalg.rs::factor_and_solve_with_ridge`). Differentiating a ridge
+/// an UNRIDGED factor, `linalg.rs::factor_and_solve`). Differentiating a ridge
 /// that is not in `A` adds a term proportional to λ·tr(A⁻¹) to a gradient
 /// whose true value decays like 1/λ. Measured on the probes below, the error
 /// was exactly proportional to λ: 1.1e-2 at ρ=0, 5.7e-1 at ρ=4, 3.1e1 at ρ=8,
