@@ -1,6 +1,6 @@
 [package]
 name = "gamrs"
-version = "0.14.2"
+version = "0.14.3"
 edition = "2021"
 description = "Generalised Additive Models in Rust — 10 families, multi-smooth (y ~ s(x0) + s(x1)), tensor products te(x0, x1), Python bindings via PyO3."
 license = "MIT"

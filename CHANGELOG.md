@@ -7,6 +7,8 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+## [0.14.3] — 2026-10-01
+
 ### Fixed
 
 - **A rank-deficient design is fitted, not refused in Cholesky.** Two land-use
