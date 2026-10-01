@@ -45,12 +45,6 @@ jobs:
           # code runs anywhere; dispatched kernels still hit AVX2/AVX-512.
           OPENBLAS_DYNAMIC_ARCH: "1"
           OPENBLAS_TARGET: "PRESCOTT"
-          # Not an `openblas-src` knob: it reaches OpenBLAS's make through the
-          # inherited environment. DYNAMIC_ARCH's core list is otherwise picked
-          # by a build-time CPU probe, so an AVX-512 build runner compiled the
-          # SKYLAKEX kernels in and the SDE guard failed by runner luck (0.14.0,
-          # and three 0.14.3 attempts in a row). Users never got those kernels.
-          NO_AVX512: "1"
           # Pin OUR Rust codegen to the x86-64 baseline too. rustc already
           # defaults to baseline, but making it explicit (a) is deterministic
           # regardless of the build runner's CPU and (b) changes the sccache
