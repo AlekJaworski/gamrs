@@ -7,6 +7,51 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A rank-deficient design is fitted, not refused in Cholesky.** Two land-use
+  tags marking the same 3 homes (`water`, `has_docks`) in a 300-sale hedonic
+  fit, or two bath counts that sum to 2 on every one of 100 sales (so together
+  they reproduce the intercept), raised `RuntimeError: singular system:
+  Cholesky failed`. mgcv fits both. Such a design has a direction that neither
+  the data nor any penalty pins down, so `X'WX + Σλ_jS_j` is singular at every
+  λ and no outer step can help.
+
+  Before the fit, the joint penalty null space (the space the REML score
+  already treats as unpenalised) is searched for directions the data also
+  misses. Per direction, the latest unpenalised column carrying it is removed,
+  with the intercept considered last. A penalised column is removed only when
+  nothing else can absorb the direction, e.g. two smooths of one covariate,
+  where the later smooth loses a column as in mgcv's `gam.side`. The reduced
+  problem is fitted and the coefficient comes back as exactly 0 with zero
+  variance. A `UserWarning` names it and what it duplicates (`has_docks
+  (determined by water)`, `baths_half (determined by (Intercept),
+  baths_full)`). `Gam.aliased_` lists the zeroed coefficients and survives
+  save/load, `Gam.rank_` counts the identifiable ones, and on the Rust side
+  `FittedGam::aliased_coefficients()` returns them. This covers every family
+  and each `fit_shash` block; `fit_gaulss` already fitted these.
+
+  On both real cases the reported rank is mgcv's (51 of 52, 43 of 44), and
+  the fit equals gamrs's own fit without the aliased column to 5e-15.
+  Against mgcv's fit without that column, fitted values agree to 5e-4 on this
+  release's β-solve, the same gap the full-rank design shows. With the uniform
+  β-solve ridge removed (`fix/tdist-intercept-collapse`) they agree to 1.4e-6.
+  Two deliberate differences from mgcv. First, gamrs's fit *is* the fit
+  without that column. mgcv's own rank-deficient fit is 1e-4 and
+  7e-4 off that on log price, because its REML and scale estimate keep the
+  zeroed coefficient in `Mp` (`gam.fit3.r:621, 644`). Second, on the bath
+  counts mgcv zeroes the intercept (leaving `baths_full` = 6.30 and
+  `baths_half` = 6.43), where gamrs zeroes `baths_half` and keeps the
+  intercept meaningful.
+
+  Across 10 alias shapes × 9 families (exact, rescaled and 1e-10-perturbed
+  copies, complements, dummy partitions, sums of tags, `s(x)+s(x)`,
+  `s(x)+x`), Cholesky failures went from 44 to 0. The unguarded Gaussian
+  fit used to *succeed* on three of those shapes, on a factor with pivot²
+  ≈ 1e-16, and split the aliased coefficients arbitrarily. A well-posed
+  design pays one Cholesky of `X'X + ΣS` for the check, with no measurable
+  change in fit time.
+
 ## [0.14.2] — 2026-09-04
 
 ### Fixed
