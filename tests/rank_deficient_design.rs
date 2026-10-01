@@ -70,9 +70,9 @@ fn duplicate_tag_fits_as_if_the_copy_were_absent() {
 
 #[test]
 fn counts_summing_to_a_constant_keep_the_intercept() {
-    // full + half == 3 on every row, so together they reproduce the intercept.
+    // full + half == 2 on every row, so together they reproduce the intercept.
     let (x, tag, full) = base();
-    let half: Vec<f64> = full.iter().map(|f| 3.0 - f).collect();
+    let half: Vec<f64> = full.iter().map(|f| 2.0 - f).collect();
     let y = response(&x, &tag, &full);
     let fit = fit_with_design(
         gaussian_identity(),

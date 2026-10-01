@@ -720,25 +720,37 @@ class Gam:
             self._auto_k_trace = []
             self._single_fit(x_2d, y_arr, term_objs)
         self._warn_if_not_converged()
-        self._warn_if_aliased(term_objs)
+        self._warn_if_aliased(term_objs, x_2d)
         return self
 
-    def _warn_if_aliased(self, term_objs: list[Term]) -> None:
+    def _warn_if_aliased(self, term_objs: list[Term], x_2d: np.ndarray) -> None:
         """Name the coefficients a rank-deficient design could not identify.
 
         Two identical tags, or two counts that always sum to a constant (and so
         reproduce the intercept), leave a coefficient the data cannot pin down.
         The native fit zeroes the latest such coefficient, as mgcv does, rather
-        than failing in Cholesky; this says which one.
+        than failing in Cholesky; this says which one, and what it duplicates.
         """
         aliased = list(self._fitted.aliased_coefficients)
         self.aliased_ = self._coefficient_labels(term_objs, aliased)
         if not aliased:
             return
+        labels = self._coefficient_labels(term_objs, range(len(self._fitted.beta)))
+        lp = np.asarray(self._fitted.evaluate_lpmatrix(x_2d))
+        if self.sample_weight is not None:
+            lp = lp * np.sqrt(np.clip(self.sample_weight, 0.0, None))[:, None]
+        kept = [i for i in range(lp.shape[1]) if i not in aliased]
+        parts = []
+        for i, label in zip(aliased, self.aliased_):
+            coef = np.linalg.lstsq(lp[:, kept], lp[:, i], rcond=None)[0]
+            share = np.abs(coef) * np.linalg.norm(lp[:, kept], axis=0)
+            used = [kept[j] for j in np.flatnonzero(share > 1e-6 * np.linalg.norm(lp[:, i]))]
+            partners = list(dict.fromkeys(labels[j].split("[")[0] for j in used))
+            parts.append(f"{label} (determined by {', '.join(partners) or 'the rest'})")
         warnings.warn(
             f"the design is rank deficient (rank {self.rank_} of {len(self._fitted.beta)}): "
-            f"{', '.join(self.aliased_)} cannot be separated from the rest of the model and "
-            "is fitted as exactly 0, as mgcv does. Available on `aliased_`.",
+            f"{'; '.join(parts)} cannot be separated from the rest of the model and is fitted "
+            "as exactly 0, as mgcv does. Available on `aliased_`.",
             UserWarning,
             stacklevel=3,
         )
