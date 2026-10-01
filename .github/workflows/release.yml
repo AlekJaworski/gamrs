@@ -57,6 +57,15 @@ jobs:
           args: --release --out dist --find-interpreter --no-default-features --features python,blas,blas-static
           sccache: "true"
           manylinux: auto
+          # The build runs inside the manylinux container, and maturin-action
+          # forwards RUSTFLAGS but not OPENBLAS_*. Without this OpenBLAS saw none
+          # of the three variables above and built ONE core for whatever CPU the
+          # runner had: CORE=COOPERLAKE (AVX-512, on the unconditional path) on an
+          # AVX-512 runner, which is what the SDE guard kept catching, and
+          # CORE=ZEN on an AVX2 one, which passed by luck. Forwarded, the build
+          # is CORE=PRESCOTT common code plus dispatched per-core kernels on any
+          # runner, as on macOS.
+          docker-options: -e OPENBLAS_STATIC -e OPENBLAS_DYNAMIC_ARCH -e OPENBLAS_TARGET
           before-script-linux: |
             set -e
             if command -v yum &> /dev/null; then
