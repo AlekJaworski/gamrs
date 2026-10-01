@@ -34,12 +34,11 @@ is locked. Versions correspond to the published PyPI wheels.
   and each `fit_shash` block; `fit_gaulss` already fitted these.
 
   On both real cases the reported rank is mgcv's (51 of 52, 43 of 44), and
-  the fit equals gamrs's own fit without the aliased column to 5e-15.
-  Against mgcv's fit without that column, fitted values agree to 5e-4 on this
-  release's β-solve, the same gap the full-rank design shows. With the uniform
-  β-solve ridge removed (`fix/tdist-intercept-collapse`) they agree to 1.4e-6.
-  Two deliberate differences from mgcv. First, gamrs's fit *is* the fit
-  without that column. mgcv's own rank-deficient fit is 1e-4 and
+  the fit equals gamrs's own fit without the aliased column to 4e-15.
+  Against mgcv's fit without that column, fitted values agree to 1.3e-6 and
+  1.4e-6. (On 0.14.2's β-solve the gap was 5e-4 for the full-rank design too;
+  the uniform-ridge fix below closes it.) Two deliberate differences from mgcv.
+  First, gamrs's fit *is* the fit without that column. mgcv's own rank-deficient fit is 1e-4 and
   7e-4 off that on log price, because its REML and scale estimate keep the
   zeroed coefficient in `Mp` (`gam.fit3.r:621, 644`). Second, on the bath
   counts mgcv zeroes the intercept (leaving `baths_full` = 6.30 and
@@ -132,8 +131,8 @@ is locked. Versions correspond to the published PyPI wheels.
   λ → ∞. `SmartInit` divides every `‖S_j‖_F` by one global `‖X‖_F²` and
   started that skewed term at 6.48; mgcv's `initial.sp` starts it at −0.11.
   mgcv's own Newton, given gamrs's start, lands on the same shelf. The basin
-  boundary is between 5.00 and 5.25. With `converged_ = True` on the
-  tdist-intercept branch, the wrong answer was silent.
+  boundary is between 5.00 and 5.25. Once the β-solve fix above let the fit
+  report `converged_ = True`, the wrong answer was silent.
 
   `scat` now uses `MgcvInit`, a port of mgcv 1.9-3's `initial.sp` on the
   design `initial.spg` weights for an extended family (`½·Dmu2` at
@@ -161,6 +160,21 @@ is locked. Versions correspond to the published PyPI wheels.
     the new λ start alone.
   - Outer iterations fall on 12 of 16 fits (e.g. 200 → 16, 200 → 48).
   - m18 wide now hits the 200 cap.
+
+### Build
+
+- **The Linux wheel's OpenBLAS is now built as configured, not for whichever
+  runner built it.** The wheel builds inside maturin-action's manylinux
+  container, which forwards `RUSTFLAGS` but not `OPENBLAS_*`, so OpenBLAS never
+  saw `DYNAMIC_ARCH=1` or the `TARGET=PRESCOTT` pin and compiled one core for
+  the build runner's CPU. An AVX2 runner gave AVX2 kernels (`CORE=ZEN`). An
+  AVX-512 runner gave `CORE=COOPERLAKE`, with AVX-512 on the unconditional
+  path: such a wheel would SIGILL on AVX2-only CPUs, and the release guard (a
+  fit under Intel SDE emulating Haswell) refused to publish four 0.14.3
+  builds for exactly that. Forwarded, OpenBLAS builds PRESCOTT common code
+  plus per-core kernels chosen at runtime, as the macOS wheel always has.
+  Machines with AVX-512 now get OpenBLAS's AVX-512 kernels rather than
+  whatever the runner happened to be.
 
 ## [0.14.2] — 2026-09-04
 
