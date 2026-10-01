@@ -114,13 +114,15 @@ where
         y: ArrayView1<f64>,
         prior_weights: Option<ArrayView1<f64>>,
     ) -> Result<FittedGam> {
-        <L as FamilyFitWithSolver<K, V, CholeskySolver>>::fit_from_prep_canonical(
-            family,
-            prep,
-            x,
-            y,
-            prior_weights,
-        )
+        super::fit_identifiable(prep, prior_weights, |prep| {
+            <L as FamilyFitWithSolver<K, V, CholeskySolver>>::fit_from_prep_canonical(
+                family,
+                prep,
+                x,
+                y,
+                prior_weights,
+            )
+        })
     }
 }
 
@@ -243,7 +245,9 @@ where
     S: LinearSolver,
 {
     let prep = Cr { k }.prepare(x)?;
-    L::fit_from_prep_canonical(family, prep, x, y, prior_weights)
+    super::fit_identifiable(prep, prior_weights, |prep| {
+        L::fit_from_prep_canonical(family, prep, x, y, prior_weights)
+    })
 }
 
 // =============================================================================

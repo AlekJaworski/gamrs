@@ -61,6 +61,7 @@
 
 use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 
+use crate::design::identifiability::{aliased_columns, with_zero_coefficients, without_columns};
 use crate::design::{Additive, DesignStrategy, Predictor, TermSpec};
 use crate::error::{GamrsError, Result};
 use crate::gamlss::shash::ShashDensity;
@@ -212,20 +213,30 @@ impl ShashGamFit {
 ///   smooth per predictor in v1). Returns `(x_design, penalty, Some(predictor))`
 ///   where `penalty` is `Some` iff the predictor carries exactly one smooth.
 /// - EMPTY terms → intercept-only block `ones(n, 1)`, no penalty, no predictor.
+///
+/// Columns the block cannot identify are removed (see
+/// [`crate::design::identifiability`]) and returned so the fit can put them
+/// back as zeros.
 fn build_block(
     terms: &[TermSpec],
     x: ArrayView2<f64>,
     block_name: &str,
-) -> Result<(Array2<f64>, Option<ShashPenalty>, Option<Predictor>)> {
+) -> Result<(Array2<f64>, Option<ShashPenalty>, Option<Predictor>, Vec<usize>)> {
     if terms.is_empty() {
         // Intercept-only predictor — a column of ones (mgcv's `~ 1` block).
         let n = x.nrows();
-        return Ok((Array2::<f64>::ones((n, 1)), None, None));
+        return Ok((Array2::<f64>::ones((n, 1)), None, None, Vec::new()));
     }
     let prepared = Additive {
         terms: terms.to_vec(),
     }
     .prepare(x)?;
+    let dropped = aliased_columns(&prepared.x_design, &prepared.s_list, None)?;
+    let prepared = if dropped.is_empty() {
+        prepared
+    } else {
+        without_columns(prepared, &dropped)?
+    };
     if prepared.s_list.len() > 1 {
         return Err(GamrsError::InvalidParameter(format!(
             "fit_shash: the {block_name} predictor has {} smooths; v1 supports at most one \
@@ -243,7 +254,7 @@ fn build_block(
         // unpenalised, but still a real design (intercept + raw column).
         None
     };
-    Ok((prepared.x_design, penalty, Some(prepared.predictor)))
+    Ok((prepared.x_design, penalty, Some(prepared.predictor), dropped))
 }
 
 /// Fit a sinh-arcsinh (`shash`) GAMLSS end-to-end: build per-predictor designs
@@ -279,10 +290,11 @@ pub fn fit_shash(
     }
 
     // ── Build the four per-predictor designs + optional penalties. ──
-    let (x_mu, pen_mu, pred_mu) = build_block(&mu_terms, x, "mu")?;
-    let (x_tau, pen_tau, pred_tau) = build_block(&tau_terms, x, "tau")?;
-    let (x_eps, pen_eps, pred_eps) = build_block(&eps_terms, x, "eps")?;
-    let (x_phi, pen_phi, pred_phi) = build_block(&phi_terms, x, "phi")?;
+    let (x_mu, pen_mu, pred_mu, drop_mu) = build_block(&mu_terms, x, "mu")?;
+    let (x_tau, pen_tau, pred_tau, drop_tau) = build_block(&tau_terms, x, "tau")?;
+    let (x_eps, pen_eps, pred_eps, drop_eps) = build_block(&eps_terms, x, "eps")?;
+    let (x_phi, pen_phi, pred_phi, drop_phi) = build_block(&phi_terms, x, "phi")?;
+    let dropped = [drop_mu, drop_tau, drop_eps, drop_phi];
 
     let block_p = [x_mu.ncols(), x_tau.ncols(), x_eps.ncols(), x_phi.ncols()];
 
@@ -334,9 +346,10 @@ pub fn fit_shash(
     } = fit.eval;
     let predictors = [pred_mu, pred_tau, pred_eps, pred_phi];
     let make_block = |b: usize, predictor: Option<Predictor>| ShashBlockFit {
-        beta: beta
-            .slice(ndarray::s![off[b]..off[b] + block_p[b]])
-            .to_owned(),
+        beta: with_zero_coefficients(
+            beta.slice(ndarray::s![off[b]..off[b] + block_p[b]]),
+            &dropped[b],
+        ),
         predictor,
     };
     let [p0, p1, p2, p3] = predictors;
@@ -348,8 +361,12 @@ pub fn fit_shash(
     ];
 
     Ok(ShashGamFit {
-        beta: beta.clone(),
-        block_p,
+        beta: ndarray::concatenate(
+            ndarray::Axis(0),
+            &[blocks[0].beta.view(), blocks[1].beta.view(), blocks[2].beta.view(), blocks[3].beta.view()],
+        )
+        .expect("blocks are 1-D"),
+        block_p: std::array::from_fn(|b| blocks[b].beta.len()),
         rho: fit.rho,
         edf,
         laml,

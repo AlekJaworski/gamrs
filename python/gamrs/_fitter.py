@@ -492,6 +492,7 @@ class Gam:
         self._fitted = self.X = self.y = self.sample_weight = None
         self._effective_predictors = self._original_predictors = None
         self.dropped_predictors_ = {}
+        self.aliased_ = []
         self._k_used = None
         # Subset-view state. None on a fitted model means "use all terms".
         # Set by __getitem__; consulted by predict() to mask un-selected
@@ -719,7 +720,45 @@ class Gam:
             self._auto_k_trace = []
             self._single_fit(x_2d, y_arr, term_objs)
         self._warn_if_not_converged()
+        self._warn_if_aliased(term_objs)
         return self
+
+    def _warn_if_aliased(self, term_objs: list[Term]) -> None:
+        """Name the coefficients a rank-deficient design could not identify.
+
+        Two identical tags, or two counts that always sum to a constant (and so
+        reproduce the intercept), leave a coefficient the data cannot pin down.
+        The native fit zeroes the latest such coefficient, as mgcv does, rather
+        than failing in Cholesky; this says which one.
+        """
+        aliased = list(self._fitted.aliased_coefficients)
+        self.aliased_ = self._coefficient_labels(term_objs, aliased)
+        if not aliased:
+            return
+        warnings.warn(
+            f"the design is rank deficient (rank {self.rank_} of {len(self._fitted.beta)}): "
+            f"{', '.join(self.aliased_)} cannot be separated from the rest of the model and "
+            "is fitted as exactly 0, as mgcv does. Available on `aliased_`.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+    def _coefficient_labels(self, term_objs: list[Term], idx: Sequence[int]) -> list[str]:
+        names = list(self._effective_predictors or [])
+
+        def col_name(c):
+            return names[c] if isinstance(c, int) and c < len(names) else str(c)
+
+        labels = ["(Intercept)"]
+        for t, (start, end) in zip(term_objs, self._fitted.term_col_ranges()):
+            cols = getattr(t, "cols", None) or (getattr(t, "col", None),)
+            inner = ",".join(col_name(c) for c in cols)
+            if isinstance(t, ParametricTerm):
+                labels.append(inner)
+            else:
+                label = f"s({inner})"
+                labels.extend(f"{label}[{i}]" for i in range(1, end - start + 1))
+        return [labels[i] if i < len(labels) else f"coef[{i}]" for i in idx]
 
     def _warn_if_not_converged(self) -> None:
         """Say so when the outer optimiser did not reach its gradient
@@ -1439,6 +1478,13 @@ class Gam:
         return np.asarray(self._require_fitted().vcov())
 
     @property
+    def rank_(self) -> int:
+        """Number of identifiable coefficients; ``len(coef_)`` unless the
+        design is rank deficient (see ``aliased_``)."""
+        f = self._require_fitted()
+        return len(f.beta) - len(f.aliased_coefficients)
+
+    @property
     def scale_(self) -> float:
         return float(self._require_fitted().scale)
 
@@ -1863,6 +1909,7 @@ class Gam:
         gam.__dict__.update(
             predictors=None, _effective_predictors=None,
             _original_predictors=None, dropped_predictors_={},
+            aliased_=[f"coef[{i}]" for i in native_fitted.aliased_coefficients],
             X=None, y=None, sample_weight=None, _k_used=None,
             family="gaussian", link="identity", _gamrs_family="gaussian",
             method="REML", target="y", design="cr",

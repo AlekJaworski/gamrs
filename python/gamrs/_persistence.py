@@ -46,6 +46,7 @@ def _gather_meta(gam: "Gam") -> dict[str, Any]:
         "tweedie_p": gam.tweedie_p,
         "negbin_theta": gam.negbin_theta,
         "r": gam.r,
+        "aliased_": list(gam.aliased_),
     }
 
 
@@ -97,6 +98,7 @@ def load_gam(cls: type, path: Union[str, "os.PathLike[str]"]) -> "Gam":
     gam.tweedie_p = meta.get("tweedie_p")
     gam.negbin_theta = meta.get("negbin_theta")
     gam.r = meta.get("r")
+    gam.aliased_ = meta.get("aliased_", gam.aliased_)
     # Lazy import to avoid a circular load.
     from ._coerce import FAMILY_TO_GAMRS
     gam._gamrs_family = FAMILY_TO_GAMRS.get(gam.family, (gam.family, gam.link))[0]

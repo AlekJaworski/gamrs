@@ -32,6 +32,7 @@ use crate::error::{GamrsError, Result};
 
 mod additive;
 mod cr;
+pub(crate) mod identifiability;
 mod parametric;
 mod re;
 mod tensor;

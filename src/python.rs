@@ -67,6 +67,13 @@ impl PyFittedGam {
         self.inner.beta.clone().into_pyarray(py)
     }
 
+    /// Indices into `beta` of coefficients the design could not identify;
+    /// they are fitted as exactly 0 with zero variance.
+    #[getter]
+    fn aliased_coefficients(&self) -> Vec<usize> {
+        self.inner.aliased_coefficients()
+    }
+
     /// Composable post-fit primitive: add `delta` to the model intercept
     /// (β₀), shifting every prediction by `delta`. Family-agnostic mechanism
     /// — the *policy* for choosing `delta` lives in the caller. The quantile

@@ -191,6 +191,15 @@ pub struct FittedGam {
 }
 
 impl FittedGam {
+    /// Coefficients the design could not identify, as indices into `beta`.
+    /// They are fitted as exactly 0 with zero variance (mgcv's convention), so
+    /// they are read back from that rather than stored.
+    pub fn aliased_coefficients(&self) -> Vec<usize> {
+        (0..self.beta.len())
+            .filter(|&i| self.beta[i] == 0.0 && self.vcov[[i, i]] == 0.0)
+            .collect()
+    }
+
     /// Predict on new x. `x_new` has shape `(n_new, n_input_dims)`;
     /// today every Predictor consumes a single column (epic 94a).
     /// Delegates to the [`Predictor`] for design reconstruction.
@@ -408,6 +417,27 @@ fn normal_quantile(p: f64) -> f64 {
 // =============================================================================
 // Shared validation helpers — used by every per-family impl.
 // =============================================================================
+
+/// Fit `prep` with its unidentifiable coefficients removed, then put them back
+/// as exact zeros with zero variance — mgcv's treatment of a rank-deficient
+/// design. See [`crate::design::identifiability`].
+pub(crate) fn fit_identifiable(
+    prep: crate::design::PreparedDesign,
+    prior_weights: Option<ArrayView1<f64>>,
+    fit: impl FnOnce(crate::design::PreparedDesign) -> Result<FittedGam>,
+) -> Result<FittedGam> {
+    use crate::design::identifiability::{
+        aliased_columns, with_zero_coefficients, with_zero_variance, without_columns,
+    };
+    let dropped = aliased_columns(&prep.x_design, &prep.s_list, prior_weights)?;
+    if dropped.is_empty() {
+        return fit(prep);
+    }
+    let mut fitted = fit(without_columns(prep, &dropped)?)?;
+    fitted.beta = with_zero_coefficients(fitted.beta.view(), &dropped);
+    fitted.vcov = with_zero_variance(&fitted.vcov, &dropped);
+    Ok(fitted)
+}
 
 /// Check `x.nrows() == y.len()` and (optionally) `weights.len() == x.nrows()`.
 pub(crate) fn check_lengths(
