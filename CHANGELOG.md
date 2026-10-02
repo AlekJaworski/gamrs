@@ -7,6 +7,8 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+## [0.14.6] — 2026-10-02
+
 ### Fixed
 
 - **GLM fits stopped short of mgcv's REML optimum, because the gradient was
