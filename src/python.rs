@@ -357,7 +357,7 @@ impl PyFittedGam {
     ///
     /// Requires the family to be Tweedie. The shape part of `theta` is
     /// the standard gamrs Tweedie shape vector — `[log φ, p_transform]`
-    /// where `p = 1 + sigmoid(p_transform)` clamped to `[1.05, 1.95]`
+    /// where `p = (1.01 + 1.99·e^θ)/(1 + e^θ)` (mgcv `tw()`), θ = `p_transform`
     /// (`tweedie.rs::set_shape_params`).
     #[allow(clippy::too_many_arguments)]
     fn evaluate_reml_at_tweedie<'py>(

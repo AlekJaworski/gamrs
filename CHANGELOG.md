@@ -7,6 +7,34 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Tweedie with profiled p: fits that did not converge, and a p range that
+  was not mgcv's.** On Poisson-like counts (where mgcv's `tw()` puts p at its
+  1.01 floor) a two-smooth fit ended unconverged on 3 of 8 seeds, 98 outer
+  iterations on one, and every fit, converged or not, was 2–6% off mgcv's.
+  Four defects, found by checking each derivative against finite differences:
+  - p was `1 + sigmoid(θ)` clamped to [1.05, 1.95] inside a θ box of ±10, so
+    across most of the box θ moved and p did not. The criterion went flat but
+    its gradient (scaled by dp/dθ at the clamped p) did not: 24.9 against a
+    finite-difference 0. p now uses mgcv's own map,
+    `p = (1.01 + 1.99·e^θ)/(1 + e^θ)`, with no clamp, so the range is mgcv's.
+  - Near either end of that map the score is ∝ e^θ, so stopping the p axis at
+    θ = −10 left 0.41 REML units on the table; the box now ends at ±30.
+  - `TweedieVariance` never implemented `d_variance`, so every observed-
+    curvature weight for Tweedie used the trait's zero default.
+  - The ρ-gradient left out `log|H|`'s β-chain term, a documented
+    "parity floor". It is now included, with dβ̂/dρ from the observed
+    penalised Hessian; the Fisher factor gave it 5–9% off.
+
+  On the same eight seeds, profiled p: all converge in 6–20 iterations,
+  p = 1.0100000 where mgcv has 1.01000, fitted values within 1e-6–2e-5 of
+  mgcv's (were 2–6%). Fixed p against mgcv `Tweedie(p)`: median 2.2e-3 → 2.8e-4
+  at p = 1.2 and 1.5e-3 → 9.6e-4 at p = 1.5. What is left there is mgcv
+  stopping early on a flat ridge: mgcv's own REML is lower at gamrs's λ̂
+  (9.7e-5 on seed 0). The Tweedie criterion itself is unchanged, bit for bit.
+  NegBin, ocat and scat take a separate path and are unaffected.
+
 ## [0.14.4] — 2026-10-02
 
 ### Fixed

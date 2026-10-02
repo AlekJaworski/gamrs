@@ -103,6 +103,30 @@ impl Loss for Tweedie {
         2.0 * (mu - y) / mu.powf(p)
     }
 
+    /// The β-chain of `log|H|` in the ρ-gradient. Tweedie's `A` carries the
+    /// Fisher weight `W = μ^(2−p)` (log link, `1/(V·g'²)`), so along η
+    /// `∂W/∂η = (2 − p)·W`. Without this the ρ-gradient was the bare envelope
+    /// form, off by 0.024 on a two-smooth fit — enough for the outer Newton to
+    /// stop where the true gradient was not zero. The θ-columns are unused on
+    /// Tweedie's analytic shape-gradient path.
+    fn ift_trace_weight_derivs(
+        &self,
+        y: ndarray::ArrayView1<f64>,
+        eta: ndarray::ArrayView1<f64>,
+        prior_w: Option<ndarray::ArrayView1<f64>>,
+    ) -> Option<(ndarray::Array2<f64>, ndarray::Array1<f64>)> {
+        let n = y.len();
+        let twop = 2.0 - self.p;
+        let dw_deta = ndarray::Array1::from_shape_fn(n, |i| {
+            let w = prior_w.map(|w| w[i]).unwrap_or(1.0) * (twop * eta[i]).exp();
+            twop * w
+        });
+        Some((
+            ndarray::Array2::<f64>::zeros((n, self.n_shape_params())),
+            dw_deta,
+        ))
+    }
+
     fn d2_loss_dmu(&self, y: f64, mu: f64) -> f64 {
         // ∂/∂μ [2(μ - y) · μ^(-p)] = 2μ^(-p) · [1 - p(μ-y)/μ]
         // = 2·[μ - p(μ-y)] / μ^(p+1) = 2·[(1-p)μ + p·y] / μ^(p+1)
@@ -141,6 +165,17 @@ impl Loss for Tweedie {
     // this with the diagnostic harness at
     // `scripts/diagnostics/tweedie_parity_layered.py`.
 
+    /// `log φ` keeps the default ±10. The p axis needs more: near either end
+    /// of mgcv's map the score is `∝ e^θ`, so the decrease still on offer
+    /// equals the gradient. Stopping at θ = −10 forfeited 0.41 REML units on
+    /// Poisson-like data, where p belongs at 1.01; at −30 that is `e^{-20}` of it.
+    fn shape_axis_bounds(&self) -> Vec<(f64, f64)> {
+        if self.profile_p {
+            vec![(-10.0, 10.0), (-30.0, 30.0)]
+        } else {
+            vec![(-10.0, 10.0)]
+        }
+    }
     fn n_shape_params(&self) -> usize {
         // profile-p: [log φ, p_transform]; fixed-p: [log φ] only.
         if self.profile_p {
@@ -172,23 +207,18 @@ impl Loss for Tweedie {
         );
         // φ floor — keep > 1e-6 so the series log-W stays well-conditioned.
         self.phi = params[0].exp().max(1e-6);
-        // p = 1 + sigmoid(θ_p), then clamp to [1.05, 1.95] so the Dunn-
-        // Smyth series mode j_max = y^(2-p)/(φ(2-p)) doesn't blow up. mgcv
-        // does the same clamp in `tw()`. Without this Newton would
-        // probe p → 1 or p → 2 and the series would run for billions of
-        // iterations (each obs). In fixed-p mode there is no p_transform
-        // entry — `self.p` stays at its constructed value untouched.
+        // mgcv's `tw()` map keeps p inside [1.01, 1.99], where the Dunn-Smyth
+        // series stays finite. It used to be `1 + sigmoid(θ)` clamped to
+        // [1.05, 1.95]: past the clamp θ moved and p did not, the score went
+        // flat, and the gradient — scaled by dp/dθ at the clamped p — did not.
+        // In fixed-p mode there is no p_transform entry.
         if self.profile_p {
-            let s = 1.0 / (1.0 + (-params[1]).exp());
-            self.p = (1.0 + s).clamp(1.05, 1.95);
+            self.p = tweedie_p_from_theta(params[1]);
         }
     }
     fn get_shape_params(&self) -> Vec<f64> {
         if self.profile_p {
-            // logit(p - 1): θ_p such that p = 1 + sigmoid(θ_p).
-            let s = self.p - 1.0;
-            let theta_p = (s / (1.0 - s).max(1e-15)).ln();
-            vec![self.phi.ln(), theta_p]
+            vec![self.phi.ln(), tweedie_theta_from_p(self.p)]
         } else {
             vec![self.phi.ln()]
         }
@@ -322,8 +352,7 @@ impl Loss for Tweedie {
         //   [-Σ ls]:
         //     [-Σ l_base] → -Σ ∂l_base/∂p
         //     [-Σ log W]  → -Σ dlog_w_dp
-        // dp/dp_trans = (p-1)·(2-p)
-        let dp_dpt = (p - 1.0) * (2.0 - p);
+        let dp_dpt = tweedie_dp_dtheta(p);
         let g_p_trans = (sum_dd_dp / (2.0 * phi) - sum_dl_base_dp - sum_dlog_w_dp) * dp_dpt;
 
         Some(ndarray::Array1::from_vec(vec![g_log_phi, g_p_trans]))
@@ -334,6 +363,14 @@ impl VarianceFn for TweedieVariance {
     fn variance(&self, mu: f64) -> f64 {
         mu.max(1e-300).powf(self.p)
     }
+    // Without these the trait's zero defaults dropped V'/V from every
+    // observed-curvature weight for Tweedie (newton_score_weights' α).
+    fn d_variance(&self, mu: f64) -> f64 {
+        self.p * mu.max(1e-300).powf(self.p - 1.0)
+    }
+    fn d2_variance(&self, mu: f64) -> f64 {
+        self.p * (self.p - 1.0) * mu.max(1e-300).powf(self.p - 2.0)
+    }
     fn set_shape_params(&mut self, params: &[f64]) {
         if self.profile_p {
             debug_assert_eq!(
@@ -341,8 +378,7 @@ impl VarianceFn for TweedieVariance {
                 2,
                 "TweedieVariance (profile-p) expects 2 shape params"
             );
-            let s = 1.0 / (1.0 + (-params[1]).exp());
-            self.p = (1.0 + s).clamp(1.05, 1.95);
+            self.p = tweedie_p_from_theta(params[1]);
         } else {
             // Fixed-p: slice is [log φ] only; p stays constant.
             debug_assert_eq!(
@@ -352,6 +388,31 @@ impl VarianceFn for TweedieVariance {
             );
         }
     }
+}
+
+/// Bounds of the profiled Tweedie power: mgcv `tw(a = 1.01, b = 1.99)`.
+pub(crate) const TWEEDIE_P_MIN: f64 = 1.01;
+pub(crate) const TWEEDIE_P_MAX: f64 = 1.99;
+
+/// mgcv `tw()`'s map from the unbounded `p_transform` θ to the power:
+/// `p = (a + b·e^θ) / (1 + e^θ)`. Smooth all the way to the bounds, so the
+/// score flattens there and its derivative goes to zero with it — no clamp, no
+/// region where θ moves and p does not.
+pub(crate) fn tweedie_p_from_theta(theta: f64) -> f64 {
+    let s = 1.0 / (1.0 + (-theta).exp());
+    TWEEDIE_P_MIN + (TWEEDIE_P_MAX - TWEEDIE_P_MIN) * s
+}
+
+/// Inverse of [`tweedie_p_from_theta`]; `p` outside `(a, b)` maps to the nearest
+/// representable end.
+pub(crate) fn tweedie_theta_from_p(p: f64) -> f64 {
+    let s = ((p - TWEEDIE_P_MIN) / (TWEEDIE_P_MAX - TWEEDIE_P_MIN)).clamp(1e-12, 1.0 - 1e-12);
+    (s / (1.0 - s)).ln()
+}
+
+/// `dp/dθ` at power `p`: `(p − a)(b − p) / (b − a)`.
+pub(crate) fn tweedie_dp_dtheta(p: f64) -> f64 {
+    (p - TWEEDIE_P_MIN) * (TWEEDIE_P_MAX - p) / (TWEEDIE_P_MAX - TWEEDIE_P_MIN)
 }
 
 /// Phase 9 convenience constructor — **profile-p** Tweedie + log link at
