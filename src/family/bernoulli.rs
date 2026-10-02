@@ -84,6 +84,12 @@ impl VarianceFn for BinomialVariance {
     fn variance(&self, mu: f64) -> f64 {
         mu * (1.0 - mu)
     }
+    fn d_variance(&self, mu: f64) -> f64 {
+        1.0 - 2.0 * mu
+    }
+    fn d2_variance(&self, _mu: f64) -> f64 {
+        -2.0
+    }
 }
 
 /// Phase 1 convenience constructor — Bernoulli + logit link.

@@ -798,6 +798,15 @@ pub trait InnerSolver {
     ) -> Option<crate::inner::TkKKTInputs> {
         None
     }
+
+    /// Per-term β-chain of `log|A|` for a score whose `A` carries the FISHER
+    /// weight: `tr(A⁻¹ X' diag(∂W/∂η · η₁_k) X)`, η₁_k = X·dβ̂/dρ_k from the
+    /// observed penalised Hessian. `None` where the inner solver has no such
+    /// weight (or already supplies the Newton form via `lazy_tk_kkt_inputs`).
+    #[allow(unused_variables)]
+    fn fisher_log_det_beta_chain(&self, fit: &Self::Fit, rho: &Array1<f64>) -> Option<Vec<f64>> {
+        None
+    }
 }
 
 /// Coordinate system the score reports in. Used by downstream consumers

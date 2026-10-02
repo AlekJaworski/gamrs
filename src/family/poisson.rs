@@ -81,6 +81,9 @@ impl VarianceFn for PoissonVariance {
     fn variance(&self, mu: f64) -> f64 {
         mu
     }
+    fn d_variance(&self, _mu: f64) -> f64 {
+        1.0
+    }
 }
 
 /// Phase 3 convenience constructor — Poisson + log link.

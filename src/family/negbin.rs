@@ -264,6 +264,12 @@ impl VarianceFn for NegBinVariance {
     fn variance(&self, mu: f64) -> f64 {
         mu + mu * mu / self.theta
     }
+    fn d_variance(&self, mu: f64) -> f64 {
+        1.0 + 2.0 * mu / self.theta
+    }
+    fn d2_variance(&self, _mu: f64) -> f64 {
+        2.0 / self.theta
+    }
     fn set_shape_params(&mut self, params: &[f64]) {
         debug_assert_eq!(
             params.len(),

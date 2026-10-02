@@ -183,6 +183,12 @@ impl VarianceFn for GammaVariance {
     fn variance(&self, mu: f64) -> f64 {
         mu * mu
     }
+    fn d_variance(&self, mu: f64) -> f64 {
+        2.0 * mu
+    }
+    fn d2_variance(&self, _mu: f64) -> f64 {
+        2.0
+    }
 }
 
 /// Phase 7 convenience constructor — Gamma + log link.

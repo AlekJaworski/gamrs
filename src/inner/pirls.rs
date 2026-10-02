@@ -657,6 +657,10 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver> I
 
     /// Tk·KK' / IFT inputs at converged β. Lazy — see [`InnerSolver::
     /// lazy_tk_kkt_inputs`] docstring.
+    fn fisher_log_det_beta_chain(&self, fit: &Self::Fit, rho: &Array1<f64>) -> Option<Vec<f64>> {
+        self.fisher_beta_chain(fit, rho)
+    }
+
     fn lazy_tk_kkt_inputs(&self, fit: &Self::Fit, rho: &Array1<f64>) -> Option<super::TkKKTInputs> {
         if !self.family.loss.use_newton_irls() {
             return None;
@@ -1139,5 +1143,46 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
             }
         }
         true
+    }
+}
+
+impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver> PirlsInner<L, K, V, S> {
+    /// See `InnerSolver::fisher_log_det_beta_chain`.
+    pub(crate) fn fisher_beta_chain(&self, fit: &GaussianInnerFit<S>, rho: &Array1<f64>) -> Option<Vec<f64>> {
+        use ndarray_linalg::Solve;
+        if self.family.loss.use_newton_irls() {
+            return None;
+        }
+        let n = self.x_design.nrows();
+        let prior: Array1<f64> = self.prior_weights.clone().unwrap_or_else(|| Array1::ones(n));
+        let mut dw_deta = Array1::<f64>::zeros(n);
+        let mut w_obs = Array1::<f64>::zeros(n);
+        for i in 0..n {
+            let mu = fit.mu[i];
+            let v = self.family.variance.variance(mu).max(1e-300);
+            let g1 = self.family.link.d_link_dmu(mu);
+            if g1.abs() < 1e-300 {
+                continue;
+            }
+            let v1n = self.family.variance.d_variance(mu) / v;
+            let g2n = self.family.link.d2_link_dmu(mu) / g1;
+            let wf = prior[i] / (v * g1 * g1);
+            dw_deta[i] = wf * (-v1n - 2.0 * g2n) / g1;
+            w_obs[i] = wf * (1.0 + (self.y[i] - mu) * (v1n + g2n));
+        }
+        let s_total = crate::design::combined_s(&self.s_list, rho, self.x_design.ncols());
+        let wx = &self.x_design * &w_obs.view().insert_axis(ndarray::Axis(1));
+        let a_obs = self.x_design.t().dot(&wx) + &s_total;
+        let a_inv = fit.a_inv();
+        let xa = self.x_design.dot(&a_inv);
+        let lev: Array1<f64> = (0..n).map(|i| xa.row(i).dot(&self.x_design.row(i))).collect();
+        let mut out = Vec::with_capacity(self.s_list.len());
+        for (k, s_k) in self.s_list.iter().enumerate() {
+            let rhs = s_k.dot(&fit.beta).mapv(|v| -rho[k].exp() * v);
+            let db = a_obs.solve(&rhs).ok()?;
+            let eta1 = self.x_design.dot(&db);
+            out.push((&dw_deta * &eta1 * &lev).sum());
+        }
+        Some(out)
     }
 }

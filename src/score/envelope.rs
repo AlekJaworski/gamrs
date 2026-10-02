@@ -483,6 +483,17 @@ where
         // internally consistent (uses one A everywhere).
         let lazy_tk_kkt = self.inner.lazy_tk_kkt_inputs(inner, theta);
         let has_tk_kkt = lazy_tk_kkt.is_some();
+        // Fisher-weight families: `W` still depends on β through μ (Poisson:
+        // W = μ), so `log|A|` has a β-chain even with a canonical link. The
+        // analytic Hessian below stays the envelope one; only the gradient,
+        // which decides where the optimiser stops, needs the exact term.
+        if !has_tk_kkt {
+            if let Some(chain) = self.inner.fisher_log_det_beta_chain(inner, theta) {
+                for k in 0..n_terms {
+                    g[k] += 0.5 * chain[k];
+                }
+            }
+        }
         if let Some(ref tk) = lazy_tk_kkt {
             debug_assert_eq!(
                 tk.eta1_per_term.len(),
