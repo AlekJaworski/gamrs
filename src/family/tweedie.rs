@@ -115,17 +115,26 @@ impl Loss for Tweedie {
         eta: ndarray::ArrayView1<f64>,
         prior_w: Option<ndarray::ArrayView1<f64>>,
     ) -> Option<(ndarray::Array2<f64>, ndarray::Array1<f64>)> {
+        // The Newton (observed) weight `log|H|` is taken off — mgcv's `tw()` is an
+        // extended family and uses it:
+        //   W = μ^(2−p) + (p−1)(y−μ)μ^(1−p)
+        //   ∂W/∂η = (2−p)μ^(2−p) + (p−1)μ^(1−p)·[(1−p)(y−μ) − μ]
+        //   ∂W/∂p = −ln μ·W + (y−μ)μ^(1−p)        (fixed μ; log φ does not enter W)
         let n = y.len();
-        let twop = 2.0 - self.p;
-        let dp_dtheta = tweedie_dp_dtheta(self.p);
+        let p = self.p;
+        let dp_dtheta = tweedie_dp_dtheta(p);
         let mut dw_dtheta = ndarray::Array2::<f64>::zeros((n, self.n_shape_params()));
         let dw_deta = ndarray::Array1::from_shape_fn(n, |i| {
-            let w = prior_w.map(|w| w[i]).unwrap_or(1.0) * (twop * eta[i]).exp();
-            // W = μ^(2−p): ∂W/∂p = −ln μ · W at fixed μ; log φ does not enter W.
+            let pw = prior_w.map(|w| w[i]).unwrap_or(1.0);
+            let mu = eta[i].exp();
+            let m1 = ((1.0 - p) * eta[i]).exp(); // μ^(1−p)
+            let m2 = mu * m1; // μ^(2−p)
+            let r = y[i] - mu;
+            let w = m2 + (p - 1.0) * r * m1;
             if self.profile_p {
-                dw_dtheta[[i, 1]] = -eta[i] * w * dp_dtheta;
+                dw_dtheta[[i, 1]] = pw * (-eta[i] * w + r * m1) * dp_dtheta;
             }
-            twop * w
+            pw * ((2.0 - p) * m2 + (p - 1.0) * m1 * ((1.0 - p) * r - mu))
         });
         Some((dw_dtheta, dw_deta))
     }
@@ -194,6 +203,12 @@ impl Loss for Tweedie {
     /// of mgcv's map the score is `∝ e^θ`, so the decrease still on offer
     /// equals the gradient. Stopping at θ = −10 forfeited 0.41 REML units on
     /// Poisson-like data, where p belongs at 1.01; at −30 that is `e^{-20}` of it.
+    /// `log|H|` off the Newton weights, as mgcv's extended-family `tw()` does
+    /// (log link is not Tweedie's canonical link). Matched-λ, the Fisher
+    /// version drifted 3.9e-5 against mgcv's criterion across λ.
+    fn use_newton_irls(&self) -> bool {
+        true
+    }
     fn shape_axis_bounds(&self) -> Vec<(f64, f64)> {
         if self.profile_p {
             vec![(-10.0, 10.0), (-30.0, 30.0)]

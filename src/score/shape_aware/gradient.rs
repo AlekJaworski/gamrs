@@ -83,7 +83,13 @@ where
         let rho_arr = Array1::from(rho_slice.to_vec());
         let a_obs = self.x_design.t().dot(&wx)
             + crate::design::combined_s(&self.s_list, &rho_arr, self.x_design.ncols());
-        let a_inv = fit.a_inv();
+        // Leverages from the factor whose log-determinant the score takes.
+        let a_inv = if family.loss.use_newton_irls() {
+            use ndarray_linalg::Inverse;
+            a_obs.inv().ok()?
+        } else {
+            fit.a_inv()
+        };
         let xa = self.x_design.dot(&a_inv);
         let h: Array1<f64> = (0..n).map(|i| xa.row(i).dot(&self.x_design.row(i))).collect();
         let mut out = Vec::with_capacity(dr_dtheta.ncols());
