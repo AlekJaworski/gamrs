@@ -712,11 +712,11 @@ where
         let prior_w_view = self.prior_weights.as_ref().map(|w| w.view());
         let dmu_arr: Array1<f64> = Array1::from_shape_fn(n, |i| {
             let wt_i = prior_w_view.as_ref().map(|w| w[i]).unwrap_or(1.0);
-            wt_i * self.family_base.loss.d_loss_dmu(self.y[i], fit.mu[i])
+            wt_i * family.loss.d_loss_dmu(self.y[i], fit.mu[i])
         });
         let dmu2_arr: Array1<f64> = Array1::from_shape_fn(n, |i| {
             let wt_i = prior_w_view.as_ref().map(|w| w[i]).unwrap_or(1.0);
-            wt_i * self.family_base.loss.d2_loss_dmu(self.y[i], fit.mu[i])
+            wt_i * family.loss.d2_loss_dmu(self.y[i], fit.mu[i])
         });
 
         // Per-row Deta3[i] = Dmu3·ig1³ − 3·Dmu2·g2g·ig1² + Dmu·(3·g2g² − g3g)·ig1.

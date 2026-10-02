@@ -1219,3 +1219,108 @@ fn tdist_analytic_hess_matches_fd_on_grad() {
         }
     }
 }
+
+/// Multi-smooth TDist Hessian against central FD of the analytic gradient, at
+/// shape parameters AWAY from the ones the family was built with.
+///
+/// The deviance block of the Hessian used to read ∂D/∂μ and ∂²D/∂μ² off the
+/// family's STARTING (ν, σ²) rather than the current θ, so once the outer
+/// Newton had moved the shape axes every ρ curvature was wrong — 10× on the
+/// near-linear terms of a 10-smooth house-price fit, which then zig-zagged for
+/// 51 outer iterations where mgcv takes 16. The single-smooth check above never
+/// saw it: its bar is absolute 0.1 on every entry below 1, and these entries are
+/// 1e-2.
+#[test]
+fn tdist_multismooth_hess_matches_fd_away_from_initial_shape() {
+    use gamrs::design::{Additive, DesignStrategy, TermSpec};
+
+    let n = 400;
+    let mut flat = Vec::with_capacity(3 * n);
+    let mut ys = Vec::with_capacity(n);
+    let mut state: u64 = 0x005e_ed0f_5ca7_7e55;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        ((state >> 11) as f64) / ((1u64 << 53) as f64)
+    };
+    for _ in 0..n {
+        let (a, b, c) = (next(), next(), next());
+        flat.extend_from_slice(&[a, b, c]);
+        let u = next() - 0.5;
+        let noise = 0.2 * (u / (1.0 - 4.0 * u * u).abs().max(1e-3).sqrt());
+        ys.push((6.0 * a).sin() + 0.5 * b + 0.1 * c + noise);
+    }
+    let x = Array2::from_shape_vec((n, 3), flat).unwrap();
+    let y = Array1::from_vec(ys);
+    let terms = (0..3)
+        .map(|col| TermSpec::Cr {
+            col,
+            k: 8,
+            pc: None,
+        })
+        .collect();
+    let prep = Additive { terms }.prepare(x.view()).unwrap();
+
+    let score: gamrs::score::ShapeAwarePirlsScore<_, _, _> = ShapeAwareEnvelopeScore {
+        x_design: prep.x_design.clone(),
+        y: y.clone(),
+        prior_weights: None,
+        s_list: prep.s_list.clone(),
+        family_base: tdist_identity(3.0 + 1.5_f64.exp(), 1.0),
+        rank_s_list: prep.rank_s_list.clone(),
+        mp: prep.mp,
+        log_pseudo_det_s_list: prep.log_pseudo_det_s_list.clone(),
+        coords: CoordsKind::Identity,
+        pirls_opts: PirlsOpts {
+            dev_rel_tol: 1e-13,
+            ..PirlsOpts::default()
+        },
+        inner_builder: PirlsInnerBuilder,
+        profile: FixedAtOneProfile,
+        _solver: std::marker::PhantomData,
+        accepted_state: std::cell::RefCell::new(None),
+        last_eta: std::cell::RefCell::new(None),
+        stats: gamrs::stats::FitStats::new(),
+    };
+
+    // θ = [ρ_1, ρ_2, ρ_3, log σ², log(ν − 3)]; the shape coordinates are far
+    // from the family's (σ² = 1, ν = 3 + e^1.5) — the case the bug needs.
+    let probes: &[[f64; 5]] = &[
+        [0.0, 3.0, 8.0, (0.05_f64).ln(), -2.0],
+        [-1.0, 5.0, 10.0, (0.1_f64).ln(), 0.5],
+    ];
+    for t in probes {
+        let theta = Array1::from_vec(t.to_vec());
+        let (_, _, h) = score.value_grad_hess(&theta).unwrap();
+        let d = theta.len();
+        let eps = 1e-4;
+        let mut h_fd = Array2::<f64>::zeros((d, d));
+        for i in 0..d {
+            let (mut tp, mut tm) = (theta.clone(), theta.clone());
+            tp[i] += eps;
+            tm[i] -= eps;
+            let (_, gp) = score.value_and_grad(&tp).unwrap();
+            let (_, gm) = score.value_and_grad(&tm).unwrap();
+            for j in 0..d {
+                h_fd[[j, i]] = (gp[j] - gm[j]) / (2.0 * eps);
+            }
+        }
+        let h_fd = (&h_fd + &h_fd.t()) * 0.5;
+        // Per-entry, scale-free floor: an off-diagonal is judged against the
+        // curvature of the two axes it couples, not against the largest entry
+        // (σ²'s, ~40), which would let every ρ entry (~0.05) through.
+        for i in 0..d {
+            for j in 0..d {
+                let err = (h[[i, j]] - h_fd[[i, j]]).abs();
+                let floor = 1e-3 * (h_fd[[i, i]] * h_fd[[j, j]]).abs().sqrt();
+                assert!(
+                    err <= 0.01 * h_fd[[i, j]].abs() + floor,
+                    "θ={t:?} H[{i},{j}] analytic={:+.4e} fd={:+.4e}",
+                    h[[i, j]],
+                    h_fd[[i, j]]
+                );
+            }
+        }
+    }
+}
