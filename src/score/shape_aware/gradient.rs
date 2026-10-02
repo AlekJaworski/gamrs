@@ -1053,7 +1053,7 @@ where
                 for k in 0..n_shape {
                     g[n_terms + k] = analytic[k];
                 }
-                if let Some(chain) = self.shape_log_det_chain(&fit, &family, &rho_slice) {
+                if let Some(chain) = self.shape_log_det_chain(fit, family, &rho_slice) {
                     for k in 0..n_shape {
                         g[n_terms + k] += 0.5 * chain[k];
                     }
@@ -1191,7 +1191,7 @@ where
                 for k in 0..n_shape {
                     g[n_terms + k] = analytic[k];
                 }
-                if let Some(chain) = self.shape_log_det_chain(&fit, &family, &rho_slice) {
+                if let Some(chain) = self.shape_log_det_chain(fit, &family, &rho_slice) {
                     for k in 0..n_shape {
                         g[n_terms + k] += 0.5 * chain[k];
                     }

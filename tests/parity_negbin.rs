@@ -69,8 +69,8 @@ fn nb_log_n300_k10_cr() {
         "[nb n300 k10] max_rel = {rel:.3e}; max_abs = {abs_e:.3e}; θ̂ gamrs = {:.3}; ρ̂ = {:.3}; iters = {}; edf = {:.2}",
         fit.scale, fit.rho[0], fit.n_iters, fit.edf_total,
     );
-    // Phase-6 bound: 1e-2 on μ. Joint θ optimisation is harder than
-    // single-σ profiling (scat got 2e-2) — 1e-2 is the target Phase 6
-    // tolerance.
-    assert!(rel < 1e-2, "NegBin μ rel error {rel:.3e} exceeds 1e-2");
+    // Observed 2.5e-7. The bar was 1e-2 until 0.14.6, wide enough to hide a
+    // wrong criterion: the θ probes scored a frozen β, and log|H| dropped its
+    // β-chain.
+    assert!(rel < 1e-5, "NegBin μ rel error {rel:.3e} exceeds 1e-5");
 }

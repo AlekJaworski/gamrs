@@ -91,6 +91,6 @@ fn additive_2d_nb_n600_k8_cr() {
         "[additive nb n600 k8] max_rel = {rel:.3e}; ρ̂ = [{:.3}, {:.3}]; edf = {:.2}; iters = {}",
         fit.rho[0], fit.rho[1], fit.edf_total, fit.n_iters,
     );
-    // Bar 5e-3: observed ~1.4e-3. Multi-smooth NB + profiled θ.
-    assert!(rel < 5e-3, "additive NB μ rel error {rel:.3e} exceeds 5e-3");
+    // Observed 4.3e-6 (1.4e-3 before 0.14.6). Multi-smooth NB + profiled θ.
+    assert!(rel < 5e-5, "additive NB μ rel error {rel:.3e} exceeds 5e-5");
 }

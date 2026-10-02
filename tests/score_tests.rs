@@ -1405,7 +1405,9 @@ fn tweedie_multismooth_rho_grad_matches_fd() {
             let theta = Array1::from_vec(t);
             let (_, g) = score.value_and_grad(&theta).unwrap();
             let eps = 1e-4;
-            for j in 0..2 {
+            // Every axis: the two ρ, log φ, and (profile-p) the p axis, whose
+            // log|H| β-chain was missing until 0.14.6 (g_p off by ~0.3).
+            for j in 0..theta.len() {
                 let (mut tp, mut tm) = (theta.clone(), theta.clone());
                 tp[j] += eps;
                 tm[j] -= eps;
