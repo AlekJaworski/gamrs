@@ -742,6 +742,9 @@ class Gam:
         kept = [i for i in range(lp.shape[1]) if i not in aliased]
         parts = []
         for i, label in zip(aliased, self.aliased_):
+            if not np.any(lp[:, i]):
+                parts.append(f"{label} (identically zero)")
+                continue
             coef = np.linalg.lstsq(lp[:, kept], lp[:, i], rcond=None)[0]
             share = np.abs(coef) * np.linalg.norm(lp[:, kept], axis=0)
             used = [kept[j] for j in np.flatnonzero(share > 1e-6 * np.linalg.norm(lp[:, i]))]
@@ -977,18 +980,9 @@ class Gam:
         out: list[Term] = []
         n_obs = int(X_arr.shape[0])
         for t in term_objs:
-            # ParametricTerm: reject if the column is constant — collinear
-            # with the intercept, the design matrix will be singular.
+            # A constant ParametricTerm is collinear with the intercept; the fit
+            # zeroes it and names it in the rank-deficiency warning, as mgcv does.
             if isinstance(t, ParametricTerm):
-                col_idx = int(t.col)
-                col_name = cols[col_idx] if col_idx < len(cols) else f"col_{col_idx}"
-                n_unique = int(np.unique(X_arr[:, col_idx]).size)
-                if n_unique < 2:
-                    raise ValueError(
-                        f"ParametricTerm({col_name!r}): column is constant "
-                        f"(n_unique={n_unique}); collinear with the intercept "
-                        "and would produce a singular design. Drop this term."
-                    )
                 out.append(t)
                 continue
             if not isinstance(t, CrTerm):
