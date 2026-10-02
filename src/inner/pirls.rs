@@ -1149,15 +1149,24 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
     }
 }
 
-impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver> PirlsInner<L, K, V, S> {
+impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
+    PirlsInner<L, K, V, S>
+{
     /// See `InnerSolver::fisher_log_det_beta_chain`.
-    pub(crate) fn fisher_beta_chain(&self, fit: &GaussianInnerFit<S>, rho: &Array1<f64>) -> Option<Vec<f64>> {
+    pub(crate) fn fisher_beta_chain(
+        &self,
+        fit: &GaussianInnerFit<S>,
+        rho: &Array1<f64>,
+    ) -> Option<Vec<f64>> {
         use ndarray_linalg::Solve;
         if self.family.loss.use_newton_irls() {
             return None;
         }
         let n = self.x_design.nrows();
-        let prior: Array1<f64> = self.prior_weights.clone().unwrap_or_else(|| Array1::ones(n));
+        let prior: Array1<f64> = self
+            .prior_weights
+            .clone()
+            .unwrap_or_else(|| Array1::ones(n));
         let mut dw_deta = Array1::<f64>::zeros(n);
         let mut w_obs = Array1::<f64>::zeros(n);
         for i in 0..n {
@@ -1178,7 +1187,9 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver> P
         let a_obs = self.x_design.t().dot(&wx) + &s_total;
         let a_inv = fit.a_inv();
         let xa = self.x_design.dot(&a_inv);
-        let lev: Array1<f64> = (0..n).map(|i| xa.row(i).dot(&self.x_design.row(i))).collect();
+        let lev: Array1<f64> = (0..n)
+            .map(|i| xa.row(i).dot(&self.x_design.row(i)))
+            .collect();
         let mut out = Vec::with_capacity(self.s_list.len());
         for (k, s_k) in self.s_list.iter().enumerate() {
             let rhs = s_k.dot(&fit.beta).mapv(|v| -rho[k].exp() * v);

@@ -586,8 +586,9 @@ where
         inner: &GaussianInnerFit<S>,
         hin: &HessInputs,
     ) -> Option<Array2<f64>> {
-        // Non-canonical Tk·KK' gradient is not differentiated here.
-        if hin.has_tk_kkt {
+        // The Tk·KK' gradient term is not differentiated here; only losses
+        // that measured the envelope Hessian as good enough keep it.
+        if hin.has_tk_kkt && !self.loss.analytic_hessian_with_newton_chain() {
             return None;
         }
         // No closed-form σ² derivative (e.g. Gamma) → FD fallback.

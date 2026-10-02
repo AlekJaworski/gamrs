@@ -74,7 +74,6 @@ impl Loss for InverseGaussian {
     fn use_newton_irls(&self) -> bool {
         true
     }
-
 }
 
 impl VarianceFn for InverseGaussianVariance {

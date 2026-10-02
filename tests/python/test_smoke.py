@@ -889,8 +889,14 @@ def test_freml_still_runs_fellner_schall_where_it_was_ported():
         f"fREML took the same {reml.n_iters_} iterations as REML — "
         "Fellner-Schall looks aliased away, not run"
     )
-    # Different route, same criterion: the smoothing parameters still agree.
-    assert np.allclose(fell.get_lambdas(), reml.get_lambdas(), rtol=1e-4)
+    # Different routes, different answers — each matching its mgcv counterpart
+    # on this data (mgcv 1.9.3, s(x, k=10, bs="cr")): gam(method="REML") sp
+    # 91.558444, bam(method="fREML") sp 91.982778. Fellner-Schall's update holds
+    # the working weights fixed, so it lands where REML would if log|H|'s
+    # β-chain were dropped — which is exactly where REML landed until 0.14.6,
+    # and why these two used to "agree".
+    assert np.allclose(reml.get_lambdas(), [91.558444], rtol=1e-4)
+    assert np.allclose(fell.get_lambdas(), [91.982778], rtol=1e-4)
 
 
 def test_non_convergence_warns_instead_of_being_silent():

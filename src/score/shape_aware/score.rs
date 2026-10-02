@@ -393,5 +393,4 @@ where
             .sum();
         crate::score::reml_score_from_parts(dp, phi, self.mp, log_det_h, log_det_lambda_s, ls_sum)
     }
-
 }

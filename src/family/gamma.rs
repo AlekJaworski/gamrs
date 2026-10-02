@@ -156,6 +156,10 @@ impl Loss for Gamma {
         true
     }
 
+    fn analytic_hessian_with_newton_chain(&self) -> bool {
+        true
+    }
+
     /// Gamma's W = (dμ/dη)²/V = μ²/μ² = 1 (log link) or = 1/μ² (inverse
     /// link) — stable under small β perturbations. Eligible for the
     /// NoRefresh IFT line-search shortcut. Matches mgcv_rust's skip-list
@@ -174,7 +178,6 @@ impl Loss for Gamma {
     fn use_newton_irls(&self) -> bool {
         true
     }
-
 }
 
 impl VarianceFn for GammaVariance {

@@ -199,6 +199,22 @@ pub trait Loss {
         false
     }
 
+    /// Whether the analytic envelope Hessian may drive the outer Newton when
+    /// the gradient carries the Newton-weight β-chain (Tk·KK'). Default
+    /// `false`: that chain is not differentiated analytically, so the outer
+    /// loop takes an FD Hessian of the exact gradient. The stopping point is
+    /// set by the gradient either way; the Hessian only shapes the steps.
+    ///
+    /// Gamma opts in. Measured on three 2-smooth fits (CPU time, single
+    /// thread): log link 42 ms analytic vs 140 ms FD, inverse link 73 vs
+    /// 230 ms, same iteration counts and the same distance to mgcv.
+    /// InverseGaussian does not: its analytic Hessian carries a Fisher-W
+    /// chain that does not pair with the Newton-W gradient, and it took 6-7
+    /// outer iterations instead of 4-5.
+    fn analytic_hessian_with_newton_chain(&self) -> bool {
+        false
+    }
+
     /// Number of family-shape parameters this loss owns. Zero for
     /// Gaussian/Bernoulli/Poisson. TDist returns 2 (`log σ²`, `log(ν-2)`).
     /// Tweedie returns 2 (`log φ`, `p_transform`). Used by the outer Newton

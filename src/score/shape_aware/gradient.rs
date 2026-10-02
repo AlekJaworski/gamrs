@@ -73,11 +73,18 @@ where
         use ndarray_linalg::Solve;
         let prior_v = self.prior_weights.as_ref().map(|w| w.view());
         let (dw_dtheta, dw_deta) =
-            family.loss.ift_trace_weight_derivs(self.y.view(), fit.eta.view(), prior_v)?;
+            family
+                .loss
+                .ift_trace_weight_derivs(self.y.view(), fit.eta.view(), prior_v)?;
         let dr_dtheta =
-            family.loss.shape_score_residual_derivs(self.y.view(), fit.eta.view(), prior_v)?;
+            family
+                .loss
+                .shape_score_residual_derivs(self.y.view(), fit.eta.view(), prior_v)?;
         let n = fit.n;
-        let prior = self.prior_weights.clone().unwrap_or_else(|| Array1::ones(n));
+        let prior = self
+            .prior_weights
+            .clone()
+            .unwrap_or_else(|| Array1::ones(n));
         let w_obs = crate::inner::pirls::newton_score_weights(family, &self.y, &fit.mu, &prior);
         let wx = &self.x_design * &w_obs.view().insert_axis(ndarray::Axis(1));
         let rho_arr = Array1::from(rho_slice.to_vec());
@@ -91,10 +98,14 @@ where
             fit.a_inv()
         };
         let xa = self.x_design.dot(&a_inv);
-        let h: Array1<f64> = (0..n).map(|i| xa.row(i).dot(&self.x_design.row(i))).collect();
+        let h: Array1<f64> = (0..n)
+            .map(|i| xa.row(i).dot(&self.x_design.row(i)))
+            .collect();
         let mut out = Vec::with_capacity(dr_dtheta.ncols());
         for k in 0..dr_dtheta.ncols() {
-            let db = a_obs.solve(&self.x_design.t().dot(&dr_dtheta.column(k))).ok()?;
+            let db = a_obs
+                .solve(&self.x_design.t().dot(&dr_dtheta.column(k)))
+                .ok()?;
             let eta_k = self.x_design.dot(&db);
             out.push(((&dw_dtheta.column(k).to_owned() + &(&dw_deta * &eta_k)) * &h).sum());
         }
@@ -182,11 +193,22 @@ where
         // right for identity-link scat/ocat, not for a log-link Newton score
         // (NegBin stopped with a true gradient of 0.01–0.04 against a 8e-5 bar).
         if family.loss.use_newton_irls() {
-            let prior = self.prior_weights.clone().unwrap_or_else(|| Array1::ones(n));
+            let prior = self
+                .prior_weights
+                .clone()
+                .unwrap_or_else(|| Array1::ones(n));
             let rho_arr = Array1::from(rho_slice.to_vec());
             let s_total = crate::design::combined_s(&self.s_list, &rho_arr, self.x_design.ncols());
             if let Some(tk) = crate::inner::pirls::lazy_tk_kkt_inputs(
-                family, &self.y, &fit.mu, &fit.beta, &prior, &self.x_design, &self.s_list, &s_total, &rho_arr,
+                family,
+                &self.y,
+                &fit.mu,
+                &fit.beta,
+                &prior,
+                &self.x_design,
+                &self.s_list,
+                &s_total,
+                &rho_arr,
             ) {
                 return (0..n_terms)
                     .map(|j| {
