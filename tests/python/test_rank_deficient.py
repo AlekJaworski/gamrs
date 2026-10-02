@@ -119,3 +119,17 @@ def test_shash_block_with_a_duplicate_tag_fits():
         a = gamrs.fit_shash(X, y, mu_terms=full)
         b = gamrs.fit_shash(X, y, mu_terms=full[:2])
     np.testing.assert_array_equal(a.predict_quantile(X, 0.9), b.predict_quantile(X, 0.9))
+
+
+@pytest.mark.parametrize("value, partner", [(0.0, "identically zero"), (3.5, "determined by (Intercept)")])
+def test_constant_parametric_term_is_aliased_not_refused(value, partner):
+    # A typed ParametricTerm on a constant column used to raise; it is the
+    # intercept (or nothing) again, so it is zeroed and named like any alias.
+    X, y = duplicate_tags(0)
+    X = X[["gla", "water"]].assign(c=value)
+    terms = [gamrs.CrTerm("gla", k=8), gamrs.ParametricTerm("water"), gamrs.ParametricTerm("c")]
+    g, msgs = fit(X, y, terms=terms)
+    ref, _ = fit(X, y, terms=terms[:2])
+    assert g.aliased_ == ["c"]
+    assert len(msgs) == 1 and f"c ({partner})" in msgs[0]
+    np.testing.assert_allclose(g.predict(X), ref.predict(X), rtol=0, atol=1e-10)

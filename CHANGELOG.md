@@ -7,6 +7,18 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+### Changed
+
+- **A typed `ParametricTerm` on a constant column is aliased, not refused.**
+  `Gam(terms=[..., ParametricTerm("c")])` with a constant `c` raised
+  `ValueError: column is constant … would produce a singular design` before
+  the fit. Since 0.14.3 the fit handles exactly this: the coefficient is
+  zeroed and the rank-deficiency warning names it (`c (determined by
+  (Intercept))`, or `c (identically zero)` for an all-zero column), and
+  predictions equal the fit without the term. mgcv fits it the same way.
+  `CrTerm` on a constant column still raises: no spline basis exists on one
+  value, and mgcv refuses that too.
+
 ## [0.14.4] — 2026-10-02
 
 ### Fixed
