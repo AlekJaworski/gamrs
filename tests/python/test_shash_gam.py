@@ -93,3 +93,27 @@ def test_shash_gam_predict_quantile_rejects_out_of_range_p():
     for bad in (0.0, 1.0, -0.1, 1.5):
         with pytest.raises(ValueError):
             fit.predict_quantile(x.reshape(-1, 1), bad)
+
+
+def test_fit_shash_on_a_linear_smooth_is_not_round_off():
+    """A μ-smooth that is exactly linear drives λ to the edge of the box. At the
+    old fixed ρ = 30 the factorisation was past computable, so the answer was
+    round-off: on this data scaling y by (1 + 1e-10) moved the 0.9-quantile by
+    3.3e-7 (4.2e-5 with one more parametric term); bounded, 2.4e-9. The box now
+    ends where `exp(ρ)·S0` stops being resolvable against `X'X`."""
+    import warnings
+
+    import pandas as pd
+
+    rng = np.random.default_rng(0)
+    n = 200
+    X = pd.DataFrame({"gla": rng.uniform(800, 3000, n), "age": rng.uniform(0, 60, n)})
+    X["water"] = (rng.uniform(size=n) < 0.03).astype(float)
+    y = (12 + 3e-4 * X.gla - 0.01 * X.age + 0.1 * X.water + rng.normal(0, 0.1, n)).to_numpy()
+    terms = [gamrs.CrTerm("gla", k=8), gamrs.ParametricTerm("water")]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        a = gamrs.fit_shash(X, y, mu_terms=terms)
+        b = gamrs.fit_shash(X, y * (1 + 1e-10), mu_terms=terms)
+    assert np.all(np.asarray(a.rho_) < 30.0)
+    np.testing.assert_allclose(a.predict_quantile(X, 0.9), b.predict_quantile(X, 0.9), rtol=0, atol=5e-8)

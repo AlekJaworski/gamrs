@@ -7,6 +7,20 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`fit_shash` stopped a smooth's λ where its arithmetic had already run
+  out.** The shash outer search clamped every ρ at a fixed ±30. For a μ-smooth
+  that is exactly linear, λ runs to the edge, and at e^30 the penalty swamps
+  `X'X` so badly that the fit is round-off: scaling y by (1 + 1e-10) moved
+  laml by 2.8e-3 and the 0.9-quantile by 4.2e-5, erratically (1e-12 gave
+  7.5e-5, 1e-8 gave 1.9e-4). The upper end of the box is now the same bound the
+  scat outer has used since 0.14.3, per smooth:
+  `ln((grad_tol/eps) · max diag X'X / max diag S0)`, still capped at 30. On
+  that fit ρ stops at 25.16 and the same perturbations move the quantile by
+  2e-7 or less (2.4e-9 on the regression case). Fits whose smooths sit inside
+  the box are unchanged; the shash mgcv parity tests pass as before.
+
 ## [0.14.4] — 2026-10-02
 
 ### Fixed

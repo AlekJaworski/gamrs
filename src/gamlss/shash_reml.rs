@@ -134,6 +134,32 @@ impl ShashProblem {
         self.penalties.iter().filter(|p| p.is_some()).count()
     }
 
+    /// Per-smoothing-parameter upper bound on ρ, in ρ order: where `exp(ρ)·S0`
+    /// starts swamping `X'X` in the factorisation. Past
+    /// `ln((grad_tol / eps) · max diag X'X / max diag S0)` the smooth's null-space
+    /// directions come out of a cancellation of order `eps·λ·max S0 / max X'X`,
+    /// and the criterion is round-off: a fit pinned at ρ = 30 moved its laml by
+    /// 2.8e-3 when y was scaled by (1 + 1e-10). Same bound as the scat outer
+    /// (`ShapeAwareEnvelopeScore::axis_bounds`), capped at the old ±30.
+    pub fn rho_upper_bounds(&self, rho_abs_max: f64) -> Vec<f64> {
+        let cond_limit = crate::outer::NewtonOpts::default().grad_tol / f64::EPSILON;
+        (0..4)
+            .filter_map(|k| {
+                let pen = self.penalties[k].as_ref()?;
+                let x = &self.x[k];
+                let xtx = (0..x.ncols())
+                    .map(|c| x.column(c).mapv(|v| v * v).sum())
+                    .fold(f64::MIN_POSITIVE, f64::max);
+                let s = pen.s0.diag().iter().cloned().fold(0.0_f64, f64::max);
+                Some(if s > 0.0 {
+                    (cond_limit * xtx / s).ln().min(rho_abs_max)
+                } else {
+                    rho_abs_max
+                })
+            })
+            .collect()
+    }
+
     /// Build the four λ-combined penalty blocks `S_ρ[k]` from a ρ slice:
     /// `exp(ρ_i)·s0` for penalised block `k` (consuming ρ in block order), a
     /// `p_k×p_k` zero matrix for an unpenalised block. Returns them owned so the
@@ -667,6 +693,7 @@ pub fn fit_reml(
         e.laml
     };
 
+    let rho_hi = problem.rho_upper_bounds(30.0);
     while n_iter < opts.max_iter {
         n_iter += 1;
         // FD Hessian (for the Newton step) + the converged centre β̂; the FD
@@ -694,13 +721,15 @@ pub fn fit_reml(
         // bogus `laml` the search would wrongly accept — the v0.12.0 over-
         // smoothing-to-linear bug). exp(±30) already spans "no penalty" to
         // "smooth fully collapsed to its null space (EDF→Mp)", so clamping there
-        // never excludes a meaningful optimum; mgcv likewise bounds sp.
+        // never excludes a meaningful optimum; mgcv likewise bounds sp. The upper
+        // end is tighter still: `rho_hi`, where the factorisation stops being
+        // computable (`ShashProblem::rho_upper_bounds`).
         const RHO_ABS_MAX: f64 = 30.0;
         let mut t = 1.0_f64;
         let mut accepted = false;
         for _ in 0..=opts.max_halvings {
             let trial: Vec<f64> = (0..d)
-                .map(|i| (rho[i] + delta[i] * t).clamp(-RHO_ABS_MAX, RHO_ABS_MAX))
+                .map(|i| (rho[i] + delta[i] * t).clamp(-RHO_ABS_MAX, rho_hi[i]))
                 .collect();
             let e = reml_eval(density, problem, &trial, beta_warm.view(), opts.inner_opts)?;
             // Reject non-finite criteria (overflow guard, belt-and-braces).
