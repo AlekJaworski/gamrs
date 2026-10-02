@@ -100,8 +100,9 @@ def test_fit_shash_on_a_linear_smooth_is_not_round_off():
     old fixed ρ = 30 the factorisation was past computable, so the answer was
     round-off: scaling y by (1 + 1e-10) moved the 0.9-quantile by up to 4.2e-5.
     The box now ends where `exp(ρ)·S0` stops being resolvable against `X'X`
-    (ρ < 30 is the check that separates the two); what is left of the
-    perturbation is the optimiser's tolerance, ~1e-7 depending on the BLAS."""
+    (ρ < 30 is the check that separates the two). Beyond that the criterion is
+    a flat shelf — the perturbed fit may stop anywhere on it (ρ 19–25 seen,
+    BLAS-dependent) — so the quantile check is relative, ~1e-6."""
     import warnings
 
     import pandas as pd
@@ -117,4 +118,4 @@ def test_fit_shash_on_a_linear_smooth_is_not_round_off():
         a = gamrs.fit_shash(X, y, mu_terms=terms)
         b = gamrs.fit_shash(X, y * (1 + 1e-10), mu_terms=terms)
     assert np.all(np.asarray(a.rho_) < 30.0)
-    np.testing.assert_allclose(a.predict_quantile(X, 0.9), b.predict_quantile(X, 0.9), rtol=0, atol=1e-6)
+    np.testing.assert_allclose(a.predict_quantile(X, 0.9), b.predict_quantile(X, 0.9), rtol=1e-6, atol=0)
