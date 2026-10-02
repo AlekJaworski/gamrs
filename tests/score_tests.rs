@@ -1363,7 +1363,13 @@ fn tweedie_multismooth_rho_grad_matches_fd() {
     }
     let x = Array2::from_shape_vec((n, 2), flat).unwrap();
     let y = Array1::from_vec(ys);
-    let terms = (0..2).map(|col| TermSpec::Cr { col, k: 10, pc: None }).collect();
+    let terms = (0..2)
+        .map(|col| TermSpec::Cr {
+            col,
+            k: 10,
+            pc: None,
+        })
+        .collect();
     let prep = Additive { terms }.prepare(x.view()).unwrap();
 
     for (p, theta_p) in [(1.5, None), (1.3, Some(-0.5_f64))] {
@@ -1382,7 +1388,10 @@ fn tweedie_multismooth_rho_grad_matches_fd() {
             mp: prep.mp,
             log_pseudo_det_s_list: prep.log_pseudo_det_s_list.clone(),
             coords: CoordsKind::Identity,
-            pirls_opts: PirlsOpts { dev_rel_tol: 1e-14, ..PirlsOpts::default() },
+            pirls_opts: PirlsOpts {
+                dev_rel_tol: 1e-14,
+                ..PirlsOpts::default()
+            },
             inner_builder: PirlsInnerBuilder,
             profile: OwnedByLossProfile,
             _solver: std::marker::PhantomData,
