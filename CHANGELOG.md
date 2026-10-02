@@ -7,6 +7,40 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+### Fixed
+
+- **scat's outer Newton steered with the wrong curvature, so multi-smooth fits
+  took 40–200 iterations where mgcv takes 8–16.** The deviance part of the
+  joint (ρ, shape) Hessian read ∂D/∂μ and ∂²D/∂μ² off the family at the ν and
+  σ² the fit *started* from, while every other piece used the current θ. Once
+  the shape axes moved, every ρ curvature was off. On a 10-smooth, 1,000-sale
+  fit the two near-linear terms came out 10× too flat (`fireplace_count`
+  1.34e-2 against a finite-difference 1.37e-1); Newton then overshot, the
+  gradients on those terms flipped sign every iteration, and the line search
+  halved every step, which throttled the axes that were otherwise converging.
+  The analytic gradient was right throughout (it matches finite differences
+  to 4 digits), so fits still converged to the right place, slowly.
+
+  Found by splitting the Hessian into its components and checking each against
+  finite differences: the penalty and log|A| parts matched and the deviance
+  part did not (0.051 against 0.303). The fix is two lines; the same stale read
+  in the shape-gradient chain is fixed too (it vanishes for scat's identity
+  link but would not for a log-link family on that path).
+
+  Measured against 0.14.3, same build:
+  - 10-smooth scat fits (six heatmap-shaped seeds): 12–17 outer iterations
+    (mgcv 8–16), 0.6–0.9 s; one went from 153 iterations and 210 s to 17 and
+    0.9 s. Fitted values move closer to mgcv's (e.g. 2.0e-4 → 5.6e-6 sd).
+  - The 1,000-sale start-basin fit: 133 → 26 iterations, 12.8 → 2.1 s, same
+    REML (760.848, mgcv's).
+  - 20 real single-term scat fits: 120 → 100 iterations, REML unchanged
+    (within 3e-8), median curve gap to mgcv 1.1e-5 → 2.1e-6 sd.
+  - Gaussian, binomial, Poisson and NegBin fits: unchanged.
+
+  The single-smooth Hessian test could not see this: its bar is an absolute
+  0.1 on every entry below 1, and these entries are ~1e-2. A new test checks
+  three smooths at shape values away from the starting ones, entry by entry.
+
 ## [0.14.3] — 2026-10-01
 
 ### Fixed
