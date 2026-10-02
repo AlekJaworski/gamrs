@@ -125,30 +125,33 @@ where
         //     contribute nothing. `½·Dmu3` differentiates the observed
         //     curvature on every row, which is not the `W` that is in `A`.
         //   - `level1_shape_derivatives` otherwise (ocat): `∂W/∂μ = ½·Dmu3`.
-        // Families with neither hook (NegBin, InverseGaussian, Tweedie) keep
-        // the pure envelope form — the documented parity floor for them.
+        //   - Tweedie supplies the hook for its Fisher weight (see
+        //     `Tweedie::ift_trace_weight_derivs`).
+        // Families with neither hook (NegBin, InverseGaussian) keep the pure
+        // envelope form — the documented parity floor for them.
         // `ift_trace_weight_derivs` returns the derivatives of the weight
         // actually in the matrix the score differentiates — including, under
         // the migration switch, the unswitched observed ones — so this needs
         // no branch of its own.
-        let dw_dmu_rows: Option<Array1<f64>> = family
+        let ift_rows = family
             .loss
             .ift_trace_weight_derivs(
                 self.y.view(),
                 fit.eta.view(),
                 self.prior_weights.as_ref().map(|w| w.view()),
             )
-            .map(|(_dw_dtheta, dw_dmu)| dw_dmu)
-            .or_else(|| {
-                family
-                    .loss
-                    .level1_shape_derivatives(
-                        self.y.view(),
-                        fit.eta.view(),
-                        self.prior_weights.as_ref().map(|w| w.view()),
-                    )
-                    .map(|level1| level1.dmu3.mapv(|v| 0.5 * v))
-            });
+            .map(|(_dw_dtheta, dw_dmu)| dw_dmu);
+        let from_ift_hook = ift_rows.is_some();
+        let dw_dmu_rows: Option<Array1<f64>> = ift_rows.or_else(|| {
+            family
+                .loss
+                .level1_shape_derivatives(
+                    self.y.view(),
+                    fit.eta.view(),
+                    self.prior_weights.as_ref().map(|w| w.view()),
+                )
+                .map(|level1| level1.dmu3.mapv(|v| 0.5 * v))
+        });
 
         let tk_kkt_per_term: Vec<f64> = if let Some(dw_dmu) = dw_dmu_rows {
             // h_diag[i] = (X · A⁻¹ · X')_ii. Materialise A_inv once then
@@ -169,12 +172,49 @@ where
             // call, to get a bit-identical result: measured 1.988e-8 from both
             // paths at ρ=0 and 3.227e-5 at ρ=4, equal to every digit. Deleted
             // with the criterion switch, which is what made the two coincide.
+            // dβ̂/dρ comes from the OBSERVED penalised Hessian — β̂ minimises
+            // the penalised deviance. That is `fit.a_factor` for a family that
+            // supplies observed curvature weights; a Fisher-factor family on the
+            // hook (Tweedie, log link) needs it built here, or dβ̂/dρ is 5–9% off.
+            // The Level-1 families (ocat, NegBin) keep their own factor.
+            let observed_a: Option<Array2<f64>> = if from_ift_hook
+                && family
+                    .loss
+                    .observed_curvature_weights(
+                        self.y.view(),
+                        fit.eta.view(),
+                        self.prior_weights.as_ref().map(|w| w.view()),
+                    )
+                    .is_none()
+            {
+                let prior = self
+                    .prior_weights
+                    .clone()
+                    .unwrap_or_else(|| Array1::ones(n));
+                let w_obs =
+                    crate::inner::pirls::newton_score_weights(family, &self.y, &fit.mu, &prior);
+                let wx = &self.x_design * &w_obs.view().insert_axis(ndarray::Axis(1));
+                let rho_arr = Array1::from(rho_slice.to_vec());
+                Some(
+                    self.x_design.t().dot(&wx)
+                        + crate::design::combined_s(&self.s_list, &rho_arr, self.x_design.ncols()),
+                )
+            } else {
+                None
+            };
             let mut tk_kkt = vec![0.0_f64; n_terms];
             for j in 0..n_terms {
                 let lambda_j = rho_slice[j].exp();
                 let s_beta = self.s_list[j].dot(&fit.beta);
                 let rhs = s_beta.mapv(|v| -lambda_j * v);
-                let dbeta_drho_j: Array1<f64> = S::solve(&fit.a_factor, rhs.view());
+                let dbeta_drho_j: Array1<f64> = match observed_a.as_ref() {
+                    Some(a) => {
+                        use ndarray_linalg::Solve;
+                        a.solve(&rhs)
+                            .unwrap_or_else(|_| S::solve(&fit.a_factor, rhs.view()))
+                    }
+                    None => S::solve(&fit.a_factor, rhs.view()),
+                };
                 let eta1_j = self.x_design.dot(&dbeta_drho_j);
                 tk_kkt[j] = (&dw_dmu * &eta1_j * &h_diag).sum();
             }

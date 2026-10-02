@@ -1324,3 +1324,89 @@ fn tdist_multismooth_hess_matches_fd_away_from_initial_shape() {
         }
     }
 }
+
+/// Two-smooth Tweedie ρ-gradient against central FD of the score value, with the
+/// inner solve converged far enough (dev_rel_tol 1e-14) that the FD is exact.
+///
+/// The ρ-gradient used to be the bare envelope form for Tweedie: `log|H|`'s
+/// β-chain was dropped, and once added it needs dβ̂/dρ from the observed
+/// penalised Hessian — which in turn needs `TweedieVariance::d_variance`, absent
+/// until now (the trait's zero default dropped V'/V from α). Measured on a
+/// two-smooth fit: the bare form was 2.2e-3 off at p = 1.5 and the outer Newton
+/// stopped where the true gradient was not zero.
+#[test]
+fn tweedie_multismooth_rho_grad_matches_fd() {
+    use gamrs::design::{Additive, DesignStrategy, TermSpec};
+
+    let n = 200;
+    let mut flat = Vec::with_capacity(2 * n);
+    let mut ys = Vec::with_capacity(n);
+    let mut state: u64 = 0x0000_7eed_1e5a_5eed;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        ((state >> 11) as f64) / ((1u64 << 53) as f64)
+    };
+    for _ in 0..n {
+        let (a, b) = (next() * 10.0, next() * 10.0);
+        flat.extend_from_slice(&[a, b]);
+        let mu = ((1.0 + 0.3 * a + b.sin()) / 3.0).exp();
+        // Compound-Poisson-ish draw: a Poisson count of gamma-ish jumps.
+        let mut y = 0.0;
+        let mut t = -(next().max(1e-12)).ln();
+        while t < mu {
+            y += 0.5 + next();
+            t += -(next().max(1e-12)).ln();
+        }
+        ys.push(y);
+    }
+    let x = Array2::from_shape_vec((n, 2), flat).unwrap();
+    let y = Array1::from_vec(ys);
+    let terms = (0..2).map(|col| TermSpec::Cr { col, k: 10, pc: None }).collect();
+    let prep = Additive { terms }.prepare(x.view()).unwrap();
+
+    for (p, theta_p) in [(1.5, None), (1.3, Some(-0.5_f64))] {
+        let mut family = tweedie_log(p, 1.0);
+        if theta_p.is_none() {
+            family.loss.profile_p = false;
+            family.variance.profile_p = false;
+        }
+        let score: gamrs::score::ShapeAwarePirlsScoreOwnedPhi<_, _, _> = ShapeAwareEnvelopeScore {
+            x_design: prep.x_design.clone(),
+            y: y.clone(),
+            prior_weights: None,
+            s_list: prep.s_list.clone(),
+            family_base: family,
+            rank_s_list: prep.rank_s_list.clone(),
+            mp: prep.mp,
+            log_pseudo_det_s_list: prep.log_pseudo_det_s_list.clone(),
+            coords: CoordsKind::Identity,
+            pirls_opts: PirlsOpts { dev_rel_tol: 1e-14, ..PirlsOpts::default() },
+            inner_builder: PirlsInnerBuilder,
+            profile: OwnedByLossProfile,
+            _solver: std::marker::PhantomData,
+            accepted_state: std::cell::RefCell::new(None),
+            last_eta: std::cell::RefCell::new(None),
+            stats: gamrs::stats::FitStats::new(),
+        };
+        for rho in [[3.0, 4.0], [8.0, 2.0]] {
+            let mut t = vec![rho[0], rho[1], 0.2];
+            t.extend(theta_p);
+            let theta = Array1::from_vec(t);
+            let (_, g) = score.value_and_grad(&theta).unwrap();
+            let eps = 1e-4;
+            for j in 0..2 {
+                let (mut tp, mut tm) = (theta.clone(), theta.clone());
+                tp[j] += eps;
+                tm[j] -= eps;
+                let fd = (score.value(&tp).unwrap() - score.value(&tm).unwrap()) / (2.0 * eps);
+                assert!(
+                    (g[j] - fd).abs() <= 1e-3 * fd.abs() + 1e-6,
+                    "p={p} θ={theta:?} g[{j}] analytic={:+.6e} fd={fd:+.6e}",
+                    g[j]
+                );
+            }
+        }
+    }
+}

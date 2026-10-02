@@ -506,8 +506,8 @@ impl<S: LinearSolver> FamilyFitWithSolver<LogLink, TweedieVariance, S> for Tweed
         let mut theta0_vec: Vec<f64> = rho_init.to_vec();
         theta0_vec.push(init_phi.ln());
         if profile_p {
-            // p_transform = log((p-1)/(2-p)); only present when p is profiled.
-            theta0_vec.push(((init_p - 1.0) / (2.0 - init_p)).ln());
+            // Only present when p is profiled.
+            theta0_vec.push(crate::family::tweedie::tweedie_theta_from_p(init_p));
         }
         let theta0 = Array1::from_vec(theta0_vec);
 
