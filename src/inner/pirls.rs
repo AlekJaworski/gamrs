@@ -371,11 +371,14 @@ where
         let g_triple_prime = family.link.d3_link_dmu(mu_i);
         let g3n = g_triple_prime / g_prime_mu;
         let c_resid = y[i] - mu_i;
-        let alpha_raw = 1.0 + c_resid * (v1n + g2n);
-        let alpha = if alpha_raw <= 0.0 { 1.0 } else { alpha_raw };
+        // d(wf·α)/dη for the SAME signed α the score's log|H| uses. Clamping α
+        // to 1 where it is ≤ 0 differentiated a different matrix from the one
+        // factorised: on an inverse-Gaussian fit 88 of 400 rows have α < 0.
+        let wf = 1.0 / (var_i * g_prime_mu * g_prime_mu);
+        let alpha = 1.0 + c_resid * (v1n + g2n);
         let xx = v2n - v1n * v1n + g3n - g2n * g2n;
-        let alpha1 = (-(v1n + g2n) + c_resid * xx) / alpha;
-        a1[i] = w_newton[i] * (alpha1 - v1n - 2.0 * g2n) * g_prime_mu.recip();
+        let dalpha_dmu = -(v1n + g2n) + c_resid * xx;
+        a1[i] = wf * (alpha * (-v1n - 2.0 * g2n) + dalpha_dmu) * g_prime_mu.recip();
     }
 
     // lev_uw[i] = x_iᵀ A_newton⁻¹ x_i. BLAS form: XAi = X · A⁻¹ (n,p),
