@@ -281,6 +281,19 @@ pub trait Loss {
         None
     }
 
+    /// `∂r_i/∂θ_k` for the score-equation residual `r` with
+    /// `∇_β(½D) = −X'r`, in the outer-θ convention. Lets the shape gradient
+    /// carry `log|H|`'s β-chain through dβ̂/dθ = H_obs⁻¹ X' ∂r/∂θ. `None`
+    /// where the family's shape gradient does not need it.
+    fn shape_score_residual_derivs(
+        &self,
+        _y: ndarray::ArrayView1<f64>,
+        _eta: ndarray::ArrayView1<f64>,
+        _prior_w: Option<ndarray::ArrayView1<f64>>,
+    ) -> Option<ndarray::Array2<f64>> {
+        None
+    }
+
     /// Per-row **observed** curvature `½·d²D/dμ²`, on every row, including
     /// where it is negative.
     ///

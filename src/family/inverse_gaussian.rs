@@ -75,17 +75,6 @@ impl Loss for InverseGaussian {
         true
     }
 
-    /// IG converges to looser tolerances without parity cost. Sweep
-    /// (`scripts/sweep_tolerances.py`): 5e-5/1e-5 trims outer iters
-    /// 6→5 on 1D IG (n=300, k=10); rho_drift 6.6e-5 + mu_drift 8.3e-6
-    /// (well inside noise). ~6% wall-time win vs mgcv default.
-    fn outer_tuning(&self) -> crate::outer::OuterTuning {
-        crate::outer::OuterTuning {
-            grad_tol: 5.0e-5,
-            reml_tol: 1.0e-5,
-            ..crate::outer::OuterTuning::mgcv_default()
-        }
-    }
 }
 
 impl VarianceFn for InverseGaussianVariance {

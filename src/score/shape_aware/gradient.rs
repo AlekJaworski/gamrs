@@ -59,6 +59,42 @@ where
     ///    `dw_dmu`, which respects the observed→expected weight switch).
     ///    Families with neither (NegBin, InverseGaussian, Tweedie) fall
     ///    back to the pure envelope — gamrs's documented parity floor.
+    /// `d log|A| / dθ_k` for each shape axis, at the converged fit: the
+    /// weight's own θ-dependence plus its β-chain through dβ̂/dθ. Added to a
+    /// closed-form shape gradient that differentiates everything but `log|H|`
+    /// (Tweedie's): at an interior p that omission left ∂V/∂θ_p ≈ −0.3 at
+    /// "convergence". `None` unless the family supplies both hooks.
+    pub(crate) fn shape_log_det_chain(
+        &self,
+        fit: &GaussianInnerFit<S>,
+        family: &Family<L, K, V>,
+        rho_slice: &[f64],
+    ) -> Option<Vec<f64>> {
+        use ndarray_linalg::Solve;
+        let prior_v = self.prior_weights.as_ref().map(|w| w.view());
+        let (dw_dtheta, dw_deta) =
+            family.loss.ift_trace_weight_derivs(self.y.view(), fit.eta.view(), prior_v)?;
+        let dr_dtheta =
+            family.loss.shape_score_residual_derivs(self.y.view(), fit.eta.view(), prior_v)?;
+        let n = fit.n;
+        let prior = self.prior_weights.clone().unwrap_or_else(|| Array1::ones(n));
+        let w_obs = crate::inner::pirls::newton_score_weights(family, &self.y, &fit.mu, &prior);
+        let wx = &self.x_design * &w_obs.view().insert_axis(ndarray::Axis(1));
+        let rho_arr = Array1::from(rho_slice.to_vec());
+        let a_obs = self.x_design.t().dot(&wx)
+            + crate::design::combined_s(&self.s_list, &rho_arr, self.x_design.ncols());
+        let a_inv = fit.a_inv();
+        let xa = self.x_design.dot(&a_inv);
+        let h: Array1<f64> = (0..n).map(|i| xa.row(i).dot(&self.x_design.row(i))).collect();
+        let mut out = Vec::with_capacity(dr_dtheta.ncols());
+        for k in 0..dr_dtheta.ncols() {
+            let db = a_obs.solve(&self.x_design.t().dot(&dr_dtheta.column(k))).ok()?;
+            let eta_k = self.x_design.dot(&db);
+            out.push(((&dw_dtheta.column(k).to_owned() + &(&dw_deta * &eta_k)) * &h).sum());
+        }
+        Some(out)
+    }
+
     pub(crate) fn compute_rho_envelope_gradient(
         &self,
         fit: &GaussianInnerFit<S>,
@@ -633,6 +669,11 @@ where
                 for k in 0..n_shape {
                     g[n_terms + k] = analytic[k];
                 }
+                if let Some(chain) = self.shape_log_det_chain(&fit, &family, &rho_slice) {
+                    for k in 0..n_shape {
+                        g[n_terms + k] += 0.5 * chain[k];
+                    }
+                }
             } else if let Some(level1) = family.loss.level1_shape_derivatives(
                 self.y.view(),
                 fit.eta.view(),
@@ -984,6 +1025,11 @@ where
                 for k in 0..n_shape {
                     g[n_terms + k] = analytic[k];
                 }
+                if let Some(chain) = self.shape_log_det_chain(&fit, &family, &rho_slice) {
+                    for k in 0..n_shape {
+                        g[n_terms + k] += 0.5 * chain[k];
+                    }
+                }
             } else {
                 // Try the cached Level-1 (if caller supplied); else
                 // compute on demand. The cached path eliminates one
@@ -1116,6 +1162,11 @@ where
                 debug_assert_eq!(analytic.len(), n_shape);
                 for k in 0..n_shape {
                     g[n_terms + k] = analytic[k];
+                }
+                if let Some(chain) = self.shape_log_det_chain(&fit, &family, &rho_slice) {
+                    for k in 0..n_shape {
+                        g[n_terms + k] += 0.5 * chain[k];
+                    }
                 }
             } else if let Some(level1) = family.loss.level1_shape_derivatives(
                 self.y.view(),

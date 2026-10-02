@@ -47,8 +47,8 @@ use super::{compute_edf, compute_edf_per_term, compute_vcov, FittedGam, LinkKind
 /// Newton) instead of `NewtonWithHalving` (joint `[ρ; log θ]` Newton). The
 /// ρ-Newton uses the analytic IFT M×M ρ-Hessian via
 /// `compute_value_grad_hess_rho_only` (1 PIRLS / outer iter); each log-θ_k
-/// axis Newton uses central-FD on the REML value (3 PIRLS-free probes per
-/// axis via `score_value_frozen_beta`).
+/// axis Newton uses central-FD on the REML value (warm-started inner re-solves
+/// at each probe — a frozen β̂ dropped log|H|'s β-chain through dβ̂/dθ).
 ///
 /// Used by:
 /// - **NegBin** (`PirlsInnerBuilder`, n_shape=1): single log θ axis.
@@ -259,12 +259,8 @@ impl ProfileShapeNewton {
             }
         }
 
-        // Initial ρ-only (v, g_ρ, H_ρρ). Also retain the converged inner
-        // fit so the shape-axis θ-FD probes and line-search candidate
-        // evaluations can reuse β̂ via `score_value_frozen_beta` (mgcv_rust
-        // `OuterLinearCache::score_at_theta` PIRLS-economy pattern, port of
-        // `src/reml/mod.rs:693-729` + `src/smooth.rs:3592-3594`).
-        let (mut v, mut g_rho, mut h_rho, mut fit_center) =
+        // Initial ρ-only (v, g_ρ, H_ρρ).
+        let (mut v, mut g_rho, mut h_rho, _) =
             score.compute_value_grad_hess_rho_only_with_fit(&theta)?;
         let mut prev_v = f64::INFINITY;
 
@@ -407,13 +403,12 @@ impl ProfileShapeNewton {
             if let Some(trial) = accepted_trial {
                 // One full eval at the accepted point to refresh (g, h, fit).
                 match score.compute_value_grad_hess_rho_only_with_fit(&trial) {
-                    Ok((v_full, g_full, h_full, fit_full)) => {
+                    Ok((v_full, g_full, h_full, _)) => {
                         prev_v = v;
                         theta = trial;
                         v = v_full;
                         g_rho = g_full;
                         h_rho = h_full;
-                        fit_center = fit_full;
                     }
                     Err(_) => {
                         // Extremely rare: value succeeded but full eval failed.
@@ -528,19 +523,18 @@ impl ProfileShapeNewton {
 
             // If any shape axis moved, the ρ-side Hessian / gradient are
             // now stale (the family's θ changed → PIRLS-converged β̂(ρ, θ)
-            // shifted). Refresh `(v, g_ρ, H_ρρ, fit_center)` at the new
+            // shifted). Refresh `(v, g_ρ, H_ρρ)` at the new
             // θ so the next outer iter's gradient-tolerance check and
             // Newton direction are accurate. mgcv_rust:3611 commits via
             // `commit_outer_search_vector`; the next iter top runs PIRLS
             // refresh (smooth.rs:2001-2010), then the gradient/Hessian eval
             // at the refreshed (β, w, z, X'WX).
             if any_shape_moved {
-                let (v_new, g_new, h_new, fit_new) =
+                let (v_new, g_new, h_new, _) =
                     score.compute_value_grad_hess_rho_only_with_fit(&theta)?;
                 v = v_new;
                 g_rho = g_new;
                 h_rho = h_new;
-                fit_center = fit_new;
             }
         }
 

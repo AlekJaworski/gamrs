@@ -911,7 +911,32 @@ mod fd_match_tests {
             let h_anal = score
                 .hess_analytic(&inner, &hin)
                 .unwrap_or_else(|| panic!("{label}/{tag}: hess_analytic returned None"));
-            let h_fd = score.hess_via_fd(theta).unwrap();
+            // The analytic Hessian differentiates the gradient's ENVELOPE part;
+            // the Fisher β-chain of log|A| is in the gradient only (an FD
+            // Hessian of the full gradient cost 2.3–3.7× the time for the same
+            // iterations). So difference the gradient with that term removed.
+            let envelope_grad = |t: &Array1<f64>| -> Array1<f64> {
+                let (_, mut g) = score.value_and_grad(t).unwrap();
+                let fit = score.inner.fit(t).unwrap();
+                if let Some(chain) = score.inner.fisher_log_det_beta_chain(&fit, t) {
+                    for k in 0..chain.len() {
+                        g[k] -= 0.5 * chain[k];
+                    }
+                }
+                g
+            };
+            let h = 1e-5;
+            let mut h_fd = Array2::<f64>::zeros((d, d));
+            for i in 0..d {
+                let (mut tp, mut tm) = (theta.clone(), theta.clone());
+                tp[i] += h;
+                tm[i] -= h;
+                let (gp, gm) = (envelope_grad(&tp), envelope_grad(&tm));
+                for j in 0..d {
+                    h_fd[[j, i]] = (gp[j] - gm[j]) / (2.0 * h);
+                }
+            }
+            let h_fd = (&h_fd + &h_fd.t()) * 0.5;
             let rel = max_rel(&h_anal, &h_fd);
             eprintln!("[fd-match] {label}/{tag}: max_rel = {rel:.3e}  (d={d})");
             assert!(

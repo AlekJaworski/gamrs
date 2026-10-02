@@ -227,12 +227,7 @@ where
     }
 
     /// Same as `compute_value_grad_hess_rho_only` but also returns the
-    /// converged inner fit. The fit feeds `score_value_frozen_beta` so the
-    /// θ-FD probes (and line-search trials) on the shape axis reuse this
-    /// β̂ instead of re-running PIRLS — port of mgcv_rust's
-    /// `OuterLinearCache::score_at_theta` PIRLS-economy pattern
-    /// (`src/reml/mod.rs:693-729`, called from `src/smooth.rs:3592-3594`
-    /// where the NegBin θ-FD probes reuse `(y_local, w_local, xtwx_local)`).
+    /// converged inner fit.
     pub fn compute_value_grad_hess_rho_only_with_fit(
         &self,
         theta: &Array1<f64>,

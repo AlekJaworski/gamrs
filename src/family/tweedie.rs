@@ -117,14 +117,39 @@ impl Loss for Tweedie {
     ) -> Option<(ndarray::Array2<f64>, ndarray::Array1<f64>)> {
         let n = y.len();
         let twop = 2.0 - self.p;
+        let dp_dtheta = tweedie_dp_dtheta(self.p);
+        let mut dw_dtheta = ndarray::Array2::<f64>::zeros((n, self.n_shape_params()));
         let dw_deta = ndarray::Array1::from_shape_fn(n, |i| {
             let w = prior_w.map(|w| w[i]).unwrap_or(1.0) * (twop * eta[i]).exp();
+            // W = μ^(2−p): ∂W/∂p = −ln μ · W at fixed μ; log φ does not enter W.
+            if self.profile_p {
+                dw_dtheta[[i, 1]] = -eta[i] * w * dp_dtheta;
+            }
             twop * w
         });
-        Some((
-            ndarray::Array2::<f64>::zeros((n, self.n_shape_params())),
-            dw_deta,
-        ))
+        Some((dw_dtheta, dw_deta))
+    }
+
+    fn shape_score_residual_derivs(
+        &self,
+        y: ndarray::ArrayView1<f64>,
+        eta: ndarray::ArrayView1<f64>,
+        prior_w: Option<ndarray::ArrayView1<f64>>,
+    ) -> Option<ndarray::Array2<f64>> {
+        // r = w·(y − μ)·μ^(1−p) (log link); ∂r/∂p = −r·ln μ. β̂ does not depend on log φ.
+        let n = y.len();
+        let mut out = ndarray::Array2::<f64>::zeros((n, self.n_shape_params()));
+        if self.profile_p {
+            let dp_dtheta = tweedie_dp_dtheta(self.p);
+            for i in 0..n {
+                let mu = eta[i].exp();
+                let r = prior_w.map(|w| w[i]).unwrap_or(1.0)
+                    * (y[i] - mu)
+                    * ((1.0 - self.p) * eta[i]).exp();
+                out[[i, 1]] = -r * eta[i] * dp_dtheta;
+            }
+        }
+        Some(out)
     }
 
     fn d2_loss_dmu(&self, y: f64, mu: f64) -> f64 {
