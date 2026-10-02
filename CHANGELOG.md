@@ -7,6 +7,76 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+### Fixed
+
+- **GLM fits stopped short of mgcv's REML optimum, because the gradient was
+  not the derivative of the score.** `log|X'WX + S|` depends on ρ through β̂
+  as well, since W is a function of μ̂. Those terms were missing or wrong in
+  four places, each found by checking the gradient against finite differences
+  of the score:
+  - Fisher-weight families (Poisson, binomial, quasi, inverse Gaussian):
+
+    the β-chain of `log|A|` was missing entirely. It is now included, with
+
+    dβ̂/dρ from the observed penalised Hessian. Poisson, Bernoulli, Gamma and
+
+    NegBin also gain the `d_variance` they had been missing.
+  - Non-canonical links: the Newton β-chain used |α| where the score
+
+    factorises the signed α = 1 + (y−μ)(V′/V + g″/g′).
+  - NegBin: the ρ-gradient was Fisher while the score was Newton; the θ
+
+    probes scored a frozen β instead of re-solving it; and a REML change
+
+    could end the profile loop on its own. It is now only a veto on the
+
+    gradient test.
+  - Tweedie with profiled p: the p-axis gradient left out `log|H|`'s
+
+    p-derivative (21.75 against a finite-difference 20.35).
+  Gamma and Tweedie now use Newton weights in `log|H|`, as mgcv does for
+  every family (`gam.fit3.r:118` sets `fisher` only for canonical links).
+  The gradient now matches finite differences to 4e-9 (it was 2e-4 to 1.4e-3
+  off). The fitted values (max relative error against mgcv on the repository's
+  fixtures) are:
+
+  ```text
+  family                  0.14.5     now
+  Bernoulli n=300         1.09e-3    1.7e-7
+  Bernoulli n=1000        4.7e-4     5.6e-8
+  Poisson                 7.8e-5     3.4e-6
+  quasi-Poisson           1.7e-4     6.3e-8
+  quasi-binomial          7.4e-5     1.9e-6
+  Gamma                   6.1e-5     1.7e-8
+  inverse Gaussian        3.3e-5     1.9e-6
+  NegBin                  2.4e-3     2.5e-7
+  NegBin, two smooths     1.1e-3     4.3e-6
+  Tweedie, profiled p     6.3e-4     2.5e-7
+  Tweedie, fixed p        3.3e-4     2.1e-4
+  ```
+
+  On harder two-smooth problems the remaining gap is 2e-5 to 3e-4. That is
+  where mgcv stops on a flat REML ridge: mgcv's own score is lower at gamrs's
+  λ̂. **Fits move**: λ̂ changes for every GLM family, so refits will not
+  reproduce 0.14.5 curves to the last digits.
+
+### Changed
+
+- **`method="fREML"` and `method="REML"` no longer agree on GLMs.** That is
+  correct. Fellner–Schall holds the working weights fixed, so it lands where
+  REML would land without `log|H|`'s β-chain, which is exactly where REML
+  used to land. Each now matches its mgcv counterpart. On the smoke-test data,
+  REML gives λ = 91.558 (mgcv `gam`) and fREML gives 91.983 (mgcv `bam`).
+- Gamma and inverse Gaussian no longer loosen the outer tolerance (it was
+  5e-5); they use the default.
+- Cost, as single-thread CPU time for three two-smooth fits against 0.14.5:
+  Poisson 35 → 60 ms, Gamma (log) 40 → 42 ms, Gamma (inverse) 30 → 73 ms,
+  inverse Gaussian 195 → 235 ms. The extra time comes from the β-chain and
+  the extra outer iterations needed to reach the actual optimum. Gamma keeps
+  the analytic outer Hessian under Newton weights. An FD Hessian took 3× the
+  time for the same iterations. Inverse Gaussian stays on FD, where the
+  analytic Hessian needed 6–7 iterations instead of 4–5.
+
 ## [0.14.5] — 2026-10-02
 
 ### Fixed
