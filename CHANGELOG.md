@@ -7,6 +7,8 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+## [0.14.4] — 2026-10-02
+
 ### Fixed
 
 - **scat's outer Newton steered with the wrong curvature, so multi-smooth fits
