@@ -133,6 +133,32 @@ where
         // actually in the matrix the score differentiates — including, under
         // the migration switch, the unswitched observed ones — so this needs
         // no branch of its own.
+        // Newton-weight families (NegBin): the score's log|H| is the Newton
+        // log|X'W_newton X + λS| (see `score_value`), so differentiate THAT —
+        // trace, β-chain and dβ̂/dρ all from A_newton, in η coordinates. The
+        // Level-1 route below is μ-coordinate ½·Dμμμ against the PIRLS factor:
+        // right for identity-link scat/ocat, not for a log-link Newton score
+        // (NegBin stopped with a true gradient of 0.01–0.04 against a 8e-5 bar).
+        if family.loss.use_newton_irls() {
+            let prior = self.prior_weights.clone().unwrap_or_else(|| Array1::ones(n));
+            let rho_arr = Array1::from(rho_slice.to_vec());
+            let s_total = crate::design::combined_s(&self.s_list, &rho_arr, self.x_design.ncols());
+            if let Some(tk) = crate::inner::pirls::lazy_tk_kkt_inputs(
+                family, &self.y, &fit.mu, &fit.beta, &prior, &self.x_design, &self.s_list, &s_total, &rho_arr,
+            ) {
+                return (0..n_terms)
+                    .map(|j| {
+                        let lambda_j = rho_slice[j].exp();
+                        let adj_rank_j = ((self.rank_s_list[j] as i32 + rank_adj).max(1)) as f64;
+                        let tk_j = (&tk.a1 * &tk.eta1_per_term[j] * &tk.lev_uw).sum();
+                        lambda_j * bsb_per_term[j] / (2.0 * phi)
+                            + 0.5 * lambda_j * tk.tr_a_newton_inv_s_per_term[j]
+                            + 0.5 * tk_j
+                            - 0.5 * adj_rank_j
+                    })
+                    .collect();
+            }
+        }
         let ift_rows = family
             .loss
             .ift_trace_weight_derivs(

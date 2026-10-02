@@ -277,7 +277,15 @@ impl ProfileShapeNewton {
             let score_scale = v.abs() + 1.0;
             let grad_tol_abs = opts.grad_tol * score_scale;
             let grad_norm = inf_norm_view(&g_rho);
-            if grad_norm < grad_tol_abs {
+            // A small score change is a VETO on convergence, never a trigger
+            // for it — the same correction the main outer loop got in 0.14.0.
+            // Here it still triggered: NegBin stopped at iteration 3 on a flat
+            // ridge with a true ρ-gradient of 1.8e-3 against a 7.8e-5 bar.
+            let reml_still_moving = iter < 3 || {
+                let denom = v.abs().max(1.0);
+                ((v - prev_v) / denom).abs() > opts.reml_tol
+            };
+            if grad_norm < grad_tol_abs && !reml_still_moving {
                 return Ok(OuterFit {
                     theta,
                     value: v,
@@ -285,19 +293,6 @@ impl ProfileShapeNewton {
                     iterations: iter,
                     converged: true,
                 });
-            }
-            if iter >= 3 {
-                let denom = v.abs().max(1.0);
-                let reml_change = ((v - prev_v) / denom).abs();
-                if reml_change < opts.reml_tol {
-                    return Ok(OuterFit {
-                        theta,
-                        value: v,
-                        grad_norm,
-                        iterations: iter,
-                        converged: true,
-                    });
-                }
             }
 
             // -----------------------------------------------------------
@@ -475,10 +470,11 @@ impl ProfileShapeNewton {
             //     Ocat (N=R-2) → sequential 1-D Newton on each log-gap
             //     threshold.
             //
-            //     PIRLS economy: the FD probes and trial evaluations all
-            //     run on the FROZEN β̂ from the accepted ρ probe via
-            //     `score_value_frozen_beta` (no inner PIRLS). β̂ is
-            //     refreshed once at the end if any axis moved.
+            //     The FD probes and trials re-solve the inner fit. They used to
+            //     hold β̂ frozen (`score_value_frozen_beta`), which is exact for
+            //     D + Σλβ'Sβ (envelope) but not for log|H|, whose β-chain
+            //     through dβ̂/dθ it dropped: NegBin stopped with a true
+            //     ∂V/∂log θ of −4.4e-3 on every seed tried.
             // -----------------------------------------------------------
             let h_th: f64 = 1e-3; // mgcv_rust:3569
             let mut any_shape_moved = false;
@@ -493,8 +489,8 @@ impl ProfileShapeNewton {
                 let mut t_minus = theta.clone();
                 t_plus[axis] = (log_theta_k + h_th).clamp(lo_hi.0, lo_hi.1);
                 t_minus[axis] = (log_theta_k - h_th).clamp(lo_hi.0, lo_hi.1);
-                let rp_v = score.score_value_frozen_beta(&fit_center, &t_plus);
-                let rm_v = score.score_value_frozen_beta(&fit_center, &t_minus);
+                let rp_v = score.value(&t_plus).unwrap_or(f64::NAN);
+                let rm_v = score.value(&t_minus).unwrap_or(f64::NAN);
                 if !(rp_v.is_finite() && rm_v.is_finite()) {
                     continue;
                 }
@@ -508,7 +504,7 @@ impl ProfileShapeNewton {
                 let mut new_log_theta = log_theta_k;
                 let mut theta_try = theta.clone();
                 theta_try[axis] = candidate;
-                let r_new = score.score_value_frozen_beta(&fit_center, &theta_try);
+                let r_new = score.value(&theta_try).unwrap_or(f64::NAN);
                 let mut accepted_axis = false;
                 if r_new.is_finite() && r_new < rc {
                     new_log_theta = candidate;
@@ -518,7 +514,7 @@ impl ProfileShapeNewton {
                 if !accepted_axis {
                     let half = (log_theta_k + 0.5 * delta).clamp(lo_hi.0, lo_hi.1);
                     theta_try[axis] = half;
-                    let r_half = score.score_value_frozen_beta(&fit_center, &theta_try);
+                    let r_half = score.value(&theta_try).unwrap_or(f64::NAN);
                     if r_half.is_finite() && r_half < rc {
                         new_log_theta = half;
                         v = r_half;
