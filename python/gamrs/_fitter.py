@@ -8,6 +8,7 @@ pointer back at v0.x for the ones not yet wired).
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import warnings
 from typing import Any, Iterable, Optional, Sequence, Union
@@ -207,15 +208,11 @@ def _resolve_col(col: Any, col_names: Sequence[str], term_name: str) -> int:
 def _resolve_term_cols(term: Term, col_names: Sequence[str]) -> Term:
     """Rebuild a term with string column references replaced by their int
     indices in ``col_names``. Int-only terms pass through unchanged."""
-    if isinstance(term, CrTerm):
-        return CrTerm(
-            col=_resolve_col(term.col, col_names, "CrTerm"), k=term.k, pc=term.pc
-        )
-    if isinstance(term, CrStableTerm):
-        return CrStableTerm(
-            col=_resolve_col(term.col, col_names, "CrStableTerm"),
-            k=term.k,
-            pc=term.pc,
+    if isinstance(term, (CrTerm, CrStableTerm)):
+        name = type(term).__name__
+        by = None if term.by is None else _resolve_col(term.by, col_names, name)
+        return dataclasses.replace(
+            term, col=_resolve_col(term.col, col_names, name), by=by
         )
     if isinstance(term, ReTerm):
         return ReTerm(col=_resolve_col(term.col, col_names, "ReTerm"))
@@ -325,6 +322,7 @@ class Gam:
         r: Optional[int] = None,
         term_k_mapping: Optional[dict[str, int]] = None,
         term_pc_mapping: Optional[dict[str, float]] = None,
+        term_by_mapping: Optional[dict[str, str]] = None,
         predictor_basis_map: Optional[dict[str, str]] = None,
         consider_categorical: bool = False,
         auto_k: bool = False,
@@ -433,6 +431,11 @@ class Gam:
         # at x=v and the intercept absorbs the difference. Only reachable on
         # the predictors= path; the terms= path carries `pc` on the term.
         self.term_pc_mapping: dict[str, float] = dict(term_pc_mapping or {})
+        # mgcv's numeric `s(x, by=w)`: {smooth column: by column}. The by
+        # column is data for the smooth, not a term of its own; naming it in
+        # predictor_basis_map (e.g. "parametric") adds it as one too. Only
+        # the predictors= path reads this; the terms= path sets CrTerm(by=).
+        self.term_by_mapping: dict[str, str] = dict(term_by_mapping or {})
         self.predictor_basis_map: dict[str, str] = dict(predictor_basis_map or {})
         self.consider_categorical = consider_categorical
         self.auto_k = auto_k
@@ -610,6 +613,7 @@ class Gam:
             self.predictors = cols
         self._original_predictors = list(cols)
         self.dropped_predictors_ = {}
+        self.check_by_mapping(cols)
 
         # Auto-drop columns with n_unique == 1 — they contribute zero signal
         # and would otherwise blow up the CR-basis k≥3 check. Matches
@@ -621,8 +625,14 @@ class Gam:
         # columns map to which smooths, and silently dropping one of their
         # terms would be more confusing than the original "k≥3" error.
         if self.terms is None:
+            # A constant by column stays, since it scales its smooth at
+            # predict time; a constant smooth column stays to fail loudly.
+            by_cols = set(self.term_by_mapping) | set(self.term_by_mapping.values())
             keep_mask = np.array(
-                [int(np.unique(X_arr[:, i]).size) > 1 for i in range(X_arr.shape[1])],
+                [
+                    int(np.unique(X_arr[:, i]).size) > 1 or cols[i] in by_cols
+                    for i in range(X_arr.shape[1])
+                ],
                 dtype=bool,
             )
             if not keep_mask.all():
@@ -768,10 +778,11 @@ class Gam:
         for t, (start, end) in zip(term_objs, self._fitted.term_col_ranges()):
             cols = getattr(t, "cols", None) or (getattr(t, "col", None),)
             inner = ",".join(col_name(c) for c in cols)
+            by = getattr(t, "by", None)
             if isinstance(t, ParametricTerm):
                 labels.append(inner)
             else:
-                label = f"s({inner})"
+                label = f"s({inner})" + ("" if by is None else f":{col_name(by)}")
                 labels.extend(f"{label}[{i}]" for i in range(1, end - start + 1))
         return [labels[i] if i < len(labels) else f"coef[{i}]" for i in idx]
 
@@ -821,6 +832,7 @@ class Gam:
             len(term_objs) == 1
             and isinstance(term_objs[0], (CrTerm, ReTerm, CrStableTerm))
             and getattr(term_objs[0], "pc", None) is None
+            and getattr(term_objs[0], "by", None) is None
         ):
             t = term_objs[0]
             if isinstance(t, CrTerm):
@@ -895,6 +907,7 @@ class Gam:
         in the trace for diagnostics, never grown.
         """
         preds = self._effective_predictors or []
+        names = self.term_names()
         # Per-CR-term cap: the same distinct-value rule as the predictors path,
         # then held under max_k_auto.
         caps: list[int] = []
@@ -920,7 +933,7 @@ class Gam:
             grew = False
             all_capped = True
             for j, t in enumerate(current):
-                user_name = preds[j] if j < len(preds) else f"term_{j}"
+                user_name = names[j] if j < len(names) else f"term_{j}"
                 frozen = (
                     not isinstance(t, (CrTerm, CrStableTerm))
                     or user_name in self.term_k_mapping
@@ -935,7 +948,7 @@ class Gam:
                     new_k = math.ceil(k_before * self.knots_increase_ratio)
                     capped_k = min(new_k, caps[j])
                     if capped_k > k_before:
-                        current[j] = type(t)(col=t.col, k=int(capped_k), pc=t.pc)
+                        current[j] = dataclasses.replace(t, k=int(capped_k))
                         term_grew = True
                         grew = True
                 if not frozen and t.k < caps[j]:
@@ -991,6 +1004,12 @@ class Gam:
             col_idx = int(t.col)
             col_name = cols[col_idx] if col_idx < len(cols) else f"col_{col_idx}"
             n_unique = int(np.unique(X_arr[:, col_idx]).size)
+            if t.by is not None and (n_unique < 3 or t.k < 3):
+                raise ValueError(
+                    f"CrTerm({col_name!r}, k={t.k}, by=...) needs a CR smooth "
+                    f"(k >= 3 over >= 3 distinct values; has {n_unique}), and a "
+                    "by-term has no parametric fallback."
+                )
             if n_unique < 2:
                 raise ValueError(
                     f"CrTerm({col_name!r}): column is constant "
@@ -1044,6 +1063,47 @@ class Gam:
             out.append(t)
         return out
 
+    def check_by_mapping(self, cols: Sequence[str]) -> None:
+        """Refuse a `term_by_mapping` entry that cannot reach a term. A
+        silently ignored by-variable fits a different model than the one
+        asked for, so unlike `term_pc_mapping` this raises."""
+        if not self.term_by_mapping:
+            return
+        if self.terms is not None:
+            raise ValueError(
+                f"term_by_mapping={self.term_by_mapping!r} cannot be combined with "
+                "terms=: set the by-variable on the term itself, e.g. "
+                "CrTerm('x', k=8, by='w')."
+            )
+        unknown = sorted(
+            {name for pair in self.term_by_mapping.items() for name in pair} - set(cols)
+        )
+        if unknown:
+            raise ValueError(
+                f"term_by_mapping names {unknown!r}, which match no column of X; "
+                f"columns are {list(cols)!r}."
+            )
+        with_pc = sorted(set(self.term_by_mapping) & set(self.term_pc_mapping))
+        if with_pc:
+            raise ValueError(
+                f"{with_pc!r} appear in both term_by_mapping and term_pc_mapping; "
+                "a smooth takes pc or by, not both (mgcv drops pc whenever the "
+                "by-variable varies)."
+            )
+
+    def by_only_columns(self) -> set[str]:
+        """Columns that only feed a by-variable and so carry no term."""
+        return (
+            set(self.term_by_mapping.values())
+            - set(self.term_by_mapping)
+            - set(self.predictor_basis_map)
+        )
+
+    def term_names(self) -> list[str]:
+        """One name per fitted term, in term order."""
+        by_only = self.by_only_columns()
+        return [p for p in self._effective_predictors or [] if p not in by_only]
+
     def warn_unused_pc_keys(self, cols: Sequence[str]) -> None:
         """Flag `term_pc_mapping` entries that reach no term. A key that
         matches no predictor — a typo, a column dropped as constant, or the
@@ -1082,9 +1142,18 @@ class Gam:
         signature into a list of typed terms. One term per column.
         """
         out: list[Term] = []
+        by_only = self.by_only_columns()
         for col_idx, pname in enumerate(cols):
+            if pname in by_only:
+                continue
             pc = self.term_pc_mapping.get(pname)
+            by_name = self.term_by_mapping.get(pname)
             bs_override = self.predictor_basis_map.get(pname)
+            if by_name is not None and bs_override in ("parametric", "linear", "re"):
+                raise ValueError(
+                    f"term_by_mapping[{pname!r}]={by_name!r} needs a CR smooth, but "
+                    f"predictor_basis_map makes {pname!r} a {bs_override!r} term."
+                )
             if bs_override in ("parametric", "linear"):
                 warn_pc_unapplied(
                     pname, pc, f"predictor_basis_map made it a {bs_override!r} term"
@@ -1112,6 +1181,11 @@ class Gam:
             # the fit, mgcv_rust auto-downgrades to parametric to keep the
             # fit moving. We match the mgcv_rust behaviour: a clear warning
             # so the user knows what happened, but the fit succeeds.
+            if by_name is not None and n_unique < 3:
+                raise ValueError(
+                    f"term_by_mapping[{pname!r}]={by_name!r} needs a CR smooth, but "
+                    f"{pname!r} has only {n_unique} distinct value(s)."
+                )
             if n_unique < 3:
                 warnings.warn(
                     f"predictor {pname!r} has only {n_unique} unique "
@@ -1161,6 +1235,11 @@ class Gam:
             # Belt-and-braces: if the user explicitly requested a tiny k
             # (or set min_k < 3), the CR engine would still refuse the
             # fit. Auto-promote rather than crash.
+            if by_name is not None and k < 3:
+                raise ValueError(
+                    f"term_by_mapping[{pname!r}]={by_name!r} needs a CR smooth, but "
+                    f"k for {pname!r} resolved to {k} < 3."
+                )
             if k < 3:
                 warnings.warn(
                     f"k for predictor {pname!r} resolved to {k} < 3 "
@@ -1197,7 +1276,8 @@ class Gam:
                     UserWarning,
                     stacklevel=3,
                 )
-            out.append(CrTerm(col=col_idx, k=k, pc=pc))
+            by = None if by_name is None else list(cols).index(by_name)
+            out.append(CrTerm(col=col_idx, k=k, pc=pc, by=by))
         return out
 
     def _coerce_predict_X(self, X: ArrayLike) -> np.ndarray:
@@ -1294,7 +1374,7 @@ class Gam:
         strip everything except the selected terms.
         """
         mask = self._subset_mask  # type: ignore[union-attr]
-        preds = self._effective_predictors or []
+        preds = self.term_names()
         out = lp.copy()
         intercept_selected = self.INTERCEPT in mask
         if scale == "deviation" or not intercept_selected:
@@ -1581,7 +1661,7 @@ class Gam:
         if self._effective_predictors is None:
             return np.array([self.design], dtype=object)
         return np.array(
-            [self.predictor_basis_map.get(p, self.design) for p in self._effective_predictors],
+            [self.predictor_basis_map.get(p, self.design) for p in self.term_names()],
             dtype=object,
         )
 
@@ -1667,9 +1747,7 @@ class Gam:
         """
         f = self._require_fitted()
         ranges = f.term_col_ranges()
-        names = self._effective_predictors or [
-            f"term_{i}" for i in range(len(ranges))
-        ]
+        names = self.term_names() or [f"term_{i}" for i in range(len(ranges))]
         return [
             (names[i] if i < len(names) else f"term_{i}", start, end - 1)
             for i, (start, end) in enumerate(ranges)
@@ -1686,7 +1764,7 @@ class Gam:
             ) from exc
         f = self._require_fitted()
         edf = np.asarray(f.edf_per_term)
-        names = self._effective_predictors or [f"term_{i}" for i in range(len(edf))]
+        names = self.term_names() or [f"term_{i}" for i in range(len(edf))]
         return pd.DataFrame({"predictor": names, "edf": edf})
 
     def get_posterior_samples(
@@ -1819,7 +1897,7 @@ class Gam:
                 "summary() requires pandas. pip install pandas"
             ) from exc
 
-        names = self._effective_predictors or [f"term_{i}" for i in range(len(self.edf_))]
+        names = self.term_names() or [f"term_{i}" for i in range(len(self.edf_))]
         smooths_df = pd.DataFrame(
             {
                 "predictor": list(names),
@@ -1919,7 +1997,8 @@ class Gam:
             X=None, y=None, sample_weight=None, _k_used=None,
             family="gaussian", link="identity", _gamrs_family="gaussian",
             method="REML", target="y", design="cr",
-            term_k_mapping={}, term_pc_mapping={}, predictor_basis_map={},
+            term_k_mapping={}, term_pc_mapping={}, term_by_mapping={},
+            predictor_basis_map={},
             min_k=3, k_default=10, k_cap_offset=0,
             consider_categorical=False, auto_k=False, discrete=False,
             df=None, tweedie_p=None, negbin_theta=None, r=None,
@@ -1972,7 +2051,7 @@ class Gam:
             requested = [predictors]
         else:
             requested = list(predictors)
-        known = set(self._effective_predictors or []) | {self.INTERCEPT}
+        known = set(self.term_names()) | {self.INTERCEPT}
         for name in requested:
             if name not in known:
                 raise KeyError(

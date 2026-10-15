@@ -208,19 +208,28 @@ class CrTerm:
     and the intercept takes the level. Fitted values, λ̂ and edf are
     unchanged — only the intercept-versus-smooth split moves, which is
     what a caller reading a *partial* curve sees.
+
+    ``by`` is mgcv's numeric ``s(x, by=w)``: a column (index or name) whose
+    value multiplies the smooth row by row, so the term contributes
+    ``w_i * f(x_i)`` and is exactly 0 where ``w = 0``. Unless ``w`` is
+    constant the term is not centred (mgcv's rule) and keeps all ``k``
+    coefficients. Exclusive with ``pc``.
     """
     col: Col
     k: int = 10
     pc: Optional[float] = None
+    by: Optional[Col] = None
 
 
 @dataclass(frozen=True)
 class CrStableTerm:
     """CR + sum-to-zero + StableReparam rotation term. ``col`` accepts an
-    int index or a string column name. ``pc`` as for :class:`CrTerm`."""
+    int index or a string column name. ``pc`` and ``by`` as for
+    :class:`CrTerm`."""
     col: Col
     k: int = 10
     pc: Optional[float] = None
+    by: Optional[Col] = None
 
 
 @dataclass(frozen=True)
@@ -323,15 +332,25 @@ def pc_or_none(pc: Optional[float]) -> Optional[float]:
     return None if pc is None else float(pc)
 
 
+def by_or_none(by: Optional[Col]) -> Optional[int]:
+    """A resolved by-column index for the FFI boundary. A name that reaches
+    here was never resolved against the fit's columns."""
+    if isinstance(by, str):
+        raise TypeError(f"by={by!r} must be resolved to a column index before the fit")
+    return None if by is None else int(by)
+
+
 def _term_to_tuple(term: Term) -> tuple:
     """Convert a typed `Term` to the tuple form `_gamrs_native.fit_additive`
     expects at the FFI boundary. Strings live ONLY here, between the
     Python typed surface and the Rust enum — they never leak in either
     direction."""
     if isinstance(term, CrTerm):
-        return (int(term.col), "cr", int(term.k), pc_or_none(term.pc))
+        return (int(term.col), "cr", int(term.k), pc_or_none(term.pc), by_or_none(term.by))
     if isinstance(term, CrStableTerm):
-        return (int(term.col), "cr_stable", int(term.k), pc_or_none(term.pc))
+        return (
+            int(term.col), "cr_stable", int(term.k), pc_or_none(term.pc), by_or_none(term.by)
+        )
     if isinstance(term, ReTerm):
         return (int(term.col), "re")
     if isinstance(term, ParametricTerm):

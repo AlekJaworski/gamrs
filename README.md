@@ -155,6 +155,14 @@ full port story.
   and the intercept takes the level. Predictions, λ̂ and edf are unchanged
   — only the intercept-versus-smooth split moves, which is what a caller
   reading a *partial* curve sees. CR bases (`cr`, `cr_stable`) only.
+- **Numeric `by=` variable** — `s(x, by=w)` via `CrTerm("x", by="w")` or
+  `term_by_mapping={"x": "w"}`: the term contributes `w * f(x)`, exactly 0
+  where `w = 0`. As in mgcv it is not centred unless `w` is constant. The
+  `w` column feeds the smooth but is not a term of its own, because an
+  uncentred `s(x, by=w)` already spans `w * constant`. Name it in
+  `predictor_basis_map` to add it anyway; it is then aliased and fitted as 0.
+  An unusable `term_by_mapping` entry raises. Not combinable with `pc`.
+  CR bases only.
 - **Parametric (linear)** — unsmoothed raw column via `ParametricTerm` or
   `predictor_basis_map={"x": "parametric"}` (alias `"linear"`). Use for
   0/1 indicators, counts, or anything you want unpenalised. mgcv R's
