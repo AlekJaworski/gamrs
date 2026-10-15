@@ -7,6 +7,10 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-10-15
+
+0.14.6 was not published on its own; its changes (below) ship in 0.15.0.
+
 ### Added
 
 - **Numeric `by=` variables: mgcv's `s(x, by=w)`.** The term contributes
