@@ -7,6 +7,50 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+### Added
+
+- **Numeric `by=` variables: mgcv's `s(x, by=w)`.** The term contributes
+  `w_i * f(x_i)`, so a traffic curve scaled by a distance-band multiplier
+  (1, 0.6, 0.25, 0) is one smooth, exactly 0 in the last band. Use
+  `CrTerm("x", by="w")` (or `CrStableTerm`) on the typed path,
+  `term_by_mapping={"x": "w"}` on the predictors path, or
+  `TermSpec::Cr { by: Some(col), .. }` from Rust.
+
+  As in mgcv's `smoothCon`, a varying `w` drops the centring constraint, so
+  the term keeps all `k` coefficients. A constant `w` keeps it and fits the
+  plain smooth. The penalty is still sized on the unscaled basis, as in
+  mgcv. Against mgcv 1.9.4 on `y ~ s(x, k=8, bs="cr", by=w) + s(z, k=8,
+  bs="cr")`, `method="REML"`, n=400, with `w` a 0/1 indicator and with `w`
+  the step above, the largest differences over both fixtures are:
+
+  | quantity                    | max abs diff |
+  |-----------------------------|--------------|
+  | fitted values               | 3.5e-7       |
+  | per-term contributions      | 3.6e-7       |
+  | by-term coefficients        | 3.6e-7       |
+  | per-term edf                | 6.2e-6       |
+  | REML score                  | 5.0e-10      |
+
+  The by-term's coefficients compare directly because an unconstrained CR
+  term is in mgcv's own raw parameterisation (`tests/by_variable.rs`,
+  `scripts/r/gen_by_variable_fixtures.R`).
+
+  The `w` column feeds its smooth but is not a term of its own. An
+  uncentred `s(x, by=w)` already spans `w * constant`, so a separate `w`
+  term would be aliased. Name `w` in `predictor_basis_map` to add it anyway;
+  it is then fitted as 0 and listed in `aliased_`. A `term_by_mapping`
+  entry that cannot apply raises instead of being ignored. That covers an
+  unknown column, use with `terms=`, a smooth demoted to parametric, and
+  `pc` on the same smooth. Two departures from mgcv: `pc` with `by` is
+  refused, where mgcv silently drops `pc` once `w` varies. And a constant
+  negative `w` counts as constant, where mgcv's signed test
+  (`sd(w) > mean(w) * eps * 1000`) leaves it uncentred and aliased with the
+  intercept.
+
+  Models persisted before this release load unchanged. The by-term is a new,
+  last `Predictor::By` variant, so no existing struct or variant index
+  moved.
+
 ## [0.14.6] — 2026-10-02
 
 ### Fixed
