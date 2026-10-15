@@ -31,6 +31,7 @@ use ndarray_linalg::Eigh;
 use crate::error::{GamrsError, Result};
 
 mod additive;
+mod by;
 mod cr;
 pub(crate) mod identifiability;
 mod parametric;
@@ -39,6 +40,7 @@ mod tensor;
 mod tps;
 
 pub use additive::{Additive, AdditivePredictor, MarginKind, TermSpec};
+pub use by::ByPredictor;
 pub use cr::{Cr, CrPredictor, CrStable, CrStablePredictor};
 pub use parametric::ParametricPredictor;
 pub use re::{Re, RePredictor};
@@ -86,6 +88,10 @@ pub enum Predictor {
     /// Parametric (unsmoothed linear) term — single raw column, no
     /// penalty. Only used as a sub-Predictor of `Additive`.
     Parametric(ParametricPredictor),
+    /// A smooth scaled row-wise by a numeric `by=` variable. Only used as
+    /// a sub-Predictor of `Additive`. Last, so the bincode variant indices
+    /// of every earlier variant (and models persisted with them) stand.
+    By(ByPredictor),
 }
 
 impl Predictor {
@@ -103,6 +109,7 @@ impl Predictor {
             Self::TensorMulti(p) => p.design(x_new),
             Self::Tps(p) => p.design(x_new),
             Self::Parametric(p) => p.design(x_new),
+            Self::By(p) => p.design(x_new),
         }
     }
 
@@ -119,6 +126,7 @@ impl Predictor {
             Self::TensorMulti(p) => p.design_deriv(x_new, axis),
             Self::Tps(p) => p.design_deriv(x_new, axis),
             Self::Parametric(p) => p.design_deriv(x_new, axis),
+            Self::By(p) => p.design_deriv(x_new, axis),
         }
     }
 }

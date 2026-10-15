@@ -111,6 +111,7 @@ fn cr_and_additive_entry_points_agree_on_scat() {
                 col: 0,
                 k,
                 pc: None,
+                by: None,
             }],
         },
         x.view(),

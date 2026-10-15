@@ -730,11 +730,13 @@ fn negbin_multismooth_analytic_grad_matches_fd() {
             col: 0,
             k: 8,
             pc: None,
+            by: None,
         },
         TermSpec::Cr {
             col: 1,
             k: 8,
             pc: None,
+            by: None,
         },
     ];
     let prep = Additive { terms }.prepare(x.view()).unwrap();
@@ -861,11 +863,13 @@ fn nb_hess_microbench() {
             col: 0,
             k: 8,
             pc: None,
+            by: None,
         },
         TermSpec::Cr {
             col: 1,
             k: 8,
             pc: None,
+            by: None,
         },
     ];
     let prep = Additive { terms }.prepare(x.view()).unwrap();
@@ -946,6 +950,7 @@ fn nb_hess_microbench() {
         col: 0,
         k: 10,
         pc: None,
+        by: None,
     }];
     let prep1 = Additive { terms: terms1 }.prepare(x1.view()).unwrap();
     let score1: gamrs::score::ShapeAwarePirlsScore<_, _, _> = ShapeAwareEnvelopeScore {
@@ -1023,11 +1028,13 @@ fn negbin_multismooth_analytic_hess_matches_fd_on_grad() {
             col: 0,
             k: 8,
             pc: None,
+            by: None,
         },
         TermSpec::Cr {
             col: 1,
             k: 8,
             pc: None,
+            by: None,
         },
     ];
     let prep = Additive { terms }.prepare(x.view()).unwrap();
@@ -1145,6 +1152,7 @@ fn tdist_analytic_hess_matches_fd_on_grad() {
         col: 0,
         k: 10,
         pc: None,
+        by: None,
     }];
     let prep = Additive { terms }.prepare(x.view()).unwrap();
 
@@ -1258,6 +1266,7 @@ fn tdist_multismooth_hess_matches_fd_away_from_initial_shape() {
             col,
             k: 8,
             pc: None,
+            by: None,
         })
         .collect();
     let prep = Additive { terms }.prepare(x.view()).unwrap();
@@ -1368,6 +1377,7 @@ fn tweedie_multismooth_rho_grad_matches_fd() {
             col,
             k: 10,
             pc: None,
+            by: None,
         })
         .collect();
     let prep = Additive { terms }.prepare(x.view()).unwrap();

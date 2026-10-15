@@ -45,6 +45,7 @@ fn main() {
             col: c,
             k: k_vec[c],
             pc: None,
+            by: None,
         })
         .collect();
 

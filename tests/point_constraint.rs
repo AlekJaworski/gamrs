@@ -52,8 +52,14 @@ fn fit_two_terms(x: &Array2<f64>, y: &Array1<f64>, pc: Option<f64>) -> FittedGam
             col: 0,
             k: 8,
             pc: None,
+            by: None,
         },
-        TermSpec::Cr { col: 1, k: 6, pc },
+        TermSpec::Cr {
+            col: 1,
+            k: 6,
+            pc,
+            by: None,
+        },
     ];
     fit_with_design(
         gaussian_identity(),
@@ -151,8 +157,14 @@ fn pc_holds_through_the_stable_reparam_rotation() {
                 col: 0,
                 k: 8,
                 pc: None,
+                by: None,
             },
-            TermSpec::CrStable { col: 1, k: 6, pc },
+            TermSpec::CrStable {
+                col: 1,
+                k: 6,
+                pc,
+                by: None,
+            },
         ]
     };
     let plain = fit_with_design(
@@ -220,8 +232,14 @@ fn pc_on_a_smooth_leaves_a_parametric_term_alone() {
                 col: 0,
                 k: 8,
                 pc: None,
+                by: None,
             },
-            TermSpec::Cr { col: 1, k: 6, pc },
+            TermSpec::Cr {
+                col: 1,
+                k: 6,
+                pc,
+                by: None,
+            },
             TermSpec::Parametric { col: 2 },
         ]
     };

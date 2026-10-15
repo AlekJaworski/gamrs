@@ -78,11 +78,13 @@ fn bench_2d() {
             col: 0,
             k: ks[0],
             pc: None,
+            by: None,
         },
         TermSpec::Cr {
             col: 1,
             k: ks[1],
             pc: None,
+            by: None,
         },
     ];
 
@@ -150,11 +152,13 @@ fn bench_2d_synthetic(n: usize, warm: usize, reps: usize) {
             col: 0,
             k: 10,
             pc: None,
+            by: None,
         },
         TermSpec::Cr {
             col: 1,
             k: 10,
             pc: None,
+            by: None,
         },
     ];
     let run = || {

@@ -77,11 +77,13 @@ fn additive_2d_tweedie_profile_p_n600_k8_cr() {
             col: 0,
             k: fx.inputs.k[0],
             pc: None,
+            by: None,
         },
         TermSpec::Cr {
             col: 1,
             k: fx.inputs.k[1],
             pc: None,
+            by: None,
         },
     ];
     // profile-p: p estimated jointly.
@@ -117,11 +119,13 @@ fn additive_2d_tweedie_fixed_p_n600_k8_cr() {
             col: 0,
             k: fx.inputs.k[0],
             pc: None,
+            by: None,
         },
         TermSpec::Cr {
             col: 1,
             k: fx.inputs.k[1],
             pc: None,
+            by: None,
         },
     ];
     // fixed-p: p held at 1.5, only φ + λ estimated.

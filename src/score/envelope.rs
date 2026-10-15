@@ -976,11 +976,13 @@ mod fd_match_tests {
                 col: 0,
                 k: 10,
                 pc: None,
+                by: None,
             },
             TermSpec::Cr {
                 col: 1,
                 k: 10,
                 pc: None,
+                by: None,
             },
         ];
         let prep = Additive { terms }.prepare(x.view()).unwrap();

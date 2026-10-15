@@ -301,11 +301,13 @@ mod tests {
                 col: 0,
                 k: 10,
                 pc: None,
+                by: None,
             },
             TermSpec::Cr {
                 col: 1,
                 k: 10,
                 pc: None,
+                by: None,
             },
         ];
         let sterms = vec![
@@ -313,11 +315,13 @@ mod tests {
                 col: 0,
                 k: 6,
                 pc: None,
+                by: None,
             },
             TermSpec::Cr {
                 col: 1,
                 k: 6,
                 pc: None,
+                by: None,
             },
         ];
         let fit = fit_gaulss(terms, sterms, x.view(), y.view(), GaulssOpts::default())

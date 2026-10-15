@@ -166,21 +166,7 @@ impl<B: Basis> StableReparam<B> {
                 inner_penalty.ncols()
             )));
         }
-        let s = inner_penalty.to_owned();
-        let (eigvals_asc, v_asc) = s
-            .eigh(UPLO::Lower)
-            .map_err(|e| GamrsError::Linalg(format!("eigh failed in StableReparam: {e}")))?;
-        // ndarray-linalg returns ascending; reverse to descending so the
-        // range space sits at the top (matches v0.x `setup_initial_repara`
-        // / mgcv `eigen()` convention).
-        let mut eigvals = Array1::<f64>::zeros(k);
-        let mut v = Array2::<f64>::zeros((k, k));
-        for j in 0..k {
-            eigvals[j] = eigvals_asc[k - 1 - j];
-            for i in 0..k {
-                v[[i, j]] = v_asc[[i, k - 1 - j]];
-            }
-        }
+        let (eigvals, v) = descending_eigh(inner_penalty)?;
         Ok(Self { inner, v, eigvals })
     }
 
@@ -223,6 +209,27 @@ impl<B: Basis> Basis for StableReparam<B> {
             .map(|s| self.v.t().dot(&s).dot(&self.v))
             .collect()
     }
+}
+
+/// Eigendecomposition of a symmetric penalty with the eigenpairs in
+/// descending order, so the range space sits first (v0.x
+/// `setup_initial_repara` / mgcv `eigen()` convention). The rotation
+/// [`StableReparam`] applies, available without a `Basis` to wrap.
+pub(crate) fn descending_eigh(penalty: ArrayView2<f64>) -> Result<(Array1<f64>, Array2<f64>)> {
+    let k = penalty.nrows();
+    let (eigvals_asc, v_asc) = penalty
+        .to_owned()
+        .eigh(UPLO::Lower)
+        .map_err(|e| GamrsError::Linalg(format!("eigh failed in StableReparam: {e}")))?;
+    let mut eigvals = Array1::<f64>::zeros(k);
+    let mut v = Array2::<f64>::zeros((k, k));
+    for j in 0..k {
+        eigvals[j] = eigvals_asc[k - 1 - j];
+        for i in 0..k {
+            v[[i, j]] = v_asc[[i, k - 1 - j]];
+        }
+    }
+    Ok((eigvals, v))
 }
 
 // =============================================================================

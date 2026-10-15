@@ -223,6 +223,7 @@ impl PyFittedGam {
                 col: i,
                 k,
                 pc: None,
+                by: None,
             })
             .collect();
         let prep = Additive { terms }.prepare(x_view).map_err(map_err)?;
@@ -386,6 +387,7 @@ impl PyFittedGam {
                 col: i,
                 k,
                 pc: None,
+                by: None,
             })
             .collect();
         let prep = Additive { terms }.prepare(x_view).map_err(map_err)?;
@@ -522,6 +524,7 @@ impl PyFittedGam {
                 col: i,
                 k,
                 pc: None,
+                by: None,
             })
             .collect();
         let prep = Additive { terms }.prepare(x_view).map_err(map_err)?;
@@ -720,6 +723,7 @@ impl PyFittedGam {
                 col: i,
                 k,
                 pc: None,
+                by: None,
             })
             .collect();
         let prep = Additive { terms }.prepare(x_view).map_err(map_err)?;
@@ -1286,6 +1290,15 @@ fn point_constraint(tup: &Bound<'_, pyo3::types::PyTuple>) -> PyResult<Option<f6
     tup.get_item(3)?.extract()
 }
 
+/// mgcv's numeric `s(x, by=)` column, the optional 5th element of a
+/// univariate term tuple. Absent (or `None`) means no by-variable.
+fn by_column(tup: &Bound<'_, pyo3::types::PyTuple>) -> PyResult<Option<usize>> {
+    if tup.len() < 5 {
+        return Ok(None);
+    }
+    tup.get_item(4)?.extract()
+}
+
 fn build_term_specs(terms: &Bound<'_, pyo3::types::PyList>) -> PyResult<Vec<TermSpec>> {
     let mut out: Vec<TermSpec> = Vec::with_capacity(terms.len());
     for (j, item) in terms.iter().enumerate() {
@@ -1434,6 +1447,7 @@ fn build_term_specs(terms: &Bound<'_, pyo3::types::PyList>) -> PyResult<Vec<Term
                         col,
                         k,
                         pc: point_constraint(tup)?,
+                        by: by_column(tup)?,
                     }
                 }
                 "cr_stable" => {
@@ -1446,6 +1460,7 @@ fn build_term_specs(terms: &Bound<'_, pyo3::types::PyList>) -> PyResult<Vec<Term
                         col,
                         k,
                         pc: point_constraint(tup)?,
+                        by: by_column(tup)?,
                     }
                 }
                 "re" => TermSpec::Re { col },

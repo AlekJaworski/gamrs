@@ -73,6 +73,7 @@ fn run_highdim_additive(name: &str, mu_bar: f64) {
             col: c,
             k: fx.inputs.k[c],
             pc: None,
+            by: None,
         })
         .collect();
 

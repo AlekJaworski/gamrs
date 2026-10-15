@@ -18,6 +18,7 @@ use ndarray::{Array2, ArrayView2};
 
 use crate::error::{GamrsError, Result};
 
+use super::by::ByPredictor;
 use super::cr::{CrPredictor, CrStablePredictor};
 use super::re::RePredictor;
 use super::tensor::TensorTermFit;
@@ -50,17 +51,22 @@ pub enum TermSpec {
     /// CR spline + sum-to-zero centring on `x.column(col)` with `k` knots.
     /// `pc` is mgcv's `s(x, pc=)` point constraint — `Some(v)` replaces the
     /// centering constraint with "the smooth is zero at `x = v`".
+    /// `by` is mgcv's numeric `s(x, by=w)` with `w = x.column(by)`: the term
+    /// contributes `w_i · f(x_i)` and, unless `w` is constant, carries no
+    /// centering constraint. Exclusive with `pc`.
     Cr {
         col: usize,
         k: usize,
         pc: Option<f64>,
+        by: Option<usize>,
     },
     /// CR spline + sum-to-zero + StableReparam rotation on `x.column(col)`.
-    /// `pc` as for [`Self::Cr`].
+    /// `pc` and `by` as for [`Self::Cr`].
     CrStable {
         col: usize,
         k: usize,
         pc: Option<f64>,
+        by: Option<usize>,
     },
     /// Random-effect (`bs="re"`) on `x.column(col)`.
     Re { col: usize },
@@ -116,11 +122,13 @@ impl TermSpec {
     }
 
     /// All columns this term reads from `x`. Length 1 for univariate
-    /// terms, >= 2 for tensor / interaction / TPRS terms.
+    /// terms, >= 2 for tensor / interaction / TPRS terms and for a smooth
+    /// with a `by` variable (`[col, by]`).
     pub fn cols(&self) -> Vec<usize> {
         match self {
-            Self::Cr { col, .. } => vec![*col],
-            Self::CrStable { col, .. } => vec![*col],
+            Self::Cr { col, by, .. } | Self::CrStable { col, by, .. } => {
+                std::iter::once(*col).chain(*by).collect()
+            }
             Self::Re { col } => vec![*col],
             Self::Parametric { col } => vec![*col],
             Self::Tensor { col_a, col_b, .. } => vec![*col_a, *col_b],
@@ -237,7 +245,9 @@ fn invoke_sub_design(
         // Multi-column sub-predictors slice their own margin columns from
         // the full design matrix using the column indices stored at
         // fit-time. `Tps::cols` may have arbitrary length (≥ 2).
-        Predictor::Tensor(_) | Predictor::TensorMulti(_) | Predictor::Tps(_) => pred.design(x_new),
+        Predictor::Tensor(_) | Predictor::TensorMulti(_) | Predictor::Tps(_) | Predictor::By(_) => {
+            pred.design(x_new)
+        }
         _ => {
             // Univariate: pass the single configured column as a (n, 1) view.
             debug_assert_eq!(cols.len(), 1);
@@ -254,7 +264,7 @@ fn invoke_sub_design_deriv(
     axis: usize,
 ) -> Result<Array2<f64>> {
     match pred {
-        Predictor::Tensor(_) | Predictor::TensorMulti(_) | Predictor::Tps(_) => {
+        Predictor::Tensor(_) | Predictor::TensorMulti(_) | Predictor::Tps(_) | Predictor::By(_) => {
             pred.design_deriv(x_new, axis)
         }
         _ => {
@@ -310,28 +320,30 @@ impl DesignStrategy for Additive {
 
         for t in &self.terms {
             match *t {
-                TermSpec::Cr { col, k, pc } => {
-                    let fit = CrPredictor::fit_centred(x, col, k, pc)?;
+                TermSpec::Cr { col, k, pc, by } => {
+                    let fit = CrPredictor::fit_centred(x, col, k, pc, by)?;
                     per_term_dim.push(fit.centred.ncols());
                     per_term_centred.push(fit.centred);
                     per_term_s_smooth.push(vec![fit.s_smooth]);
-                    per_term_predictor.push(Predictor::Cr(CrPredictor {
+                    let pred = Predictor::Cr(CrPredictor {
                         knots: fit.knots,
                         centring: fit.centring,
-                    }));
-                    cols_used.push(vec![col]);
+                    });
+                    per_term_predictor.push(ByPredictor::wrap(pred, col, by));
+                    cols_used.push(t.cols());
                 }
-                TermSpec::CrStable { col, k, pc } => {
-                    let fit = CrStablePredictor::fit_rotated(x, col, k, pc)?;
+                TermSpec::CrStable { col, k, pc, by } => {
+                    let fit = CrStablePredictor::fit_rotated(x, col, k, pc, by)?;
                     per_term_dim.push(fit.rotated.ncols());
                     per_term_centred.push(fit.rotated);
                     per_term_s_smooth.push(vec![fit.s_smooth]);
-                    per_term_predictor.push(Predictor::CrStable(CrStablePredictor {
+                    let pred = Predictor::CrStable(CrStablePredictor {
                         knots: fit.knots,
                         centring: fit.centring,
                         reparam_v: fit.reparam_v,
-                    }));
-                    cols_used.push(vec![col]);
+                    });
+                    per_term_predictor.push(ByPredictor::wrap(pred, col, by));
+                    cols_used.push(t.cols());
                 }
                 TermSpec::Re { col } => {
                     let fit = RePredictor::fit_raw(x, col)?;
@@ -513,11 +525,13 @@ mod tests {
                     col: 0,
                     k: 8,
                     pc: None,
+                    by: None,
                 },
                 TermSpec::Cr {
                     col: 1,
                     k: 6,
                     pc: None,
+                    by: None,
                 },
             ],
         };
@@ -566,6 +580,7 @@ mod tests {
                 col: 0,
                 k: 6,
                 pc: None,
+                by: None,
             }],
         }
         .prepare(x1.view())
@@ -610,11 +625,13 @@ mod tests {
                     col: 0,
                     k: 5,
                     pc: None,
+                    by: None,
                 },
                 TermSpec::Cr {
                     col: 1,
                     k: 4,
                     pc: None,
+                    by: None,
                 },
             ],
         };

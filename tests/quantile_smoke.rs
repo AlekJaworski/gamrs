@@ -206,11 +206,13 @@ fn quantile_multismooth_additive_monotone_and_converged() {
                         col: 0,
                         k,
                         pc: None,
+                        by: None,
                     },
                     TermSpec::Cr {
                         col: 1,
                         k,
                         pc: None,
+                        by: None,
                     },
                 ],
             },

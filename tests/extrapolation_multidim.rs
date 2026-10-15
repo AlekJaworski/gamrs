@@ -76,11 +76,13 @@ fn additive_identity_extrapolates_linearly_along_one_axis() {
             col: 0,
             k: 8,
             pc: None,
+            by: None,
         },
         TermSpec::Cr {
             col: 1,
             k: 8,
             pc: None,
+            by: None,
         },
     ];
     let fit = fit_with_design(
@@ -115,11 +117,13 @@ fn additive_finite_both_axes_beyond_range() {
             col: 0,
             k: 8,
             pc: None,
+            by: None,
         },
         TermSpec::Cr {
             col: 1,
             k: 8,
             pc: None,
+            by: None,
         },
     ];
     let fit = fit_with_design(
@@ -160,11 +164,13 @@ fn additive_log_link_positive_mu_beyond_range() {
             col: 0,
             k: 6,
             pc: None,
+            by: None,
         },
         TermSpec::Cr {
             col: 1,
             k: 6,
             pc: None,
+            by: None,
         },
     ];
     let fit = fit_with_design(

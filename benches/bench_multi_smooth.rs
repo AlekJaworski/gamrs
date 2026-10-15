@@ -56,16 +56,19 @@ fn run_one(n: usize) -> (f64, usize) {
             col: 0,
             k: 10,
             pc: None,
+            by: None,
         },
         TermSpec::Cr {
             col: 1,
             k: 10,
             pc: None,
+            by: None,
         },
         TermSpec::Cr {
             col: 2,
             k: 10,
             pc: None,
+            by: None,
         },
     ];
 

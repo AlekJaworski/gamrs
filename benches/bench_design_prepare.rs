@@ -41,7 +41,14 @@ fn synth(n: usize, seed: u64) -> Array2<f64> {
 }
 
 fn terms(pc: Option<f64>) -> Vec<TermSpec> {
-    (0..3).map(|col| TermSpec::Cr { col, k: 10, pc }).collect()
+    (0..3)
+        .map(|col| TermSpec::Cr {
+            col,
+            k: 10,
+            pc,
+            by: None,
+        })
+        .collect()
 }
 
 /// Min and median milliseconds per `prepare`, over `batches` batches of

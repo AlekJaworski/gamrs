@@ -69,6 +69,7 @@ fn run_scat_additive(name: &str, d: usize, bound: f64) {
             col: j,
             k: fx.inputs.k[j],
             pc: None,
+            by: None,
         })
         .collect();
     // Seed ν = 5 (near scat's typical optimum), σ² = var(y)/10 — the joint

@@ -60,11 +60,13 @@ fn giant_penalty_block_leaves_the_intercept_alone() {
             col: 0,
             k: 10,
             pc: None,
+            by: None,
         },
         TermSpec::Cr {
             col: 1,
             k: 10,
             pc: None,
+            by: None,
         },
     ];
     let fit = fit_with_design(

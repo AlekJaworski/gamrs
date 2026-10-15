@@ -70,11 +70,13 @@ fn additive_2d_gaussian_n500_k10_cr() {
             col: 0,
             k: fx.inputs.k[0],
             pc: None,
+            by: None,
         },
         TermSpec::Cr {
             col: 1,
             k: fx.inputs.k[1],
             pc: None,
+            by: None,
         },
     ];
     let fit = fit_with_design(

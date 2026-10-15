@@ -41,6 +41,7 @@ fn design(n: usize) -> (PreparedDesign, Array1<f64>, impl FnMut() -> f64) {
             col,
             k: 10,
             pc: None,
+            by: None,
         })
         .collect();
     let prep = Additive { terms }.prepare(x.view()).unwrap();

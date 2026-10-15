@@ -38,6 +38,7 @@ fn terms(n_parametric: usize) -> Vec<TermSpec> {
         col: 0,
         k: 8,
         pc: None,
+        by: None,
     }];
     t.extend((1..=n_parametric).map(|col| TermSpec::Parametric { col }));
     t
@@ -137,11 +138,13 @@ fn two_smooths_of_one_covariate_fit() {
                     col: 0,
                     k: 8,
                     pc: None,
+                    by: None,
                 },
                 TermSpec::Cr {
                     col: 1,
                     k: 8,
                     pc: None,
+                    by: None,
                 },
             ],
         },

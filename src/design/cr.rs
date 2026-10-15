@@ -6,13 +6,14 @@
 //! produce a `PreparedDesign` with `s_list.len() == 1`; the multi-smooth
 //! path lives in [`crate::design::Additive`].
 
-use ndarray::{Array1, Array2, ArrayView2};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 
 use crate::basis::CrSpline;
-use crate::error::Result;
+use crate::error::{GamrsError, Result};
 use crate::traits::{Basis, BasisTransform};
-use crate::transform::{StableReparam, SumToZero};
+use crate::transform::{descending_eigh, SumToZero};
 
+use super::by::scale_rows;
 use super::{
     matrix_inf_norm, prepend_intercept, prepend_zero_column, rank_and_log_pseudo_det,
     DesignStrategy, Predictor, PreparedDesign,
@@ -25,6 +26,40 @@ fn constrain(cr: CrSpline, raw_design: ArrayView2<f64>, pc: Option<f64>) -> SumT
         Some(v) => SumToZero::from_point_constraint(cr, Array2::from_elem((1, 1), v).view()),
         None => SumToZero::from_fit_design(cr, raw_design),
     }
+}
+
+/// The coefficient map that absorbs a CR term's identifiability
+/// constraint, or the identity when the term needs none. mgcv's
+/// `smoothCon` drops the constraint for a numeric `by=` variable that
+/// varies, since `w·f(x)` is then no longer confounded with the
+/// intercept; a constant `w` keeps it.
+fn constraint_map(
+    cr: CrSpline,
+    raw_design: ArrayView2<f64>,
+    pc: Option<f64>,
+    by: Option<ArrayView1<f64>>,
+) -> Result<Array2<f64>> {
+    if pc.is_some() && by.is_some() {
+        return Err(GamrsError::InvalidParameter(
+            "a CR term takes pc or by, not both: mgcv drops the point constraint \
+             whenever the by-variable varies"
+                .into(),
+        ));
+    }
+    if by.is_some_and(varies) {
+        return Ok(Array2::eye(cr.dim()));
+    }
+    Ok(constrain(cr, raw_design, pc).matrix().to_owned())
+}
+
+/// mgcv's `sd(by) > mean(by) * .Machine$double.eps * 1000`, on `|mean|`:
+/// with the signed mean a constant negative `w` would count as varying and
+/// leave a constant inside the smooth, aliased with the intercept.
+fn varies(w: ArrayView1<f64>) -> bool {
+    let n = w.len() as f64;
+    let mean = w.sum() / n;
+    let ss: f64 = w.iter().map(|v| (v - mean).powi(2)).sum();
+    (ss / (n - 1.0)).sqrt() > mean.abs() * f64::EPSILON * 1000.0
 }
 
 // -----------------------------------------------------------------------------
@@ -57,12 +92,14 @@ impl CrPredictor {
     /// composes the centred designs from multiple terms.
     ///
     /// `pc` is mgcv's `s(x, pc=)`: with `Some(v)` the smooth is pinned to
-    /// zero at `x = v` instead of centred over the fit rows.
+    /// zero at `x = v` instead of centred over the fit rows. `by` is mgcv's
+    /// numeric `s(x, by=w)`: each design row is scaled by `x[i, by]`.
     pub(crate) fn fit_centred(
         x: ArrayView2<f64>,
         x_col_idx: usize,
         k: usize,
         pc: Option<f64>,
+        by: Option<usize>,
     ) -> Result<CenteredCrFit> {
         let x_col = x.column(x_col_idx);
         let cr = CrSpline::with_quantile_knots(x_col, k)?;
@@ -80,9 +117,11 @@ impl CrPredictor {
         };
         let s_raw_rescaled = &s_raw * rescale;
 
-        let stz = constrain(cr, raw_design.view(), pc);
-        let centring = stz.matrix().to_owned();
-        let centred = stz.evaluate(x_view);
+        let w = by.map(|b| x.column(b));
+        let centring = constraint_map(cr, raw_design.view(), pc, w)?;
+        let mut centred = raw_design.dot(&centring);
+        // After the penalty rescale: mgcv sizes it on the unscaled basis.
+        scale_rows(&mut centred, w);
         let s_smooth = centring.t().dot(&s_raw_rescaled).dot(&centring);
 
         Ok(CenteredCrFit {
@@ -111,7 +150,7 @@ pub struct Cr {
 
 impl DesignStrategy for Cr {
     fn prepare(&self, x: ArrayView2<f64>) -> Result<PreparedDesign> {
-        let fit = CrPredictor::fit_centred(x, 0, self.k, None)?;
+        let fit = CrPredictor::fit_centred(x, 0, self.k, None, None)?;
         let x_design = prepend_intercept(fit.centred.view());
         let p = x_design.ncols();
         let k_smooth = fit.centred.ncols();
@@ -176,6 +215,7 @@ impl CrStablePredictor {
         x_col_idx: usize,
         k: usize,
         pc: Option<f64>,
+        by: Option<usize>,
     ) -> Result<RotatedCrFit> {
         let x_col = x.column(x_col_idx);
         let cr = CrSpline::with_quantile_knots(x_col, k)?;
@@ -193,13 +233,14 @@ impl CrStablePredictor {
         };
         let s_raw_rescaled = &s_raw * rescale;
 
-        let stz = constrain(cr, raw_design.view(), pc);
-        let centring = stz.matrix().to_owned();
+        let w = by.map(|b| x.column(b));
+        let centring = constraint_map(cr, raw_design.view(), pc, w)?;
         let s_centred_rescaled = centring.t().dot(&s_raw_rescaled).dot(&centring);
 
-        let reparam = StableReparam::from_inner_penalty(stz, s_centred_rescaled.view())?;
-        let reparam_v = reparam.matrix().to_owned();
-        let rotated = reparam.evaluate(x_view);
+        let (_, reparam_v) = descending_eigh(s_centred_rescaled.view())?;
+        let mut rotated = raw_design.dot(&centring).dot(&reparam_v);
+        // After the penalty rescale: mgcv sizes it on the unscaled basis.
+        scale_rows(&mut rotated, w);
         let s_smooth = reparam_v.t().dot(&s_centred_rescaled).dot(&reparam_v);
 
         Ok(RotatedCrFit {
@@ -230,7 +271,7 @@ pub struct CrStable {
 
 impl DesignStrategy for CrStable {
     fn prepare(&self, x: ArrayView2<f64>) -> Result<PreparedDesign> {
-        let fit = CrStablePredictor::fit_rotated(x, 0, self.k, None)?;
+        let fit = CrStablePredictor::fit_rotated(x, 0, self.k, None, None)?;
         let x_design = prepend_intercept(fit.rotated.view());
         let p = x_design.ncols();
         let k_smooth = fit.rotated.ncols();
