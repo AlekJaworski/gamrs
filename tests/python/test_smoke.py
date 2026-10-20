@@ -758,6 +758,57 @@ def test_subset_view_predict_ci(rng):
         g.predict_ci(X, level=0.95, scale="deviation")
 
 
+class CountingFit:
+    """Delegates to a native FittedGam, counting design evaluations."""
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.calls = []
+
+    def __getattr__(self, name):
+        attr = getattr(self.inner, name)
+        if name in ("predict", "predict_response", "evaluate_lpmatrix"):
+            def counted(*args, **kwargs):
+                self.calls.append(name)
+                return attr(*args, **kwargs)
+            return counted
+        return attr
+
+
+@pytest.mark.parametrize(
+    "family, link",
+    [("gaussian", "identity"), ("poisson", "log"), ("binomial", "logit"), ("scat", "identity")],
+)
+def test_predict_evaluates_linear_predictor_once(rng, family, link):
+    """Regression: ``scale='response'`` used to call ``f.predict`` and then
+    ``f.predict_response``, evaluating η twice and discarding the first."""
+    n = 300
+    x = rng.uniform(0, 1, (n, 2))
+    eta = np.sin(2 * np.pi * x[:, 0]) + x[:, 1]
+    y = {
+        "gaussian": eta + rng.normal(0, 0.3, n),
+        "poisson": rng.poisson(np.exp(eta)).astype(float),
+        "binomial": (rng.uniform(size=n) < 1 / (1 + np.exp(-eta))).astype(float),
+        "scat": eta + 0.3 * rng.standard_t(4, n),
+    }[family]
+    g = gamrs.Gam(family=family).fit(x, y)
+    assert g.link == link
+    native = g._fitted
+    spy = g._fitted = CountingFit(native)
+
+    mu = g.predict(x)
+    assert spy.calls == ["predict_response"]
+    np.testing.assert_array_equal(mu, np.asarray(native.predict_response(x)))
+
+    spy.calls.clear()
+    eta_hat = g.predict(x, scale="link")
+    assert spy.calls == ["predict"]
+    np.testing.assert_array_equal(eta_hat, np.asarray(native.predict(x)))
+
+    inverse = {"identity": lambda e: e, "log": np.exp, "logit": lambda e: 1 / (1 + np.exp(-e))}
+    np.testing.assert_allclose(mu, inverse[link](eta_hat), rtol=1e-12, atol=1e-14)
+
+
 def test_all_parametric_design_fits_as_plain_least_squares():
     """A design with no smooths is fitted, not refused.
 

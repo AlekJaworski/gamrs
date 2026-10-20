@@ -1336,14 +1336,15 @@ class Gam:
                     "scale='deviation' is only meaningful on subset views — "
                     "use gam[[<predictors>]].predict(X, scale='deviation')."
                 )
+            # Native predict_response computes η itself, so calling
+            # f.predict first would evaluate it twice; it also keeps the
+            # native inverse-link conventions exact.
+            if scale == "response":
+                return np.asarray(f.predict_response(x))
             eta = np.asarray(f.predict(x))
 
         if scale in ("link", "deviation"):
             return eta
-        # response scale — inverse-link η elementwise (use native path
-        # when possible to match its inverse-link conventions exactly).
-        if self._subset_mask is None:
-            return np.asarray(f.predict_response(x))
         # Subset path: apply the same inverse link manually.
         link = (self.link or "identity").lower()
         if link == "log":
