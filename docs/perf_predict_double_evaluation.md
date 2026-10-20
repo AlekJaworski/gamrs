@@ -1,4 +1,6 @@
-# `Gam.predict` evaluates the linear predictor twice on the response scale
+# `Gam.predict` evaluated the linear predictor twice on the response scale
+
+**Fixed in 0.15.1** (`1b115e2`): the unmasked response path now calls `predict_response` alone.
 
 Found 2026-10-20 by em_segmentation (an EM mixture model fitting one gamrs `Gam` per cluster and predicting each one
 on every sale, about 3,700 predicts per run).

@@ -7,6 +7,8 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+## [0.15.1] — 2026-10-20
+
 ### Performance
 
 - **`Gam.predict` on the response scale evaluated the linear predictor
