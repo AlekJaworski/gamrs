@@ -7,6 +7,18 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+### Performance
+
+- **`Gam.predict` on the response scale evaluated the linear predictor
+  twice.** Without a subset view it computed η with `FittedGam.predict`,
+  discarded it, and returned `FittedGam.predict_response`, which computes η
+  again. It now calls `predict_response` alone. At n=5,000 predict rows and
+  six CR terms (fit on 600 rows), the median per call drops from 15.3 to
+  7.8 ms for gaussian and from 15.3 to 7.6 ms for Poisson (log link), the
+  same as `scale="link"`. Outputs are bit-identical for gaussian, Poisson,
+  binomial, Gamma, Tweedie, scat and ocat. Subset views and `type="terms"`
+  were already single-evaluation.
+
 ## [0.15.0] — 2026-10-15
 
 0.14.6 was not published on its own; its changes (below) ship in 0.15.0.
