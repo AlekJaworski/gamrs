@@ -7,6 +7,45 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A quantile fit depended on the units of `y`.** `fit_quantile(X, y,
+  tau=0.5, k=10)` on 1,170 house sales gave a median at the latest date
+  of 180,522 with prices in dollars and 569,855 with prices divided by
+  their median (qgam: 550,042). The ELF working weights are `2s(1−s)/(λσ)`,
+  which scales as `1/y²`, so the λ that fits the data moves by `1/c²` when
+  `y` is multiplied by `c`. The outer Newton always starts at ρ = 0 inside
+  a fixed box. On prices in dollars the right λ is ~14 log units below
+  the start, and the fit stopped at λ ≈ 1 with EDF 0.01: the smooth had
+  shrunk to nothing. The σ the CV picks was already relative to `y`
+  (`σ/c` was the same at every `c`), so the CV search was not the cause.
+
+  `fit_quantile_from_prep` now fits `y / sd(y)` and maps the result back
+  to the units of `y`: β and σ times `sd(y)`, λ divided by `sd(y)²`, vcov
+  multiplied by `sd(y)³` so `A⁻¹·σ` keeps its meaning. `reml_value` is the
+  criterion of the standardised fit. The `fast_oos` SHASH pilot also runs
+  on `y / sd(y)`, because the Gaussian pilot is not exactly equivariant at
+  `y ~ 1e10` (λ 957.4 vs 955.8). Predictions at `c·y`, divided by `c`, now
+  agree to `rtol = 1e-6` for `c = 1e-5, 1, 1e5`
+  (`tests/python/test_quantile_scale.py`, qgam fixture from
+  `scripts/r/gen_quantile_price_scale_fixture.R`).
+
+  Median at the latest date in dollars, before → after (qgam):
+
+  | data | path | before | after | qgam |
+  |---|---|---|---|---|
+  | 1,170 sales | CV σ (default) | 180,522 | 569,850 | 550,042 |
+  | 1,170 sales | `fast_oos` | 548,374 | 493,574 | 550,042 |
+  | 39,587 sales | CV σ (default) | 474,410 | 490,286 | 485,501 |
+  | 39,587 sales | `fast_oos` | 478,547 | 478,672 | 485,501 |
+
+  Before the fix, `fast_oos` on the small area in dollars was only close
+  by accident. In units of the median it gave 493,584, the same as now.
+  That gap is not a units bug: `fast_oos` uses σ = co, and the SHASH co
+  (9,679) matches qgam's (9,659). However, qgam calibrates σ separately
+  (78,955). At σ = co the fit uses EDF 8.7 against qgam's 2.8. Given
+  qgam's (σ, co), the native ELF fit returns 550,003 at EDF 2.76.
+
 ## [0.15.1] — 2026-10-20
 
 ### Performance
