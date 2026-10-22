@@ -112,6 +112,18 @@ fn derive_elf_sigma_lambda(
     (sigma_auto, lambda_auto)
 }
 
+/// Population standard deviation of `y`, or 1 when it is zero or not finite.
+fn response_scale(y: ArrayView1<f64>) -> f64 {
+    let n = y.len().max(1) as f64;
+    let mean = y.sum() / n;
+    let sd = (y.iter().map(|&v| (v - mean) * (v - mean)).sum::<f64>() / n).sqrt();
+    if sd.is_finite() && sd > 0.0 {
+        sd
+    } else {
+        1.0
+    }
+}
+
 /// ELF (quantile) driver. `tau`, `init_sigma`, `init_lambda` are read
 /// off `family.loss` at the canonical dispatch site.
 pub(crate) fn fit_quantile_from_prep<S: LinearSolver>(
@@ -132,6 +144,19 @@ pub(crate) fn fit_quantile_from_prep<S: LinearSolver>(
 
     let n = x.nrows();
     let n_terms = prep.s_list.len();
+
+    // Fit in units of sd(y). The ELF working weights scale as 1/y², so in raw
+    // units the optimal λ moves by 1/c² when y is multiplied by c, while the
+    // outer Newton starts at ρ = 0 inside a fixed box: on house prices in
+    // dollars it stopped at λ ≈ 1 with the smooth shrunk to nothing. A
+    // quantile is equivariant to rescaling y, so the fit is done on y/s and
+    // mapped back.
+    let y_scale = response_scale(y);
+    let y_std: Array1<f64> = y.mapv(|v| v / y_scale);
+    let y = y_std.view();
+    let init_sigma = init_sigma / y_scale;
+    let init_lambda = init_lambda / y_scale;
+
     let (beta_init, sigma2_hat) = qgam_warm_start(&prep, y, tau)?;
     let (sigma, lambda_elf) = derive_elf_sigma_lambda(init_sigma, init_lambda, sigma2_hat, tau);
 
@@ -169,19 +194,25 @@ pub(crate) fn fit_quantile_from_prep<S: LinearSolver>(
 
     let final_fit: GaussianInnerFit<S> = score.inner.fit(&outer.theta)?;
     let edf = compute_edf(&prep.x_design, &final_fit.a_weights, &final_fit);
+    let edf_per_term = compute_edf_per_term(
+        &prep.s_list,
+        &outer.theta,
+        prep.x_design.ncols(),
+        &final_fit,
+    );
 
     // scale = σ (the ELF likelihood scale). Quantile users want it for
     // diagnostics; mgcv reports `scale = 1`, we deliberately diverge.
-    let vcov = compute_vcov(&final_fit, sigma);
-    let rho_vec = outer.theta.clone();
+    // Back to the units of y: β and σ scale by s; the working weights carry
+    // 1/s², so the raw-unit λ is λ/s² and `A⁻¹·σ` picks up s³.
+    let vcov = compute_vcov(&final_fit, sigma) * y_scale.powi(3);
+    let rho_vec: Array1<f64> = outer.theta.mapv(|r| r - 2.0 * y_scale.ln());
     let lambda_vec: Array1<f64> = rho_vec.iter().map(|&r| r.exp()).collect();
-    let edf_per_term =
-        compute_edf_per_term(&prep.s_list, &rho_vec, prep.x_design.ncols(), &final_fit);
     Ok(FittedGam {
-        beta: final_fit.beta,
+        beta: final_fit.beta * y_scale,
         rho: rho_vec,
         lambda: lambda_vec,
-        scale: sigma,
+        scale: sigma * y_scale,
         edf_total: edf,
         edf_per_term,
         n,

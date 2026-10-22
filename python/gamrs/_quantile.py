@@ -140,13 +140,19 @@ def _shash_co(
     degenerate OR scipy/SHASH is unavailable (keeps scipy an optional boost,
     not a hard requirement of the fast path).
     """
+    # The pilot runs in units of sd(y) so that co scales exactly with y.
+    y = np.asarray(y, dtype=np.float64).ravel()
+    y_scale = float(np.std(y))
+    if not np.isfinite(y_scale) or y_scale <= 0.0:
+        return 0.0
+    y = y / y_scale
     if terms is not None:
         g_pilot = Gam(family="gaussian", terms=list(terms))
     else:
         g_pilot = Gam(family="gaussian", k_default=int(k), design=design)
     g_pilot.fit(x_2d, y)
     mu0 = np.asarray(g_pilot.predict(x_2d, scale="response"), dtype=np.float64).ravel()
-    resid = np.asarray(y, dtype=np.float64).ravel() - mu0
+    resid = y - mu0
     var_hat = float((resid**2).mean())
     if not np.isfinite(var_hat) or var_hat <= 1e-12:
         return 0.0
@@ -162,7 +168,7 @@ def _shash_co(
             err = 0.05
     except Exception:
         err = 0.05  # SHASH BFGS divergence — qgam's documented default
-    return float(err * np.sqrt(2.0 * np.pi * var_hat) / (2.0 * np.log(2.0)))
+    return float(y_scale * err * np.sqrt(2.0 * np.pi * var_hat) / (2.0 * np.log(2.0)))
 
 
 def _calibrate_quantile_intercept(
