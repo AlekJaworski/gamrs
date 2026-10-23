@@ -7,6 +7,8 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+## [0.15.2] — 2026-10-23
+
 ### Fixed
 
 - **A quantile fit depended on the units of `y`.** `fit_quantile(X, y,
