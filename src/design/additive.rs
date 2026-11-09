@@ -471,15 +471,7 @@ impl DesignStrategy for Additive {
             }
         }
 
-        let rank_total: usize = rank_s_list.iter().sum();
-        // `mp` is the null-space dimension of the *combined* penalty
-        // `Σ_j S_j`. For block-diagonal terms this equals `p − Σ rank_j`
-        // only when the per-term null spaces stack to a full union (each
-        // term's null space within its block contributes to the combined
-        // null space). The previous single-penalty-per-term path used the
-        // same calculation; keep it as a documented approximation rather
-        // than a true rank-of-sum which would require an eigensolve here.
-        let mp = p.saturating_sub(rank_total);
+        let mp = super::penalty_null_space_dim(p, &s_list, &rank_s_list);
 
         Ok(PreparedDesign {
             x_design,

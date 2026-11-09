@@ -25,6 +25,7 @@ use crate::family::Gaussian;
 use crate::inner::{CholeskySolver, GaussianClosedFormInner, GaussianInnerFit, LinearSolver};
 use crate::traits::{CoordsKind, InnerSolver, Loss, ScoreDerivatives};
 
+use super::penalty_det::PenaltyLogDet;
 use super::profile::{MgcvTwoSigmaProfile, Profile};
 
 /// Closed-form REML / LAML envelope score, generic over the loss `L`,
@@ -72,6 +73,7 @@ pub struct EnvelopeScore<
     /// successful `value_grad_hess`; consumed by `ift_propagated_beta`.
     /// Only meaningful for families that opt in via `Loss::allows_no_refresh`.
     pub accepted_state: std::cell::RefCell<Option<EnvelopeAcceptedState>>,
+    pub log_det_s: PenaltyLogDet,
 }
 
 /// IFT-propagation state cached by `EnvelopeScore` for the NoRefresh
@@ -120,6 +122,7 @@ where
     ) -> Self {
         debug_assert_eq!(s_list.len(), rank_s_list.len());
         debug_assert_eq!(s_list.len(), log_pseudo_det_s_list.len());
+        let log_det_s = PenaltyLogDet::new(&s_list, &rank_s_list, &log_pseudo_det_s_list);
         Self {
             inner,
             loss,
@@ -133,6 +136,7 @@ where
             _solver: PhantomData,
             stats: crate::stats::FitStats::new(),
             accepted_state: std::cell::RefCell::new(None),
+            log_det_s,
         }
     }
 }
@@ -296,6 +300,8 @@ pub(crate) struct HessInputs {
     /// [`EnvelopeScore::hess_analytic`] so neither layer re-inverts. Empty
     /// `(0,0)` when the score path didn't need it (Tk·KK' fallback to FD).
     a_inv: Array2<f64>,
+    /// `∂²log|λS|₊/∂ρ∂ρ'`; zero unless penalties overlap.
+    log_det_s_hess: Array2<f64>,
 }
 
 impl<L, I, P, S> EnvelopeScore<L, I, P, S>
@@ -398,12 +404,8 @@ where
             .inner
             .lazy_newton_log_det_h(inner, theta)
             .unwrap_or(log_det_h_fisher);
-        // log|λS|+ for multi-smooth: Σ_j (rank_j · ρ_j + log_pseudo_det_j).
-        let mut log_det_lambda_s = 0.0_f64;
-        for j in 0..n_terms {
-            log_det_lambda_s +=
-                (self.rank_s_list[j] as f64) * theta[j] + self.log_pseudo_det_s_list[j];
-        }
+        let log_det_s = self.log_det_s.eval(theta)?;
+        let log_det_lambda_s = log_det_s.value;
 
         // σ² dispatch via the `Profile` type parameter — type-level choice,
         // not a runtime branch (architecture-assumptions.md §D3).
@@ -429,6 +431,7 @@ where
                         dsigma2_drho: None,
                         has_tk_kkt: false,
                         a_inv: Array2::<f64>::zeros((0, 0)),
+                        log_det_s_hess: Array2::<f64>::zeros((0, 0)),
                     };
                     return Ok((1e12, Array1::zeros(n_terms), hin));
                 }
@@ -465,12 +468,12 @@ where
             - ls_sum;
 
         // Per-term gradient: ∂REML/∂ρ_j = λ_j β'S_jβ/(2σ²) + λ_j tr(H⁻¹S_j)/2
-        //   - rank_j/2  (mgcv `reml_gradient_multi_*` shape).
+        //   - ∂log|λS|₊/∂ρ_j / 2  (rank_j/2 for a penalty overlapping no other).
         let mut g = Array1::<f64>::zeros(n_terms);
         for j in 0..n_terms {
             g[j] = lambda_j[j] * bsb_per_term[j] / (2.0 * score_sigma2)
                 + 0.5 * lambda_j[j] * tr_hinv_s_per_term[j]
-                - 0.5 * (self.rank_s_list[j] as f64);
+                - 0.5 * log_det_s.grad[j];
         }
 
         // Tk·KK' contribution for non-canonical-link families. The W matrix
@@ -521,7 +524,7 @@ where
                 // computed above) — mirrors mgcv_rust:2482-2483.
                 g[k] = lambda_j[k] * bsb_per_term[k] / (2.0 * score_sigma2)
                     + 0.5 * lambda_j[k] * tk.tr_a_newton_inv_s_per_term[k]
-                    - 0.5 * (self.rank_s_list[k] as f64)
+                    - 0.5 * log_det_s.grad[k]
                     + 0.5 * tk_kkt;
             }
         }
@@ -544,6 +547,7 @@ where
             dsigma2_drho,
             has_tk_kkt,
             a_inv,
+            log_det_s_hess: log_det_s.hess,
         };
 
         Ok((reml, g, hess_inputs))
@@ -575,8 +579,8 @@ where
     ///    σ² chain below for the profiled families and vanish for σ²≡1).
     /// 3. **σ² chain** — `−(λ_j β'S_jβ /(2σ⁴))·∂σ²/∂ρ_i` (zero for σ²≡1).
     ///
-    /// The `log|λS|+` term is linear in ρ so its second derivative is 0
-    /// (mgcv `ldet_s_d2 = 0` for singleton penalties).
+    /// The `log|λS|+` term is linear in ρ for penalties that overlap no
+    /// other; overlapping ones (a tensor's margins) add its curvature.
     ///
     /// Returns `None` when the gradient carried a Tk·KK' non-canonical-link
     /// term (not yet differentiated analytically) or when `∂σ²/∂ρ` has no
@@ -742,7 +746,7 @@ where
                 // −(λ_j β'S_jβ /(2σ⁴)) · ∂σ²/∂ρ_i
                 let term3 = -(lambda[j] * bsb[j]) / (2.0 * sigma2 * sigma2) * dsigma2[i];
 
-                let val = term1 + term2 + term3;
+                let val = term1 + term2 + term3 - 0.5 * hin.log_det_s_hess[[i, j]];
                 h[[i, j]] = val;
                 if i != j {
                     h[[j, i]] = val;

@@ -65,6 +65,7 @@ pub(crate) fn reml_score_from_parts(
 
 pub mod envelope;
 pub(crate) mod hess_ift;
+pub mod penalty_det;
 pub mod profile;
 pub mod shape_aware;
 

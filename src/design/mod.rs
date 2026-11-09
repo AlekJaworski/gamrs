@@ -258,6 +258,72 @@ pub(crate) fn rank_and_log_pseudo_det(s: ArrayView2<f64>) -> Result<(usize, f64)
     Ok((rank, log_det))
 }
 
+/// Penalties that share coefficients (the margins of one tensor product),
+/// with the coefficients they touch and the rank of their sum. A penalty
+/// that shares none is a group of its own and keeps its `rank_s_list` rank.
+pub struct PenaltyGroup {
+    pub penalties: Vec<usize>,
+    pub coefs: Vec<usize>,
+    pub rank: usize,
+}
+
+pub fn penalty_groups(s_list: &[Array2<f64>], rank_s_list: &[usize]) -> Vec<PenaltyGroup> {
+    let support = |s: &Array2<f64>| -> Vec<usize> {
+        (0..s.nrows())
+            .filter(|&r| s.row(r).iter().any(|&v| v != 0.0))
+            .collect()
+    };
+    let mut groups: Vec<PenaltyGroup> = Vec::new();
+    for (j, s_j) in s_list.iter().enumerate() {
+        let coefs = support(s_j);
+        let (mut merged, rest): (Vec<_>, Vec<_>) = groups
+            .into_iter()
+            .partition(|g| g.coefs.iter().any(|c| coefs.binary_search(c).is_ok()));
+        groups = rest;
+        let mut group = PenaltyGroup {
+            penalties: vec![j],
+            coefs,
+            rank: rank_s_list[j],
+        };
+        for g in merged.drain(..) {
+            group.penalties.extend(g.penalties);
+            group.coefs.extend(g.coefs);
+        }
+        group.penalties.sort_unstable();
+        group.coefs.sort_unstable();
+        group.coefs.dedup();
+        groups.push(group);
+    }
+    for g in groups.iter_mut().filter(|g| g.penalties.len() > 1) {
+        let mut total = Array2::<f64>::zeros((g.coefs.len(), g.coefs.len()));
+        for &j in &g.penalties {
+            let block = s_list[j]
+                .select(Axis(0), &g.coefs)
+                .select(Axis(1), &g.coefs);
+            let norm = block.iter().fold(0.0_f64, |a, v| a.max(v.abs()));
+            if norm > 0.0 {
+                total.scaled_add(1.0 / norm, &block);
+            }
+        }
+        g.rank = rank_and_log_pseudo_det(total.view()).map_or(0, |(r, _)| r);
+    }
+    groups.sort_by_key(|g| g.penalties[0]);
+    groups
+}
+
+/// mgcv's `Mp`: the dimension of the null space of the total penalty.
+pub(crate) fn penalty_null_space_dim(
+    p: usize,
+    s_list: &[Array2<f64>],
+    rank_s_list: &[usize],
+) -> usize {
+    let rank: usize = penalty_groups(s_list, rank_s_list)
+        .iter()
+        .map(|g| g.rank)
+        .sum();
+    p.saturating_sub(rank)
+}
+
 /// Assemble `S_total(ρ) = Σ_j exp(ρ_j) · s_list[j]`. The hot path inside
 /// every inner solver — single allocation, sequential add.
 ///

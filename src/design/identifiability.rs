@@ -175,7 +175,7 @@ pub(crate) fn without_columns(prep: PreparedDesign, dropped: &[usize]) -> Result
         }
         s_list.push(reduced);
     }
-    let mp = keep.len().saturating_sub(rank_s_list.iter().sum::<usize>());
+    let mp = super::penalty_null_space_dim(keep.len(), &s_list, &rank_s_list);
     Ok(PreparedDesign {
         x_design: prep
             .x_design

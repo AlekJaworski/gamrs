@@ -6,14 +6,9 @@
 //! the predicted μ̂ on the training set against mgcv's
 //! `predict(..., type='response')` output.
 //!
-//! Tolerance is set looser than the single-smooth bound (1e-5) because:
-//! - two smoothing parameters per term → more outer-Newton DOF;
-//! - mgcv's `te()` applies a different stable-reparam path
-//!   (`Sm[[i]] / max-eig` per margin) at fit time, which produces tiny FP
-//!   differences vs. our straightforward C' S C rotation.
-//!
-//! The 5e-3 bound matches the looser target stated for epic 94c in the
-//! task brief.
+//! The score takes `log|λ_a S_a + λ_b S_b|₊` of the overlapping margin
+//! penalties as one determinant, as mgcv does; summing per-penalty
+//! determinants instead left these fits ~1e-2 off.
 
 use std::path::PathBuf;
 
@@ -61,22 +56,12 @@ fn max_rel_err(pred: &[f64], target: &[f64]) -> f64 {
 
 #[test]
 fn tensor_2d_gaussian_te_n300_k5x5() {
-    // Small-n case (n=300, p=25 effective columns after centring).
-    // The REML score is shallow near the optimum at this dimension —
-    // gamrs and mgcv land on slightly different ρ̂ even though both are
-    // valid Newton/BFGS stationary points. Bound is widened relative
-    // to n=1000 to absorb this (mgcv-vs-gamrs outer optimiser disagreement
-    // on the shallow region, not a basis correctness issue — see
-    // n=1000 sibling case for tighter agreement).
-    run_tensor_parity("2d_gaussian_te_n300_k5x5", 2e-2, 5e-2);
+    run_tensor_parity("2d_gaussian_te_n300_k5x5", 1e-5, 1e-5);
 }
 
 #[test]
 fn tensor_2d_gaussian_te_n1000_k5x5() {
-    // Larger-n version with the same k=(5,5). REML score curvature is
-    // sharper at n=1000, so we expect tighter agreement with mgcv on
-    // both μ̂ and φ̂ — this is the primary parity gate for 94c.
-    run_tensor_parity("2d_gaussian_te_n1000_k5x5", 5e-3, 2e-2);
+    run_tensor_parity("2d_gaussian_te_n1000_k5x5", 1e-5, 1e-5);
 }
 
 fn run_tensor_parity(fixture_name: &str, mu_rel_bound: f64, scale_rel_bound: f64) {
