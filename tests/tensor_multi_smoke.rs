@@ -130,6 +130,7 @@ fn te_multi_2margin_matches_tensor() {
                 k_b: 5,
                 bs_a: MarginKind::Cr,
                 bs_b: MarginKind::Cr,
+                by: None,
             }],
         },
         x.view(),

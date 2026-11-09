@@ -13,7 +13,7 @@ use crate::error::{GamrsError, Result};
 use crate::traits::{Basis, BasisTransform};
 use crate::transform::{descending_eigh, SumToZero};
 
-use super::by::scale_rows;
+use super::by::{scale_rows, varies};
 use super::{
     matrix_inf_norm, prepend_intercept, prepend_zero_column, rank_and_log_pseudo_det,
     DesignStrategy, Predictor, PreparedDesign,
@@ -50,16 +50,6 @@ fn constraint_map(
         return Ok(Array2::eye(cr.dim()));
     }
     Ok(constrain(cr, raw_design, pc).matrix().to_owned())
-}
-
-/// mgcv's `sd(by) > mean(by) * .Machine$double.eps * 1000`, on `|mean|`:
-/// with the signed mean a constant negative `w` would count as varying and
-/// leave a constant inside the smooth, aliased with the intercept.
-fn varies(w: ArrayView1<f64>) -> bool {
-    let n = w.len() as f64;
-    let mean = w.sum() / n;
-    let ss: f64 = w.iter().map(|v| (v - mean).powi(2)).sum();
-    (ss / (n - 1.0)).sqrt() > mean.abs() * f64::EPSILON * 1000.0
 }
 
 // -----------------------------------------------------------------------------

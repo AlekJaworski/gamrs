@@ -25,6 +25,7 @@ use crate::traits::{Basis, BasisTransform};
 use crate::transform::SumToZero;
 
 use super::additive::MarginKind;
+use super::by::{scale_rows, varies};
 use super::{prepend_intercept, prepend_zero_column};
 
 /// Predict-time tensor product rebuilder. Carries the marginal knot
@@ -50,8 +51,9 @@ pub struct TensorPredictor {
     /// Margin B reparameterisation, same shape and role as `xp_a`.
     pub xp_b: Array2<f64>,
     /// Tensor-level sum-to-zero centring matrix, shape
-    /// `(k_a*k_b, k_a*k_b - 1)`. Applied AFTER the row-wise Kronecker of
-    /// the (reparameterised) marginal designs.
+    /// `(k_a*k_b, k_a*k_b - 1)`, or the identity for a term with a varying
+    /// `by=` variable. Applied AFTER the row-wise Kronecker of the
+    /// (reparameterised) marginal designs.
     pub centring: Array2<f64>,
 }
 
@@ -141,6 +143,7 @@ impl TensorTermFit {
         k_b: usize,
         bs_a: MarginKind,
         bs_b: MarginKind,
+        by: Option<usize>,
     ) -> Result<Self> {
         if col_a == col_b {
             return Err(GamrsError::InvalidParameter(format!(
@@ -199,10 +202,18 @@ impl TensorTermFit {
         // Householder construction in `SumToZero::from_fit_design`
         // builds C from `colSums(X_fit)`, giving an orthonormal C of
         // shape `(k_a*k_b, k_a*k_b - 1)`.
-        let te = TensorProductBasis::new(cr_a, cr_b, col_a, col_b);
-        let stz = SumToZero::from_fit_design(te, raw_design.view());
-        let centring = stz.matrix().to_owned();
-        let design = raw_design.dot(&centring);
+        // A varying numeric `by=` drops the constraint, as for a CR term.
+        let w = by.map(|b| x.column(b));
+        let centring = if w.is_some_and(varies) {
+            Array2::eye(pk)
+        } else {
+            let te = TensorProductBasis::new(cr_a, cr_b, col_a, col_b);
+            SumToZero::from_fit_design(te, raw_design.view())
+                .matrix()
+                .to_owned()
+        };
+        let mut design = raw_design.dot(&centring);
+        scale_rows(&mut design, w);
 
         // Rotate penalties through C: S_centred = C' · S_raw · C.
         let s_te_a = centring.t().dot(&s_te_a_raw).dot(&centring);

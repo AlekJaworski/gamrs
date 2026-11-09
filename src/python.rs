@@ -1299,6 +1299,15 @@ fn by_column(tup: &Bound<'_, pyo3::types::PyTuple>) -> PyResult<Option<usize>> {
     tup.get_item(4)?.extract()
 }
 
+/// mgcv's numeric `te(.., by=)` column, the optional 4th element of a
+/// `(cols, "te", k, by)` tuple.
+fn tensor_by_column(tup: &Bound<'_, pyo3::types::PyTuple>) -> PyResult<Option<usize>> {
+    if tup.len() < 4 {
+        return Ok(None);
+    }
+    tup.get_item(3)?.extract()
+}
+
 fn build_term_specs(terms: &Bound<'_, pyo3::types::PyList>) -> PyResult<Vec<TermSpec>> {
     let mut out: Vec<TermSpec> = Vec::with_capacity(terms.len());
     for (j, item) in terms.iter().enumerate() {
@@ -1314,8 +1323,8 @@ fn build_term_specs(terms: &Bound<'_, pyo3::types::PyList>) -> PyResult<Vec<Term
             )));
         }
         // Tensor terms use a sentinel basis name "te" with a 2-tuple of
-        // columns and (optionally) a 2-tuple of k values:
-        //   (cols_tuple, "te", k_tuple)
+        // columns, (optionally) a 2-tuple of k values and a by column:
+        //   (cols_tuple, "te", k_tuple, by)
         // where cols_tuple = (col_a, col_b) and k_tuple = (k_a, k_b).
         let first = tup.get_item(0)?;
         let basis: String = tup.get_item(1)?.extract()?;
@@ -1428,6 +1437,7 @@ fn build_term_specs(terms: &Bound<'_, pyo3::types::PyList>) -> PyResult<Vec<Term
                 k_b,
                 bs_a: MarginKind::Cr,
                 bs_b: MarginKind::Cr,
+                by: tensor_by_column(tup)?,
             }
         } else {
             // Univariate term — first element is a single column index.

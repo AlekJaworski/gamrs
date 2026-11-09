@@ -73,6 +73,7 @@ pub enum TermSpec {
     /// Anisotropic tensor product `te(x_{col_a}, x_{col_b})` — two
     /// smoothing parameters per term (one per margin). Marginals default
     /// to CR + sum-to-zero centring (`bs_a = bs_b = MarginKind::Cr`).
+    /// `by` as for [`Self::Cr`]: mgcv's `te(x_a, x_b, by=w)`.
     Tensor {
         col_a: usize,
         col_b: usize,
@@ -80,6 +81,7 @@ pub enum TermSpec {
         k_b: usize,
         bs_a: MarginKind,
         bs_b: MarginKind,
+        by: Option<usize>,
     },
     /// N-margin anisotropic tensor product `te(x_{c_0}, ..., x_{c_{D-1}})`.
     /// `cols.len() = k.len() = bs.len() = D >= 2`. D smoothing parameters.
@@ -131,7 +133,9 @@ impl TermSpec {
             }
             Self::Re { col } => vec![*col],
             Self::Parametric { col } => vec![*col],
-            Self::Tensor { col_a, col_b, .. } => vec![*col_a, *col_b],
+            Self::Tensor {
+                col_a, col_b, by, ..
+            } => [*col_a, *col_b].into_iter().chain(*by).collect(),
             Self::TeMulti { cols, .. } | Self::Ti { cols, .. } | Self::Tps { cols, .. } => {
                 cols.clone()
             }
@@ -366,13 +370,15 @@ impl DesignStrategy for Additive {
                     k_b,
                     bs_a,
                     bs_b,
+                    by,
                 } => {
-                    let fit = TensorTermFit::build(x, col_a, col_b, k_a, k_b, bs_a, bs_b)?;
+                    let fit = TensorTermFit::build(x, col_a, col_b, k_a, k_b, bs_a, bs_b, by)?;
                     per_term_dim.push(fit.design.ncols());
                     per_term_centred.push(fit.design);
                     per_term_s_smooth.push(fit.s_list_term);
-                    per_term_predictor.push(Predictor::Tensor(fit.predictor));
-                    cols_used.push(vec![col_a, col_b]);
+                    let pred = Predictor::Tensor(fit.predictor);
+                    per_term_predictor.push(ByPredictor::wrap(pred, col_a, by));
+                    cols_used.push(t.cols());
                 }
                 TermSpec::TeMulti { .. } | TermSpec::Ti { .. } => {
                     let (cols, k, bs, interaction) = match t {

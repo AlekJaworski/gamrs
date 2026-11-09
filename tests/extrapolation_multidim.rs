@@ -219,6 +219,7 @@ fn tensor_te_finite_beyond_2d_range() {
         k_b: 5,
         bs_a: MarginKind::Cr,
         bs_b: MarginKind::Cr,
+        by: None,
     }];
     let fit = fit_with_design(
         gaussian_identity(),

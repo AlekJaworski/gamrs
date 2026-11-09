@@ -83,6 +83,7 @@ fn run_tensor_parity(fixture_name: &str, mu_rel_bound: f64, scale_rel_bound: f64
         k_b: fx.inputs.k[1],
         bs_a: MarginKind::Cr,
         bs_b: MarginKind::Cr,
+        by: None,
     }];
     let fit = fit_with_design(
         gaussian_identity(),
