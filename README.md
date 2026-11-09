@@ -162,7 +162,9 @@ full port story.
   uncentred `s(x, by=w)` already spans `w * constant`. Name it in
   `predictor_basis_map` to add it anyway; it is then aliased and fitted as 0.
   An unusable `term_by_mapping` entry raises. Not combinable with `pc`.
-  CR bases only.
+  On a 2-margin tensor, `te(x0, x1, by=w)` via
+  `TeTerm(cols=("x0", "x1"), by="w")`; `w` may be one of the margins.
+  CR smooths and `TeTerm` only.
 - **Parametric (linear)** — unsmoothed raw column via `ParametricTerm` or
   `predictor_basis_map={"x": "parametric"}` (alias `"linear"`). Use for
   0/1 indicators, counts, or anything you want unpenalised. mgcv R's

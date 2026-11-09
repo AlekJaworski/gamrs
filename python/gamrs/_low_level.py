@@ -263,9 +263,15 @@ class TeTerm:
     ``cols`` is the pair ``(col_a, col_b)``; each entry accepts an int
     index or a string column name. ``k`` is the pair ``(k_a, k_b)`` of
     marginal basis dims (defaults to ``(10, 10)``).
+
+    ``by`` is mgcv's numeric ``te(x_a, x_b, by=w)``, as for :class:`CrTerm`:
+    the term contributes ``w_i * f(x_a_i, x_b_i)``, is exactly 0 where
+    ``w = 0`` and, unless ``w`` is constant, is not centred and keeps all
+    ``k_a * k_b`` coefficients. ``by`` may name one of the margins.
     """
     cols: Tuple[Col, Col]
     k: Tuple[int, int] = (10, 10)
+    by: Optional[Col] = None
 
 
 @dataclass(frozen=True)
@@ -360,6 +366,7 @@ def _term_to_tuple(term: Term) -> tuple:
             (int(term.cols[0]), int(term.cols[1])),
             "te",
             (int(term.k[0]), int(term.k[1])),
+            by_or_none(term.by),
         )
     if isinstance(term, TeMultiTerm):
         cols_tup = tuple(int(c) for c in term.cols)

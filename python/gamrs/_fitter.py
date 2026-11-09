@@ -227,6 +227,7 @@ def _resolve_term_cols(term: Term, col_names: Sequence[str]) -> Term:
                 _resolve_col(term.cols[1], col_names, "TeTerm"),
             ),
             k=term.k,
+            by=None if term.by is None else _resolve_col(term.by, col_names, "TeTerm"),
         )
     if isinstance(term, TeMultiTerm):
         return TeMultiTerm(
