@@ -7,6 +7,54 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+### Added
+
+- **Numeric `by=` on tensor products: mgcv's `te(x, z, by=w)`.** The term
+  contributes `w_i * f(x_i, z_i)` and is exactly 0 wherever `w = 0`. Use
+  `TeTerm(cols=("x", "z"), k=(4, 3), by="w")` on the typed path or
+  `TermSpec::Tensor { by: Some(col), .. }` from Rust. `w` may be one of the
+  margins: `te(x, z, by=x)` with `x >= 0` is a surface pinned to 0 along
+  `x = 0`. The rules are those of the CR `by=` from 0.15.0: a varying `w`
+  drops the sum-to-zero constraint, so the term keeps all `k_a * k_b`
+  coefficients, and a constant `w` keeps it. An unknown `by` column raises.
+  `TeMultiTerm` and `TiTerm` take no `by`.
+
+  Against mgcv 1.9.4, Gaussian REML, n=400, on `te(x, z, k=c(4, 3),
+  bs="cr", by=x)` and on `te(x, z, k=c(4, 3), bs="cr", by=w) + s(v, k=8,
+  bs="cr")`:
+
+  | quantity                    | by = x  | by = w  |
+  |-----------------------------|---------|---------|
+  | fitted values               | 5.7e-7  | 1.3e-5  |
+  | per-term contributions      | 9.1e-7  | 1.3e-5  |
+  | per-term edf                | 1.9e-5  | 2.2e-4  |
+  | REML score                  | 3.7e-6  | 5.6e-6  |
+
+  In both fits one margin's smoothing parameter runs along a ridge towards
+  infinity (the surface is linear in that margin). mgcv's default
+  `conv.tol` stops about 2e-5 above the REML minimum there, so the fixtures
+  are converged with `conv.tol = 1e-10`; gamrs stops a few 1e-6 short of
+  that, which is the whole of the difference above
+  (`tests/te_by_variable.rs`, `scripts/r/gen_te_by_fixtures.R`).
+
+### Fixed
+
+- **Tensor-product REML is mgcv's.** The score took `log|λS|₊` as a sum of
+  per-penalty determinants, `Σ_j (rank_j ρ_j + log|S_j|₊)`, which holds only
+  for penalties on disjoint coefficients. A tensor's margin penalties
+  overlap, so `te`, `ti` and n-margin `te` fits optimised a different
+  criterion from mgcv's, and `Mp` (the penalty null-space dimension) summed
+  the margin ranks past the term's width. Overlapping penalties now enter
+  as one determinant `log|Σ_j λ_j S_j|₊` with its exact gradient and
+  Hessian, and `Mp` uses the rank of their sum. On the existing plain `te`
+  parity fixtures (k=(5, 5), n=300 and n=1000) the largest relative
+  difference from mgcv's fitted values falls from 1.4e-2 and 3.2e-3 to
+  3.7e-7 and 4.8e-8. Fits without overlapping penalties are unchanged. The fix
+  is in the score that Gaussian and the PIRLS GLM families share; the
+  shape-aware scores (scat, Tweedie, negative binomial, ocat), the shash
+  fit and the Fellner-Schall outer loop still sum per-penalty
+  ranks, so tensors there keep the old approximation.
+
 ## [0.15.2] — 2026-10-23
 
 ### Fixed
