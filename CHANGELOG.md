@@ -7,6 +7,8 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-11-10
+
 ### Added
 
 - **Numeric `by=` on tensor products: mgcv's `te(x, z, by=w)`.** The term
