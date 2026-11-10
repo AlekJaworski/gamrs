@@ -94,6 +94,27 @@ is locked. Versions correspond to the published PyPI wheels.
   fit and the Fellner-Schall outer loop still sum per-penalty
   ranks, so tensors there keep the old approximation.
 
+- **A smoothing parameter could be thrown to the edge of the box and stay
+  there.** The outer Newton's concave bound jump (0.14.2) sends any axis
+  whose curvature is negative straight to the face its gradient points at,
+  on the reasoning that a concave axis has no interior minimum. That holds
+  for a saturating shape axis such as scat's ν. It does not hold for a ρ
+  axis: REML along log λ is S-shaped, so a ρ can be concave on its way down
+  to an interior minimum. With the tensor REML fix above, both ρ of a
+  `te(x, z, k=(4, 3))` term start out concave; on two of twelve real
+  Gaussian fits (n = 3,433 and 4,259, ten and eleven smooths) the first
+  iteration jumped them from 0 to 30, past mgcv's minimum at about
+  (4.0, 1.6), onto a plateau where the gradient is zero, and the fit
+  reported convergence 7.8 and 1.05 REML units above mgcv with the tensor
+  penalised flat. Only shape axes jump now (`bound_jump_axes` on the score);
+  ρ axes always take the Newton step. Both fits now match mgcv's REML to
+  0.013 and its tensor to $17 on a surface spanning $48k, and the other ten,
+  which never jumped, are unchanged. The same jump had been flattening ρ in
+  scat: on the `outer_indefinite_axis` seed-26 draw (a 15,000 quadratic) it
+  came back a straight line, edf 2.0000, where mgcv gives 3.048638; it now
+  gives 3.0486, and the test pins it. The 117-fit sweep takes 1,512 outer
+  iterations against 1,528 before.
+
 ## [0.15.2] — 2026-10-23
 
 ### Fixed

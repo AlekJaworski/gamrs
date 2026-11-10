@@ -898,6 +898,17 @@ pub trait ScoreDerivatives {
     fn axis_bounds(&self) -> Option<Vec<(f64, f64)>> {
         None
     }
+    /// The axes the outer may jump straight to a bound once they turn concave
+    /// (`outer::step::concave_bound_jump`). `None`, the default, is none of them.
+    /// Only a shape axis qualifies: a saturating ν stays concave all the way to
+    /// its face, but REML along a ρ axis is S-shaped, so negative curvature
+    /// there says nothing about where the minimum is. On a Gaussian
+    /// `te(cars, feet)` fit both tensor ρ were concave at the start, jumped from
+    /// 0 to 30 past a minimum at ρ ≈ (4.0, 1.6), and stopped on the plateau
+    /// there 7.8 REML units above mgcv.
+    fn bound_jump_axes(&self) -> Option<Vec<bool>> {
+        None
+    }
 
     /// Diagnostic counters. Concrete scores own a `FitStats` field and
     /// return `Some(&self.stats)` so the outer solver, line-search probes,

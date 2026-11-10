@@ -295,6 +295,7 @@ impl OuterSolver for NewtonWithHalving {
         let opts = &self.opts;
         let axis_caps = score.axis_step_caps();
         let axis_bounds = score.axis_bounds();
+        let jump_axes = score.bound_jump_axes();
         let mut theta = theta0;
         // Clamp the initial point to any per-axis bounds — defensive
         // against `theta0` coming in from a heuristic outside the box.
@@ -429,6 +430,7 @@ impl OuterSolver for NewtonWithHalving {
                     &h,
                     &scaled_step,
                     axis_bounds.as_ref(),
+                    jump_axes.as_ref(),
                     dim_tol,
                 ) {
                     let trial = step::clamp_to_box(&theta + &jump, axis_bounds.as_ref());

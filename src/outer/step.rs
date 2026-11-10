@@ -190,9 +190,12 @@ pub(super) fn cap_step(
 /// The candidate step that takes every CONCAVE axis straight to the bound its
 /// gradient points at, keeping the Newton component on all the others.
 ///
-/// Along an axis whose curvature is negative the score has no interior
-/// stationary point, so over a box its minimum in that direction is at a face:
-/// the location is known outright and does not need to be approached. Newton
+/// Along a saturating shape axis the curvature stays negative all the way to the
+/// face, so over the box the minimum in that direction is at the face: the
+/// location is known outright and does not need to be approached. That holds only
+/// for the axes the score names in `jumpable` (`bound_jump_axes`); a ρ axis can be
+/// concave on its way down to an interior minimum, and jumping it overshoots onto
+/// a plateau the gradient cannot leave. Newton
 /// instead proposes `-g_i/|H_ii|`, deliberately short for indefinite components
 /// (mgcv's note at `gam.fit3.r:1403`), which on the `outer_indefinite_axis`
 /// fixture is 0.02 per iteration for an axis 2.0 from its bound — ~100
@@ -217,13 +220,14 @@ pub(super) fn concave_bound_jump(
     h: &Array2<f64>,
     capped_step: &Array1<f64>,
     bnds: Option<&Vec<(f64, f64)>>,
+    jumpable: Option<&Vec<bool>>,
     dim_tol: f64,
 ) -> Option<Array1<f64>> {
-    let bnds = bnds?;
+    let (bnds, jumpable) = (bnds?, jumpable?);
     let mut jump = capped_step.clone();
     let mut jumped = false;
     for (i, &(lo, hi)) in bnds.iter().enumerate() {
-        if i >= jump.len() || h[[i, i]] >= -dim_tol {
+        if i >= jump.len() || !jumpable.get(i).copied().unwrap_or(false) || h[[i, i]] >= -dim_tol {
             continue;
         }
         let target = if g[i] < 0.0 {
@@ -582,14 +586,17 @@ mod tests {
         let h = array![[0.105, 0.0], [0.0, -9.6e-4]];
         let newton = array![0.83, 0.02];
         let bnds = vec![(-50.0, 50.0), (-10.0, 10.0)];
-        let jump = concave_bound_jump(&theta, &g, &h, &newton, Some(&bnds), 7e-6)
+        let shape = vec![false, true];
+        let jump = concave_bound_jump(&theta, &g, &h, &newton, Some(&bnds), Some(&shape), 7e-6)
             .expect("a concave axis 2.0 from its bound with a 0.02 step must jump");
         assert!((jump[1] - 2.0).abs() < 1e-12, "jump to hi, got {}", jump[1]);
         assert_eq!(jump[0], 0.83, "other axes keep their Newton component");
 
         // Sign flip on the gradient ⇒ the other face.
         let g_lo = array![-1e-5, 1.9e-5];
-        let jump_lo = concave_bound_jump(&theta, &g_lo, &h, &newton, Some(&bnds), 7e-6).unwrap();
+        let jump_lo =
+            concave_bound_jump(&theta, &g_lo, &h, &newton, Some(&bnds), Some(&shape), 7e-6)
+                .unwrap();
         assert!((jump_lo[1] - (-18.0)).abs() < 1e-12);
     }
 
@@ -598,21 +605,75 @@ mod tests {
         let theta = array![8.7, 8.0];
         let g = array![-1e-5, -1.9e-5];
         let bnds = vec![(-50.0, 50.0), (-10.0, 10.0)];
+        let shape = vec![false, true];
         let convex = array![[0.105, 0.0], [0.0, 9.6e-4]];
         assert!(
-            concave_bound_jump(&theta, &g, &convex, &array![0.83, 0.02], Some(&bnds), 7e-6)
-                .is_none(),
+            concave_bound_jump(
+                &theta,
+                &g,
+                &convex,
+                &array![0.83, 0.02],
+                Some(&bnds),
+                Some(&shape),
+                7e-6
+            )
+            .is_none(),
             "a positive-curvature axis has an interior optimum to find"
         );
         let concave = array![[0.105, 0.0], [0.0, -9.6e-4]];
         assert!(
-            concave_bound_jump(&theta, &g, &concave, &array![0.83, 1.5], Some(&bnds), 7e-6)
-                .is_none(),
+            concave_bound_jump(
+                &theta,
+                &g,
+                &concave,
+                &array![0.83, 1.5],
+                Some(&bnds),
+                Some(&shape),
+                7e-6
+            )
+            .is_none(),
             "Newton covers 2.0 in ~1.3 steps here; the probe would be waste"
         );
         assert!(
-            concave_bound_jump(&theta, &g, &concave, &array![0.83, 0.02], None, 7e-6).is_none(),
+            concave_bound_jump(
+                &theta,
+                &g,
+                &concave,
+                &array![0.83, 0.02],
+                None,
+                Some(&shape),
+                7e-6
+            )
+            .is_none(),
             "no box, no bound to jump to"
+        );
+    }
+
+    #[test]
+    fn a_concave_rho_axis_is_never_jumped() {
+        // Both axes concave and heading for hi, as both tensor ρ were at the start
+        // of the Gaussian te(cars, feet) fit that jumped 0 -> 30 past its minimum.
+        let theta = array![0.0, 0.0];
+        let g = array![-2.2, -1.5];
+        let h = array![[-0.3, 0.0], [0.0, -0.2]];
+        let newton = array![0.4, 0.3];
+        let bnds = vec![(-30.0, 30.0), (-30.0, 30.0)];
+        assert!(
+            concave_bound_jump(
+                &theta,
+                &g,
+                &h,
+                &newton,
+                Some(&bnds),
+                Some(&vec![false, false]),
+                7e-6
+            )
+            .is_none(),
+            "a ρ axis can be concave on the way down to an interior minimum"
+        );
+        assert!(
+            concave_bound_jump(&theta, &g, &h, &newton, Some(&bnds), None, 7e-6).is_none(),
+            "a score that names no jump axes gets no jump"
         );
     }
 

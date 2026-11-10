@@ -193,6 +193,18 @@ where
         Some(caps)
     }
 
+    fn bound_jump_axes(&self) -> Option<Vec<bool>> {
+        let mut axes = vec![false; self.s_list.len()];
+        axes.extend(
+            self.family_base
+                .loss
+                .shape_axis_step_caps()
+                .iter()
+                .map(|_| true),
+        );
+        Some(axes)
+    }
+
     fn axis_bounds(&self) -> Option<Vec<(f64, f64)>> {
         // ρ axes: bounded above where the criterion stops being computable.
         // `A = X'WX + Σλ_jS_j` is factorised as is, so once λ_j·S_j dwarfs X'WX

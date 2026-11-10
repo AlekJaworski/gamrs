@@ -106,6 +106,16 @@ fn saturating_shape_axis_fits_inside_the_budget() {
             "seed {seed}: fitted curve is {dev:.3e} off the generating signal"
         );
     }
+    // mgcv 1.9.4, `gam(y ~ s(x, bs="cr", k=12), family=scat(), method="REML")` on
+    // the seed-26 draw: edf 3.048638. While ρ could take the concave bound jump it
+    // was thrown to the upper face on this draw and came back a straight line, edf
+    // 2.0000, on a signal with a 15,000 quadratic in it.
+    let (x, y) = fixture(26, 15_000.0);
+    let edf = fit(&x, &y).edf_total;
+    assert!(
+        (edf - 3.048638).abs() < 1e-3,
+        "seed 26: edf {edf:.6}, mgcv 3.048638"
+    );
 }
 
 /// The concave-crawl draw: 220 iterations before the jump rule, ~30 after. It is
