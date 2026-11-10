@@ -12,6 +12,7 @@ use crate::basis::RandomEffectsBasis;
 use crate::error::{GamrsError, Result};
 use crate::traits::Basis;
 
+use super::by::scale_rows;
 use super::{
     prepend_intercept, rank_and_log_pseudo_det, DesignStrategy, Predictor, PreparedDesign,
 };
@@ -42,8 +43,15 @@ impl RePredictor {
 
     /// Build the raw one-hot design + sorted levels for column
     /// `x_col_idx`. Shared with `Additive` so a single column slice flows
-    /// through both code paths.
-    pub(crate) fn fit_raw(x: ArrayView2<f64>, x_col_idx: usize) -> Result<RawReFit> {
+    /// through both code paths. With a numeric `by` the rows are scaled by
+    /// `x[, by]`. As in mgcv, every level keeps its column, including one
+    /// seen only where `w = 0`: that column is all zero, and the identity
+    /// penalty holds its coefficient at exactly 0.
+    pub(crate) fn fit_raw(
+        x: ArrayView2<f64>,
+        x_col_idx: usize,
+        by: Option<usize>,
+    ) -> Result<RawReFit> {
         let x_col = x.column(x_col_idx);
         let basis = RandomEffectsBasis::from_data(x_col);
         let levels = basis.levels.clone();
@@ -51,7 +59,8 @@ impl RePredictor {
             return Err(GamrsError::InvalidParameter("Re basis: x is empty".into()));
         }
         let x_view = x.slice(ndarray::s![.., x_col_idx..x_col_idx + 1]);
-        let raw = basis.evaluate(x_view);
+        let mut raw = basis.evaluate(x_view);
+        scale_rows(&mut raw, by.map(|b| x.column(b)));
         Ok(RawReFit { levels, raw })
     }
 }
@@ -70,7 +79,7 @@ pub struct Re;
 
 impl DesignStrategy for Re {
     fn prepare(&self, x: ArrayView2<f64>) -> Result<PreparedDesign> {
-        let fit = RePredictor::fit_raw(x, 0)?;
+        let fit = RePredictor::fit_raw(x, 0, None)?;
         let n_levels = fit.levels.len();
         let x_design = prepend_intercept(fit.raw.view());
         let p = x_design.ncols();

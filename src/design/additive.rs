@@ -68,8 +68,9 @@ pub enum TermSpec {
         pc: Option<f64>,
         by: Option<usize>,
     },
-    /// Random-effect (`bs="re"`) on `x.column(col)`.
-    Re { col: usize },
+    /// Random-effect (`bs="re"`) on `x.column(col)`. `by` as for
+    /// [`Self::Cr`]: mgcv's `s(g, by=w, bs="re")`, contributing `w_i · b_{g_i}`.
+    Re { col: usize, by: Option<usize> },
     /// Anisotropic tensor product `te(x_{col_a}, x_{col_b})` — two
     /// smoothing parameters per term (one per margin). Marginals default
     /// to CR + sum-to-zero centring (`bs_a = bs_b = MarginKind::Cr`).
@@ -116,7 +117,7 @@ impl TermSpec {
         match self {
             Self::Cr { col, .. } => *col,
             Self::CrStable { col, .. } => *col,
-            Self::Re { col } => *col,
+            Self::Re { col, .. } => *col,
             Self::Parametric { col } => *col,
             Self::Tensor { col_a, .. } => *col_a,
             Self::TeMulti { cols, .. } | Self::Ti { cols, .. } | Self::Tps { cols, .. } => cols[0],
@@ -131,7 +132,7 @@ impl TermSpec {
             Self::Cr { col, by, .. } | Self::CrStable { col, by, .. } => {
                 std::iter::once(*col).chain(*by).collect()
             }
-            Self::Re { col } => vec![*col],
+            Self::Re { col, by } => std::iter::once(*col).chain(*by).collect(),
             Self::Parametric { col } => vec![*col],
             Self::Tensor {
                 col_a, col_b, by, ..
@@ -349,8 +350,8 @@ impl DesignStrategy for Additive {
                     per_term_predictor.push(ByPredictor::wrap(pred, col, by));
                     cols_used.push(t.cols());
                 }
-                TermSpec::Re { col } => {
-                    let fit = RePredictor::fit_raw(x, col)?;
+                TermSpec::Re { col, by } => {
+                    let fit = RePredictor::fit_raw(x, col, by)?;
                     let n_levels = fit.levels.len();
                     per_term_dim.push(n_levels);
                     per_term_centred.push(fit.raw);
@@ -360,8 +361,9 @@ impl DesignStrategy for Additive {
                         s_re[[j, j]] = 1.0;
                     }
                     per_term_s_smooth.push(vec![s_re]);
-                    per_term_predictor.push(Predictor::Re(RePredictor { levels: fit.levels }));
-                    cols_used.push(vec![col]);
+                    let pred = Predictor::Re(RePredictor { levels: fit.levels });
+                    per_term_predictor.push(ByPredictor::wrap(pred, col, by));
+                    cols_used.push(t.cols());
                 }
                 TermSpec::Tensor {
                     col_a,

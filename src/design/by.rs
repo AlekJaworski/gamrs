@@ -1,7 +1,8 @@
 //! mgcv's numeric `by=` variable: the term contributes `w_i · f(x_i)`.
 //!
 //! The fit-time scaling happens where the term's basis is built (see
-//! `CrPredictor::fit_centred`, `TensorTermFit::build`); [`ByPredictor`]
+//! `CrPredictor::fit_centred`, `TensorTermFit::build`,
+//! `RePredictor::fit_raw`); [`ByPredictor`]
 //! wraps that term's own predictor and applies the same scaling to new rows.
 
 use ndarray::{s, Array2, ArrayView1, ArrayView2, Axis};

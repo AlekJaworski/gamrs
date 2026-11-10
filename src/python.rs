@@ -1473,7 +1473,10 @@ fn build_term_specs(terms: &Bound<'_, pyo3::types::PyList>) -> PyResult<Vec<Term
                         by: by_column(tup)?,
                     }
                 }
-                "re" => TermSpec::Re { col },
+                "re" => TermSpec::Re {
+                    col,
+                    by: by_column(tup)?,
+                },
                 "parametric" | "linear" => TermSpec::Parametric { col },
                 other => {
                     return Err(PyValueError::new_err(format!(
