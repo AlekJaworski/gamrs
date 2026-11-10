@@ -7,6 +7,8 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+## [0.16.1] — 2026-11-10
+
 ### Fixed
 
 - **A converged fit could come back `converged_ = False`.** After the outer
