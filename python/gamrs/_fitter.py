@@ -215,7 +215,10 @@ def _resolve_term_cols(term: Term, col_names: Sequence[str]) -> Term:
             term, col=_resolve_col(term.col, col_names, name), by=by
         )
     if isinstance(term, ReTerm):
-        return ReTerm(col=_resolve_col(term.col, col_names, "ReTerm"))
+        return ReTerm(
+            col=_resolve_col(term.col, col_names, "ReTerm"),
+            by=None if term.by is None else _resolve_col(term.by, col_names, "ReTerm"),
+        )
     if isinstance(term, ParametricTerm):
         return ParametricTerm(
             col=_resolve_col(term.col, col_names, "ParametricTerm")
@@ -435,7 +438,8 @@ class Gam:
         # mgcv's numeric `s(x, by=w)`: {smooth column: by column}. The by
         # column is data for the smooth, not a term of its own; naming it in
         # predictor_basis_map (e.g. "parametric") adds it as one too. Only
-        # the predictors= path reads this; the terms= path sets CrTerm(by=).
+        # the predictors= path reads this; the terms= path sets CrTerm(by=)
+        # or ReTerm(by=).
         self.term_by_mapping: dict[str, str] = dict(term_by_mapping or {})
         self.predictor_basis_map: dict[str, str] = dict(predictor_basis_map or {})
         self.consider_categorical = consider_categorical
@@ -1150,9 +1154,10 @@ class Gam:
             pc = self.term_pc_mapping.get(pname)
             by_name = self.term_by_mapping.get(pname)
             bs_override = self.predictor_basis_map.get(pname)
-            if by_name is not None and bs_override in ("parametric", "linear", "re"):
+            by = None if by_name is None else list(cols).index(by_name)
+            if by_name is not None and bs_override in ("parametric", "linear"):
                 raise ValueError(
-                    f"term_by_mapping[{pname!r}]={by_name!r} needs a CR smooth, but "
+                    f"term_by_mapping[{pname!r}]={by_name!r} needs a CR smooth or an 're' term, but "
                     f"predictor_basis_map makes {pname!r} a {bs_override!r} term."
                 )
             if bs_override in ("parametric", "linear"):
@@ -1163,7 +1168,7 @@ class Gam:
                 continue
             if bs_override == "re":
                 warn_pc_unapplied(pname, pc, "predictor_basis_map made it a 're' term")
-                out.append(ReTerm(col=col_idx))
+                out.append(ReTerm(col=col_idx, by=by))
                 continue
             if bs_override is not None and bs_override not in ("cr",):
                 warnings.warn(
@@ -1277,7 +1282,6 @@ class Gam:
                     UserWarning,
                     stacklevel=3,
                 )
-            by = None if by_name is None else list(cols).index(by_name)
             out.append(CrTerm(col=col_idx, k=k, pc=pc, by=by))
         return out
 

@@ -164,7 +164,12 @@ full port story.
   An unusable `term_by_mapping` entry raises. Not combinable with `pc`.
   On a 2-margin tensor, `te(x0, x1, by=w)` via
   `TeTerm(cols=("x0", "x1"), by="w")`; `w` may be one of the margins.
-  CR smooths and `TeTerm` only.
+  On a random effect, `s(g, by=w, bs="re")` via `ReTerm("g", by="w")` or
+  `predictor_basis_map={"g": "re"}` with `term_by_mapping={"g": "w"}`. A
+  random effect is fully penalised, so naming `w` as a parametric term is
+  not aliased: `golf + s(course, by=golf, bs="re")` fits the golf mean plus
+  per-course deviations, and a placeholder course seen only on non-golf rows
+  is fitted as 0. CR smooths, `TeTerm` and `ReTerm` only.
 - **Parametric (linear)** — unsmoothed raw column via `ParametricTerm` or
   `predictor_basis_map={"x": "parametric"}` (alias `"linear"`). Use for
   0/1 indicators, counts, or anything you want unpenalised. mgcv R's

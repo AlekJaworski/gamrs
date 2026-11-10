@@ -235,8 +235,15 @@ class CrStableTerm:
 @dataclass(frozen=True)
 class ReTerm:
     """Random-effect term `s(x_col, bs='re')` — one-hot encoded grouping.
-    ``col`` accepts an int index or a string column name."""
+    ``col`` accepts an int index or a string column name.
+
+    ``by`` is mgcv's numeric ``s(g, by=w, bs='re')``: the term contributes
+    ``w_i * b_{g_i}`` and is exactly 0 where ``w = 0``. Every level keeps
+    its coefficient, as in mgcv; a level seen only where ``w = 0`` is
+    fitted as exactly 0.
+    """
     col: Col
+    by: Optional[Col] = None
 
 
 @dataclass(frozen=True)
@@ -358,7 +365,7 @@ def _term_to_tuple(term: Term) -> tuple:
             int(term.col), "cr_stable", int(term.k), pc_or_none(term.pc), by_or_none(term.by)
         )
     if isinstance(term, ReTerm):
-        return (int(term.col), "re")
+        return (int(term.col), "re", None, None, by_or_none(term.by))
     if isinstance(term, ParametricTerm):
         return (int(term.col), "parametric")
     if isinstance(term, TeTerm):
