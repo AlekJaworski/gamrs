@@ -121,20 +121,30 @@ where
     // Final fit: rebuild family with shape from `outer.theta[n_terms..]`.
     let rho_hat: Array1<f64> = outer.theta.slice(ndarray::s![..n_terms]).to_owned();
     let family_final = rebuild_final_family(&outer.theta);
-    let final_inner = score.inner_builder.build(
-        family_final.clone(),
-        prep.x_design.clone(),
-        y.to_owned(),
-        prior,
-        prep.s_list.clone(),
-        // edf and vcov read the Fisher pair, and this is the one fit they read
-        // — so ask for it here and nowhere else.
-        PirlsOpts {
-            want_fisher: true,
-            ..PirlsOpts::default()
-        },
-    );
-    let final_fit: GaussianInnerFit<S> = final_inner.fit(&rho_hat)?;
+    let final_inner = |eta_init: Option<Array1<f64>>| {
+        score.inner_builder.build(
+            family_final.clone(),
+            prep.x_design.clone(),
+            y.to_owned(),
+            prior.clone(),
+            prep.s_list.clone(),
+            // edf and vcov read the Fisher pair, and this is the one fit they read
+            // — so ask for it here and nowhere else.
+            PirlsOpts {
+                want_fisher: true,
+                eta_init,
+                ..PirlsOpts::default()
+            },
+        )
+    };
+    let cold: GaussianInnerFit<S> = final_inner(None).fit(&rho_hat)?;
+    // An unconverged cold solve is redone from the search's last η, as in driver.rs.
+    let final_fit = if cold.converged {
+        cold
+    } else {
+        let warm = score.last_eta.borrow().clone().unwrap_or(cold.eta);
+        final_inner(Some(warm)).fit(&rho_hat)?
+    };
 
     let edf = compute_edf(&prep.x_design, &final_fit.a_weights, &final_fit);
     let scale = scale_fn(&family_final, &final_fit, &outer.theta);

@@ -764,7 +764,7 @@ where
     /// `InnerSolver::fit_warm` so PIRLS starts from a near-converged β
     /// instead of `Loss::initial_mu` — typically saves 2-5 IRLS iters
     /// per trial λ. Port of mgcv_rust `gam_optimized.rs:1434-1472`.
-    fn ift_propagated_beta(&self, theta: &Array1<f64>) -> Option<Array1<f64>> {
+    pub(crate) fn ift_propagated_beta(&self, theta: &Array1<f64>) -> Option<Array1<f64>> {
         if !self.loss.allows_no_refresh() {
             return None;
         }

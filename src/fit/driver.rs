@@ -315,7 +315,16 @@ where
     };
 
     // Reuse the score's inner solver for the final fit (closes audit §B4).
-    let final_fit: GaussianInnerFit<S> = score.inner.fit(&outer.theta)?;
+    let cold: GaussianInnerFit<S> = score.inner.fit(&outer.theta)?;
+    // A cold solve that ran out of iterations is redone from the β the search last accepted, or
+    // from where it stopped when there is none; see the shape-aware final fit below for the fit
+    // that needed it. One that converged is returned exactly as before.
+    let final_fit = if cold.converged {
+        cold
+    } else {
+        let warm = score.ift_propagated_beta(&outer.theta).unwrap_or(cold.beta);
+        score.inner.fit_warm(&outer.theta, Some(&warm))?
+    };
     let edf = compute_edf(&prep.x_design, &final_fit.a_weights, &final_fit);
     let scale = scale_fn(&final_fit, edf);
     let vcov = compute_vcov(&final_fit, scale);
@@ -460,20 +469,34 @@ where
     let n_terms = prep.s_list.len();
     let rho_hat: Array1<f64> = outer.theta.slice(ndarray::s![..n_terms]).to_owned();
     let family_final = rebuild_final_family(&outer.theta);
-    let final_inner = score.inner_builder.build(
-        family_final.clone(),
-        prep.x_design.clone(),
-        y.to_owned(),
-        prior,
-        prep.s_list.clone(),
-        // edf and vcov read the Fisher pair, and this is the one fit they read
-        // — so ask for it here and nowhere else.
-        PirlsOpts {
-            want_fisher: true,
-            ..PirlsOpts::default()
-        },
-    );
-    let final_fit: GaussianInnerFit<S> = final_inner.fit(&rho_hat)?;
+    let final_inner = |eta_init: Option<Array1<f64>>| {
+        score.inner_builder.build(
+            family_final.clone(),
+            prep.x_design.clone(),
+            y.to_owned(),
+            prior.clone(),
+            prep.s_list.clone(),
+            // edf and vcov read the Fisher pair, and this is the one fit they read
+            // — so ask for it here and nowhere else.
+            PirlsOpts {
+                want_fisher: true,
+                eta_init,
+                ..PirlsOpts::default()
+            },
+        )
+    };
+    let cold: GaussianInnerFit<S> = final_inner(None).fit(&rho_hat)?;
+    // From β = 0 a t fit with 54 sparse random-effect groups needed ~110 PIRLS iterations (the
+    // deviance change shrank 0.911x per iteration), stopped at the cap of 50, and reported the
+    // whole fit unconverged although the outer had converged. Carrying on from where it stopped
+    // hit the cap again (about 63 more were needed at that rate); from the search's last η it took 15. So an
+    // unconverged solve is redone from there, and one that converged is returned exactly as before.
+    let final_fit = if cold.converged {
+        cold
+    } else {
+        let warm = score.last_eta.borrow().clone().unwrap_or(cold.eta);
+        final_inner(Some(warm)).fit(&rho_hat)?
+    };
 
     let edf = compute_edf(&prep.x_design, &final_fit.a_weights, &final_fit);
     let scale = scale_fn(&family_final, &final_fit, &outer.theta);

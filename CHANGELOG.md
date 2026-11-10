@@ -7,6 +7,27 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A converged fit could come back `converged_ = False`.** After the outer
+  search, the fit is solved once more at the chosen smoothing parameters, from
+  β = 0. A t fit with many tiny random-effect groups converges slowly in PIRLS:
+  on a 2,932-row golf refit with 54 groups of 1–9 rows under `by=`, the
+  deviance change shrank only 0.911× per iteration, so that solve needed about
+  110 iterations, stopped at the cap of 50, and `converged_` (the search's flag
+  and this solve's, together) came back False with a warning, although the
+  search had converged (gradient 2.3e-4 against 3.8e-4). A final solve that
+  stops at the cap is now redone from where the search left off: 15 more
+  iterations, converged, and fitted values $56 from mgcv's against $192 before.
+  A final solve that converges from β = 0 is returned exactly as before, so
+  every fit that converged on 0.16.0 gives bit-identical results. The redo
+  starts from the search's last η for the shape-aware fits (t, Tweedie,
+  negative binomial, ocat), and for the GLM and quantile fits from the β the
+  search last accepted where the family caches one (Poisson, Gamma, binomial,
+  negative binomial), else from where the capped solve stopped. On a synthetic
+  stand-in of the same shape (50 groups of 1–3 rows, t(3.7) noise) the fit goes
+  from False to True; the test pins mgcv's ν and σ there.
+
 ## [0.16.0] — 2026-11-10
 
 ### Added

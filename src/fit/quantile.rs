@@ -192,7 +192,14 @@ pub(crate) fn fit_quantile_from_prep<S: LinearSolver>(
         NewtonWithHalving::new(crate::outer::resolve_tuning(&score.loss).to_newton_opts());
     let outer = outer_solver.minimize(&score, Array1::<f64>::zeros(n_terms))?;
 
-    let final_fit: GaussianInnerFit<S> = score.inner.fit(&outer.theta)?;
+    let cold: GaussianInnerFit<S> = score.inner.fit(&outer.theta)?;
+    // An unconverged cold solve is redone from where the search left off, as in driver.rs.
+    let final_fit = if cold.converged {
+        cold
+    } else {
+        let warm = score.ift_propagated_beta(&outer.theta).unwrap_or(cold.beta);
+        score.inner.fit_warm(&outer.theta, Some(&warm))?
+    };
     let edf = compute_edf(&prep.x_design, &final_fit.a_weights, &final_fit);
     let edf_per_term = compute_edf_per_term(
         &prep.s_list,
