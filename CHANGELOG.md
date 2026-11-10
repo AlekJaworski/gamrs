@@ -37,6 +37,45 @@ is locked. Versions correspond to the published PyPI wheels.
   that, which is the whole of the difference above
   (`tests/te_by_variable.rs`, `scripts/r/gen_te_by_fixtures.R`).
 
+- **Numeric `by=` on random effects: mgcv's `s(g, by=w, bs="re")`.** The
+  term contributes `w_i * b_{g_i}` and is exactly 0 wherever `w = 0`. Use
+  `ReTerm("g", by="w")` on the typed path, `predictor_basis_map={"g":
+  "re"}` with `term_by_mapping={"g": "w"}` on the predictors path, or
+  `TermSpec::Re { by: Some(col), .. }` from Rust. With `w` a 0/1 indicator
+  this is a random effect on a subset of rows: `golf + s(course, by=golf,
+  bs="re")` fits a golf mean plus a shrunk deviation per course, and
+  non-golf rows can carry any placeholder course. The identity penalty is
+  unchanged, and the derivative in `g` stays 0.
+
+  mgcv keeps a column for every level, including a level seen only where
+  `w = 0`, such as the placeholder course. That column is all zero, and the
+  identity penalty holds its coefficient at exactly 0 (edf 0) rather than
+  leaving it unidentified. gamrs does the same. A random effect has no
+  centring constraint, so the CR rule about a varying `w` has nothing to
+  drop, and `w` named as a parametric term is not aliased with the term:
+  the penalty separates the mean from the deviations.
+
+  Against mgcv 1.9.4, Gaussian REML, n=400, on `golf + s(course, by=golf,
+  bs="re") + s(x, k=8, bs="cr")` (8 courses of 60 down to 1 row, 242
+  non-golf rows on placeholder course 0) and on the random slope `w + s(g,
+  by=w, bs="re") + s(x, k=8, bs="cr")` (`w` a covariate that is 0 on a
+  fifth of the rows, one group only ever at `w = 0`):
+
+  | quantity                        | golf    | slope   |
+  |---------------------------------|---------|---------|
+  | fitted values                   | 5.3e-6  | 8.9e-10 |
+  | per-term contributions          | 4.9e-6  | 8.8e-10 |
+  | random-effect coefficients      | 4.9e-6  | 3.2e-10 |
+  | per-term edf                    | 1.8e-5  | 2.6e-9  |
+  | REML score                      | 4.7e-9  | 1.1e-12 |
+  | scale (relative)                | 1.2e-6  | 1.1e-9  |
+  | sp (relative)                   | 4.2e-5  | 1.1e-7  |
+
+  The fixtures are mgcv converged with `conv.tol = 1e-10`. On the golf fit
+  gamrs's outer Newton stops 4.7e-9 above that REML minimum, with the sp
+  4e-5 apart; the golf column above is that stopping point
+  (`tests/re_by_variable.rs`, `scripts/r/gen_re_by_fixtures.R`).
+
 ### Fixed
 
 - **Tensor-product REML is mgcv's.** The score took `log|λS|₊` as a sum of
