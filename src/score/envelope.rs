@@ -17,8 +17,9 @@
 //! `inner_fit.trace_a_inv(...)` rather than touching the factor directly.
 
 use std::marker::PhantomData;
+use std::ops::Range;
 
-use ndarray::{Array1, Array2};
+use ndarray::{s, Array1, Array2, ArrayView2};
 
 use crate::error::Result;
 use crate::family::Gaussian;
@@ -74,6 +75,33 @@ pub struct EnvelopeScore<
     /// Only meaningful for families that opt in via `Loss::allows_no_refresh`.
     pub accepted_state: std::cell::RefCell<Option<EnvelopeAcceptedState>>,
     pub log_det_s: PenaltyLogDet,
+    /// Where each `S_j` is nonzero, so traces and `A⁻¹S_j` skip the zeros.
+    pub s_blocks: Vec<PenaltyBlock>,
+}
+
+/// The smallest square block, on the diagonal of a penalty, that holds all
+/// its nonzero entries.
+/// A random-effect term's block is diagonal (an identity), and `A⁻¹S_j` on
+/// a diagonal block is a column scaling, not a product.
+#[derive(Clone, Debug)]
+pub struct PenaltyBlock {
+    pub range: Range<usize>,
+    pub diagonal: bool,
+}
+
+impl PenaltyBlock {
+    pub fn of(s: &Array2<f64>) -> Self {
+        let nonzero: Vec<usize> = (0..s.nrows())
+            .filter(|&i| s.row(i).iter().chain(s.column(i)).any(|&v| v != 0.0))
+            .collect();
+        let range = match (nonzero.first(), nonzero.last()) {
+            (Some(&a), Some(&b)) => a..b + 1,
+            _ => 0..0,
+        };
+        let block = s.slice(s![range.clone(), range.clone()]);
+        let diagonal = block.indexed_iter().all(|((r, c), &v)| r == c || v == 0.0);
+        Self { range, diagonal }
+    }
 }
 
 /// IFT-propagation state cached by `EnvelopeScore` for the NoRefresh
@@ -123,6 +151,7 @@ where
         debug_assert_eq!(s_list.len(), rank_s_list.len());
         debug_assert_eq!(s_list.len(), log_pseudo_det_s_list.len());
         let log_det_s = PenaltyLogDet::new(&s_list, &rank_s_list, &log_pseudo_det_s_list);
+        let s_blocks = s_list.iter().map(PenaltyBlock::of).collect();
         Self {
             inner,
             loss,
@@ -137,6 +166,7 @@ where
             stats: crate::stats::FitStats::new(),
             accepted_state: std::cell::RefCell::new(None),
             log_det_s,
+            s_blocks,
         }
     }
 }
@@ -359,7 +389,6 @@ where
         // outer probe — the 10-D Gaussian fit gap. mgcv_rust does the same
         // (`reml_gradient_mgcv_exact_closed_form_inner` caches `system.a_inv`).
         let a_inv = inner.a_inv();
-        let p_dim = inner.p;
         let mut bsb_per_term: Vec<f64> = Vec::with_capacity(n_terms);
         let mut tr_hinv_s_per_term: Vec<f64> = Vec::with_capacity(n_terms);
         let mut bsb_total = 0.0_f64; // Σ_j λ_j β'S_jβ — used in dp / σ²-eq
@@ -377,8 +406,9 @@ where
             // order from `src/reml/mod.rs:914-918`, identical FP to
             // `LinearSolver::trace_a_inv` but without the per-call invert.
             let mut tr_hinv_s_j = 0.0_f64;
-            for ii in 0..p_dim {
-                for kk in 0..p_dim {
+            let r = self.s_blocks[j].range.clone();
+            for ii in r.clone() {
+                for kk in r.clone() {
                     tr_hinv_s_j += a_inv[[ii, kk]] * s_j[[kk, ii]];
                 }
             }
@@ -611,6 +641,18 @@ where
         }))
     }
 
+    /// The nonzero columns of `A⁻¹S_j`: `p × k_j` for `S_j`'s `k_j`-wide block.
+    fn ainv_s_block(&self, a_inv: &Array2<f64>, j: usize) -> Array2<f64> {
+        let PenaltyBlock { range, diagonal } = &self.s_blocks[j];
+        let cols = a_inv.slice(s![.., range.clone()]);
+        let block: ArrayView2<f64> = self.s_list[j].slice(s![range.clone(), range.clone()]);
+        if *diagonal {
+            &cols * &block.diag()
+        } else {
+            cols.dot(&block)
+        }
+    }
+
     /// Analytic outer-Newton Hessian `H[i,j] = ∂g[j]/∂ρ_i`, assembled from
     /// the converged inner fit's cached quantities — NO extra inner fits.
     ///
@@ -687,11 +729,8 @@ where
             ainv_s_beta.push(ainv_sjb);
         }
 
-        // Per-term A⁻¹ S_j (dense p×p) for the trace product `tr(A⁻¹S_i A⁻¹S_j)`.
-        let mut ainv_s: Vec<Array2<f64>> = Vec::with_capacity(m);
-        for j in 0..m {
-            ainv_s.push(a_inv.dot(&self.s_list[j]));
-        }
+        // Per-term A⁻¹ S_j (its nonzero columns) for `tr(A⁻¹S_i A⁻¹S_j)`.
+        let ainv_s: Vec<Array2<f64>> = (0..m).map(|j| self.ainv_s_block(a_inv, j)).collect();
 
         // === W-chain prep (GLM / quantile families only) ===
         // `dW/dρ_i = diag(dw_deta · (X·dβ/dρ_i))`, `dβ/dρ_i = −λ_i A⁻¹S_iβ`.
@@ -724,7 +763,10 @@ where
                 //              = row_k(X·ainv_s[j]·A⁻¹) · row_k(X)
                 let mut lev_mj: Vec<Array1<f64>> = Vec::with_capacity(m);
                 for j in 0..m {
-                    let xmj = x.dot(&ainv_s[j]).dot(a_inv); // (n×p)
+                    let r = self.s_blocks[j].range.clone();
+                    let mut ainv_s_j = Array2::<f64>::zeros((inner.p, inner.p));
+                    ainv_s_j.slice_mut(s![.., r]).assign(&ainv_s[j]);
+                    let xmj = x.dot(&ainv_s_j).dot(a_inv); // (n×p)
                     let mut diag = Array1::<f64>::zeros(n);
                     for k in 0..n {
                         let mut s = 0.0;
@@ -754,13 +796,14 @@ where
             for j in i..m {
                 // --- 1) trace curvature (dxxs_d2) ---
                 // tr(A⁻¹S_i A⁻¹S_j) = Σ (A⁻¹S_i) ⊙ (A⁻¹S_j)ᵀ
+                // over the nonzero columns only: r in block j, c in block i.
                 let mut tr_prod = 0.0_f64;
                 let ai = &ainv_s[i];
                 let aj = &ainv_s[j];
-                let p = ai.nrows();
-                for r in 0..p {
-                    for c in 0..p {
-                        tr_prod += ai[[r, c]] * aj[[c, r]];
+                let (ri, rj) = (&self.s_blocks[i].range, &self.s_blocks[j].range);
+                for r in rj.clone() {
+                    for c in ri.clone() {
+                        tr_prod += ai[[r, c - ri.start]] * aj[[c, r - rj.start]];
                     }
                 }
                 let mut term_trace = -lambda[i] * lambda[j] * tr_prod;

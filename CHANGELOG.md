@@ -30,6 +30,17 @@ is locked. Versions correspond to the published PyPI wheels.
   the random-effect fit above, 38 of its 46 evaluations are such probes: 14.8 s
   → 11.2 s. Results are bit-identical, on that fit and on every fit in the
   Python battery.
+- **Traces and the analytic Hessian skip each penalty's zeros.** Every
+  `tr(A⁻¹S_j)`, `A⁻¹S_j` and `tr(A⁻¹S_i A⁻¹S_j)` ran over the full p × p,
+  although each `S_j` is nonzero only on its own term's block. They now run
+  over that block, and a diagonal block (a random effect's identity) scales
+  columns instead of multiplying. On the random-effect fit above: 11.2 s →
+  4.5 s, the same 8 iterations and 46 evaluations; REML score 2e-12
+  (relative), coefficients 2e-10 and fitted values 8e-11 from before the
+  change. Only the `quality` smoothing parameter (λ ≈ 3e8, edf 1.003, on a
+  flat ridge) moves, by 4e-5. Across the Python battery: fitted values 4e-9,
+  REML scores 1e-9 from the step before; smoothing parameters below 4e5 within
+  2e-8.
 
 ## [0.16.1] — 2026-11-10
 
