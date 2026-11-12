@@ -41,6 +41,14 @@ is locked. Versions correspond to the published PyPI wheels.
   flat ridge) moves, by 4e-5. Across the Python battery: fitted values 4e-9,
   REML scores 1e-9 from the step before; smoothing parameters below 4e5 within
   2e-8.
+- **Setup eigendecomposes each penalty's block, not the embedded p × p.** A
+  penalty's rank and `log|S|+` come from its nonzero block, and a diagonal
+  block's eigenvalues are its diagonal. On the random-effect fit above:
+  4.5 s → 3.1 s. Only the constant `log|S|+` moves (4e-16 relative), so λ,
+  coefficients and fitted values are bit-identical there. In the Python
+  battery one fit moves: a near-separable ordered-categorical fit, by 1e-7
+  in fitted values and REML score (relative), where the rounding of that
+  constant tips a line-search comparison.
 
 ## [0.16.1] — 2026-11-10
 
