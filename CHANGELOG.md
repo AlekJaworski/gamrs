@@ -7,6 +7,22 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+### Performance
+
+- **Fits with many coefficients spent most of their time inverting the
+  penalised Hessian.** Every score evaluation formed `A⁻¹` from its Cholesky
+  factor by a hand-written forward substitution. It now calls LAPACK
+  (`dpotri`) on the same factor. On a Gaussian REML fit with a 947-level
+  random effect and seven CR smooths (n=1,191, 1,005 coefficients), single
+  thread, the median of three fits drops from 34.6 s to 14.8 s, with the
+  same 8 outer iterations and 46 score evaluations. The REML score agrees to
+  6e-12 (relative), coefficients to 4e-11 and fitted values to 2e-11. Across
+  the Python smoke/parity/slow battery, fitted values move by at most 4e-9
+  and REML scores by at most 3e-8 (relative). Smoothing parameters that sit
+  on a flat ridge — λ above 1e6, a term already fitted as a straight line
+  (edf ≈ 1) — can stop at a slightly different point, up to 5% in λ on a
+  pure-linear test case, with no visible effect on the fit.
+
 ## [0.16.1] — 2026-11-10
 
 ### Fixed
