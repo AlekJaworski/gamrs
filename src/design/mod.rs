@@ -25,7 +25,9 @@
 //! (one per smoothing parameter). The single-smooth path through
 //! `Cr / Re / CrStable` produces `s_list.len() == 1`.
 
-use ndarray::{Array1, Array2, ArrayView2, Axis};
+use std::ops::Range;
+
+use ndarray::{s, Array1, Array2, ArrayView2, Axis};
 use ndarray_linalg::Eigh;
 
 use crate::error::{GamrsError, Result};
@@ -228,6 +230,31 @@ pub(crate) fn matrix_inf_norm(m: ArrayView2<f64>) -> f64 {
     max_row
 }
 
+/// The smallest square block, on the diagonal of a penalty, that holds all
+/// its nonzero entries.
+/// A random-effect term's block is diagonal (an identity): its eigenvalues
+/// are its diagonal, and `A⁻¹S_j` on it is a column scaling, not a product.
+#[derive(Clone, Debug)]
+pub struct PenaltyBlock {
+    pub range: Range<usize>,
+    pub diagonal: bool,
+}
+
+impl PenaltyBlock {
+    pub fn of(s: ArrayView2<f64>) -> Self {
+        let nonzero: Vec<usize> = (0..s.nrows())
+            .filter(|&i| s.row(i).iter().chain(s.column(i)).any(|&v| v != 0.0))
+            .collect();
+        let range = match (nonzero.first(), nonzero.last()) {
+            (Some(&a), Some(&b)) => a..b + 1,
+            _ => 0..0,
+        };
+        let block = s.slice(s![range.clone(), range.clone()]);
+        let diagonal = block.indexed_iter().all(|((r, c), &v)| r == c || v == 0.0);
+        Self { range, diagonal }
+    }
+}
+
 /// Rank + `log|S|+` of a symmetric PSD penalty matrix. The pseudo-det is
 /// the product of strictly positive eigenvalues; the rank counts them
 /// against a relative tolerance.
@@ -237,14 +264,22 @@ pub(crate) fn matrix_inf_norm(m: ArrayView2<f64>) -> f64 {
 /// "mgcv heuristic" rank adjustment via `Loss::score_rank_adjustment`
 /// to match mgcv's `non_zero_rows − 2` convention for CR splines.
 pub(crate) fn rank_and_log_pseudo_det(s: ArrayView2<f64>) -> Result<(usize, f64)> {
-    let s_owned = s.to_owned();
-    // eigh on a symmetric penalty is robust but can fail on pathological
-    // user-supplied designs (LAPACK convergence). Surface it as a typed
-    // GamrsError instead of a panic so the Python wheel raises a catchable
-    // exception with a clear message rather than a `PanicException`.
-    let (eigs, _) = s_owned
-        .eigh(ndarray_linalg::UPLO::Lower)
-        .map_err(|e| GamrsError::Linalg(format!("penalty eigendecomposition failed: {e}")))?;
+    // Outside its block a penalty only adds zero eigenvalues.
+    let PenaltyBlock { range, diagonal } = PenaltyBlock::of(s);
+    let block = s.slice(s![range.clone(), range]);
+    let eigs = if diagonal {
+        block.diag().to_owned()
+    } else {
+        // eigh on a symmetric penalty is robust but can fail on pathological
+        // user-supplied designs (LAPACK convergence). Surface it as a typed
+        // GamrsError instead of a panic so the Python wheel raises a catchable
+        // exception with a clear message rather than a `PanicException`.
+        block
+            .to_owned()
+            .eigh(ndarray_linalg::UPLO::Lower)
+            .map_err(|e| GamrsError::Linalg(format!("penalty eigendecomposition failed: {e}")))?
+            .0
+    };
     let max_eig = eigs.iter().cloned().fold(0.0_f64, f64::max);
     let tol = max_eig.max(1.0) * 1e-10;
     let mut rank = 0usize;

@@ -17,10 +17,10 @@
 //! `inner_fit.trace_a_inv(...)` rather than touching the factor directly.
 
 use std::marker::PhantomData;
-use std::ops::Range;
 
 use ndarray::{s, Array1, Array2, ArrayView2};
 
+use crate::design::PenaltyBlock;
 use crate::error::Result;
 use crate::family::Gaussian;
 use crate::inner::{CholeskySolver, GaussianClosedFormInner, GaussianInnerFit, LinearSolver};
@@ -79,31 +79,6 @@ pub struct EnvelopeScore<
     pub s_blocks: Vec<PenaltyBlock>,
 }
 
-/// The smallest square block, on the diagonal of a penalty, that holds all
-/// its nonzero entries.
-/// A random-effect term's block is diagonal (an identity), and `A⁻¹S_j` on
-/// a diagonal block is a column scaling, not a product.
-#[derive(Clone, Debug)]
-pub struct PenaltyBlock {
-    pub range: Range<usize>,
-    pub diagonal: bool,
-}
-
-impl PenaltyBlock {
-    pub fn of(s: &Array2<f64>) -> Self {
-        let nonzero: Vec<usize> = (0..s.nrows())
-            .filter(|&i| s.row(i).iter().chain(s.column(i)).any(|&v| v != 0.0))
-            .collect();
-        let range = match (nonzero.first(), nonzero.last()) {
-            (Some(&a), Some(&b)) => a..b + 1,
-            _ => 0..0,
-        };
-        let block = s.slice(s![range.clone(), range.clone()]);
-        let diagonal = block.indexed_iter().all(|((r, c), &v)| r == c || v == 0.0);
-        Self { range, diagonal }
-    }
-}
-
 /// IFT-propagation state cached by `EnvelopeScore` for the NoRefresh
 /// line-search shortcut. Same shape as
 /// `super::shape_aware::score::AcceptedState` minus the shape axis.
@@ -151,7 +126,7 @@ where
         debug_assert_eq!(s_list.len(), rank_s_list.len());
         debug_assert_eq!(s_list.len(), log_pseudo_det_s_list.len());
         let log_det_s = PenaltyLogDet::new(&s_list, &rank_s_list, &log_pseudo_det_s_list);
-        let s_blocks = s_list.iter().map(PenaltyBlock::of).collect();
+        let s_blocks = s_list.iter().map(|s| PenaltyBlock::of(s.view())).collect();
         Self {
             inner,
             loss,
