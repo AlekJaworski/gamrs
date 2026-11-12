@@ -22,6 +22,14 @@ is locked. Versions correspond to the published PyPI wheels.
   on a flat ridge — λ above 1e6, a term already fitted as a straight line
   (edf ≈ 1) — can stop at a slightly different point, up to 5% in λ on a
   pure-linear test case, with no visible effect on the fit.
+- **Line-search probes no longer form `A⁻¹`.** A probe only needs the REML
+  value, which takes `log|A|` and β, but it went through the gradient code
+  and computed `A⁻¹` and every `tr(A⁻¹S_j)` before discarding them. Value-only
+  probes now skip that work (Gaussian and the GLM families on the same score;
+  a fit with at least as many coefficients as rows keeps the old path). On
+  the random-effect fit above, 38 of its 46 evaluations are such probes: 14.8 s
+  → 11.2 s. Results are bit-identical, on that fit and on every fit in the
+  Python battery.
 
 ## [0.16.1] — 2026-11-10
 

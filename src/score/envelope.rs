@@ -25,7 +25,7 @@ use crate::family::Gaussian;
 use crate::inner::{CholeskySolver, GaussianClosedFormInner, GaussianInnerFit, LinearSolver};
 use crate::traits::{CoordsKind, InnerSolver, Loss, ScoreDerivatives};
 
-use super::penalty_det::PenaltyLogDet;
+use super::penalty_det::{LogDetTerms, PenaltyLogDet};
 use super::profile::{MgcvTwoSigmaProfile, Profile};
 
 /// Closed-form REML / LAML envelope score, generic over the loss `L`,
@@ -205,8 +205,7 @@ where
             None => self.inner.fit(theta)?,
         };
         self.stats.record_pirls_call(inner.iterations);
-        let (v, _, _) = self.compute_value_grad_from_fit(theta, &inner)?;
-        Ok(v)
+        self.compute_value_from_fit(theta, &inner)
     }
 
     fn value_and_grad(&self, theta: &Array1<f64>) -> Result<(f64, Array1<f64>)> {
@@ -275,6 +274,15 @@ where
     fn stats(&self) -> Option<&crate::stats::FitStats> {
         Some(&self.stats)
     }
+}
+
+/// Score returned for a probe the profile finds unphysical.
+const UNPHYSICAL_SCORE: f64 = 1e12;
+
+struct ValueParts {
+    reml: f64,
+    sigma2: f64,
+    log_det_s: LogDetTerms,
 }
 
 /// Cached quantities from the converged inner fit needed to assemble the
@@ -386,86 +394,26 @@ where
         // version for the σ²-grad denominator (mgcv convention).
         let tr_hinv_xtwx = (inner.p as f64) - tr_hinv_s_lambda_total;
 
-        // `log|H|` — defaults to the backend's `log|A|` off the Fisher
-        // factor; lazily compute the Newton-W `Σ log|λ_i|` via the
-        // `InnerSolver::lazy_newton_log_det_h` trait method when the loss
-        // opts into the Newton path (non-canonical InverseGaussian + log)
-        // so we match v0.x `src/reml/mod.rs:436-459`. `tr(H⁻¹S)` continues
-        // to use Fisher H per v0.x's `system.tr_a` convention (the
-        // score's `(n − tr_a)` denominator expects Fisher).
-        //
-        // **Lazy computation pattern** (mgcv_rust port): the Newton-A
-        // pieces used to be materialised inside `PirlsInner::fit` (eigh
-        // per inner fit — O(p³) regression on NegBin bench). Moved out
-        // per `src/pirls/mod.rs::fit_pirls_cached` shape — the score
-        // body computes them on demand here, once per probe.
-        let log_det_h_fisher = inner.log_det_a();
-        let log_det_h = self
-            .inner
-            .lazy_newton_log_det_h(inner, theta)
-            .unwrap_or(log_det_h_fisher);
-        let log_det_s = self.log_det_s.eval(theta)?;
-        let log_det_lambda_s = log_det_s.value;
-
-        // σ² dispatch via the `Profile` type parameter — type-level choice,
-        // not a runtime branch (architecture-assumptions.md §D3).
-        //
-        // Multi-smooth lift: the Profile signature takes a scalar `lambda`
-        // and scalar `bsb`; here we pass `lambda = 1` and the pre-computed
-        // `bsb_total = Σ_j λ_j β'S_jβ` so `dp = D + 1·bsb_total` matches
-        // the multi-smooth Dp.
-        let score_sigma2 =
-            match self
-                .profile
-                .dispersion(&self.loss, inner, 1.0, bsb_total, tr_hinv_xtwx, self.mp)
-            {
-                Some(phi) => phi,
-                None => {
-                    // Unphysical probe — sentinel score, zero grad, and a
-                    // benign HessInputs that makes `hess_analytic` bail to FD.
-                    let hin = HessInputs {
-                        lambda_j: lambda_j.clone(),
-                        bsb_per_term: vec![0.0; n_terms],
-                        tr_hinv_s_per_term: vec![0.0; n_terms],
-                        sigma2: 1.0,
-                        dsigma2_drho: None,
-                        has_tk_kkt: false,
-                        a_inv: Array2::<f64>::zeros((0, 0)),
-                        log_det_s_hess: Array2::<f64>::zeros((0, 0)),
-                    };
-                    return Ok((1e12, Array1::zeros(n_terms), hin));
-                }
+        let Some(ValueParts {
+            reml,
+            sigma2: score_sigma2,
+            log_det_s,
+        }) = self.value_parts(theta, inner, bsb_total, tr_hinv_xtwx)?
+        else {
+            // Unphysical probe — sentinel score, zero grad, and a benign
+            // HessInputs that makes `hess_analytic` bail to FD.
+            let hin = HessInputs {
+                lambda_j: lambda_j.clone(),
+                bsb_per_term: vec![0.0; n_terms],
+                tr_hinv_s_per_term: vec![0.0; n_terms],
+                sigma2: 1.0,
+                dsigma2_drho: None,
+                has_tk_kkt: false,
+                a_inv: Array2::<f64>::zeros((0, 0)),
+                log_det_s_hess: Array2::<f64>::zeros((0, 0)),
             };
-
-        // `Dp = D + Σ_j λ_j·β'S_jβ`.
-        let dp = inner.deviance + bsb_total;
-
-        // Σ ls(y_i; σ²) — saturated log-likelihood sum at the score's σ².
-        // Gamma/InverseGaussian's sat_lik depend on σ² via the φ-term that
-        // Phase-2b v0.2 port reinstated; other families ignore the scale arg.
-        let ls_sum: f64 = self
-            .y
-            .iter()
-            .map(|&yi| self.loss.saturated_log_lik(yi, score_sigma2))
-            .sum();
-
-        // GamFit3 form (mgcv `gam.fit3.r:616-617`, v0.x
-        // `src/pirls/mod.rs::ScoreFormula::GamFit3`):
-        //
-        //   REML = Dp/(2σ²) - Mp/2·log(2πσ²) + log|H|/2 - log|λS|+/2 - Σ ls
-        //
-        // Phase-2b v0.2 port (2026-05-24): switched from the Gaussian-
-        // shortcut `+(n-Mp)/2·log(2πσ²) - Σls=0` form to the general form.
-        // The two coincide for σ²-independent sat_lik (Gaussian's
-        // `-n/2·log(2πφ)` exactly fills the `+n/2·log(2πφ)` gap between
-        // `(n-Mp)/2` and `-Mp/2`); for σ²-DEPENDENT sat_lik (Gamma,
-        // InverseGaussian) the general form is the only correct one.
-        let two_pi = 2.0 * std::f64::consts::PI;
-        let mp_f = self.mp as f64;
-        let reml = dp / (2.0 * score_sigma2) - 0.5 * mp_f * (two_pi * score_sigma2).ln()
-            + 0.5 * log_det_h
-            - 0.5 * log_det_lambda_s
-            - ls_sum;
+            return Ok((UNPHYSICAL_SCORE, Array1::zeros(n_terms), hin));
+        };
 
         // Per-term gradient: ∂REML/∂ρ_j = λ_j β'S_jβ/(2σ²) + λ_j tr(H⁻¹S_j)/2
         //   - ∂log|λS|₊/∂ρ_j / 2  (rank_j/2 for a penalty overlapping no other).
@@ -551,6 +499,116 @@ where
         };
 
         Ok((reml, g, hess_inputs))
+    }
+
+    /// What a value-only probe needs: `β'S_jβ` per term and `log|A|`, but no
+    /// `A⁻¹` and no traces. `tr(A⁻¹X'WX)` enters the value only through the
+    /// profile's `n − tr > 0` guard, and it never exceeds `p`, so when
+    /// `n > p` its bound `p` decides that guard the same way.
+    pub(crate) fn compute_value_from_fit(
+        &self,
+        theta: &Array1<f64>,
+        inner: &GaussianInnerFit<S>,
+    ) -> Result<f64> {
+        if inner.n <= inner.p {
+            return Ok(self.compute_value_grad_from_fit(theta, inner)?.0);
+        }
+        let mut bsb_total = 0.0_f64;
+        for (j, s_j) in self.s_list.iter().enumerate() {
+            let s_beta = s_j.dot(&inner.beta);
+            let bsb_j: f64 = inner
+                .beta
+                .iter()
+                .zip(s_beta.iter())
+                .map(|(a, b)| a * b)
+                .sum();
+            bsb_total += theta[j].exp() * bsb_j;
+        }
+        let parts = self.value_parts(theta, inner, bsb_total, inner.p as f64)?;
+        Ok(parts.map_or(UNPHYSICAL_SCORE, |v| v.reml))
+    }
+
+    /// The REML value from `Σ_j λ_j β'S_jβ` and `tr(A⁻¹X'WX)`; `None` when
+    /// the profile finds the probe unphysical.
+    fn value_parts(
+        &self,
+        theta: &Array1<f64>,
+        inner: &GaussianInnerFit<S>,
+        bsb_total: f64,
+        tr_hinv_xtwx: f64,
+    ) -> Result<Option<ValueParts>> {
+        // `log|H|` — defaults to the backend's `log|A|` off the Fisher
+        // factor; lazily compute the Newton-W `Σ log|λ_i|` via the
+        // `InnerSolver::lazy_newton_log_det_h` trait method when the loss
+        // opts into the Newton path (non-canonical InverseGaussian + log)
+        // so we match v0.x `src/reml/mod.rs:436-459`. `tr(H⁻¹S)` continues
+        // to use Fisher H per v0.x's `system.tr_a` convention (the
+        // score's `(n − tr_a)` denominator expects Fisher).
+        //
+        // **Lazy computation pattern** (mgcv_rust port): the Newton-A
+        // pieces used to be materialised inside `PirlsInner::fit` (eigh
+        // per inner fit — O(p³) regression on NegBin bench). Moved out
+        // per `src/pirls/mod.rs::fit_pirls_cached` shape — the score
+        // body computes them on demand here, once per probe.
+        let log_det_h_fisher = inner.log_det_a();
+        let log_det_h = self
+            .inner
+            .lazy_newton_log_det_h(inner, theta)
+            .unwrap_or(log_det_h_fisher);
+        let log_det_s = self.log_det_s.eval(theta)?;
+        let log_det_lambda_s = log_det_s.value;
+
+        // σ² dispatch via the `Profile` type parameter — type-level choice,
+        // not a runtime branch (architecture-assumptions.md §D3).
+        //
+        // Multi-smooth lift: the Profile signature takes a scalar `lambda`
+        // and scalar `bsb`; here we pass `lambda = 1` and the pre-computed
+        // `bsb_total = Σ_j λ_j β'S_jβ` so `dp = D + 1·bsb_total` matches
+        // the multi-smooth Dp.
+        let score_sigma2 =
+            match self
+                .profile
+                .dispersion(&self.loss, inner, 1.0, bsb_total, tr_hinv_xtwx, self.mp)
+            {
+                Some(phi) => phi,
+                None => return Ok(None),
+            };
+
+        // `Dp = D + Σ_j λ_j·β'S_jβ`.
+        let dp = inner.deviance + bsb_total;
+
+        // Σ ls(y_i; σ²) — saturated log-likelihood sum at the score's σ².
+        // Gamma/InverseGaussian's sat_lik depend on σ² via the φ-term that
+        // Phase-2b v0.2 port reinstated; other families ignore the scale arg.
+        let ls_sum: f64 = self
+            .y
+            .iter()
+            .map(|&yi| self.loss.saturated_log_lik(yi, score_sigma2))
+            .sum();
+
+        // GamFit3 form (mgcv `gam.fit3.r:616-617`, v0.x
+        // `src/pirls/mod.rs::ScoreFormula::GamFit3`):
+        //
+        //   REML = Dp/(2σ²) - Mp/2·log(2πσ²) + log|H|/2 - log|λS|+/2 - Σ ls
+        //
+        // Phase-2b v0.2 port (2026-05-24): switched from the Gaussian-
+        // shortcut `+(n-Mp)/2·log(2πσ²) - Σls=0` form to the general form.
+        // The two coincide for σ²-independent sat_lik (Gaussian's
+        // `-n/2·log(2πφ)` exactly fills the `+n/2·log(2πφ)` gap between
+        // `(n-Mp)/2` and `-Mp/2`); for σ²-DEPENDENT sat_lik (Gamma,
+        // InverseGaussian) the general form is the only correct one.
+        let two_pi = 2.0 * std::f64::consts::PI;
+        let mp_f = self.mp as f64;
+        let reml = dp / (2.0 * score_sigma2) - 0.5 * mp_f * (two_pi * score_sigma2).ln()
+            + 0.5 * log_det_h
+            - 0.5 * log_det_lambda_s
+            - ls_sum;
+
+        Ok(Some(ValueParts {
+            reml,
+            sigma2: score_sigma2,
+            log_det_s,
+        }))
     }
 
     /// Analytic outer-Newton Hessian `H[i,j] = ∂g[j]/∂ρ_i`, assembled from
