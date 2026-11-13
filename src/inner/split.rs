@@ -95,7 +95,8 @@ impl<'a> SplitDesign<'a> {
     /// `X' diag(w) X`.
     pub(crate) fn xtwx(&self, w: ArrayView1<f64>) -> Array2<f64> {
         let Some(s) = &self.split else {
-            return super::weighted_xt_view(self.x, w).dot(&self.x);
+            let wx = &self.x * &w.insert_axis(Axis(1));
+            return self.x.t().dot(&wx);
         };
         let p = self.x.ncols();
         let mut out = Array2::<f64>::zeros((p, p));
@@ -200,7 +201,7 @@ impl<'a> SplitDesign<'a> {
     pub(crate) fn leverage(&self, m: ArrayView2<f64>) -> Array1<f64> {
         let Some(s) = &self.split else {
             let xm = self.x.dot(&m);
-            return (&self.x * &xm).sum_axis(Axis(1));
+            return Array1::from_shape_fn(self.x.nrows(), |r| xm.row(r).dot(&self.x.row(r)));
         };
         let m_d = m.select(Axis(0), &s.dense);
         let m_cd = m.select(Axis(1), &s.dense).as_standard_layout().into_owned();
