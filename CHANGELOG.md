@@ -49,6 +49,27 @@ is locked. Versions correspond to the published PyPI wheels.
   battery one fit moves: a near-separable ordered-categorical fit, by 1e-7
   in fitted values and REML score (relative), where the rounding of that
   constant tips a line-search comparison.
+- **Random-effect fits on the t, Poisson and other PIRLS families no longer
+  pay for every factor level in each product with the design.** A
+  random-effect column has one nonzero per row, but `X'WX`, `X·A⁻¹` and the
+  leverages `diag(X·M·X')` were dense `n × p × p` products, built in every
+  PIRLS step and many times per score evaluation: the t family's analytic
+  Hessian formed an `X'WX` and a `p × p` product for each entry (28 on the
+  fits below).
+  These products now keep the sparse design columns apart from the dense
+  ones (when at least 32 columns are sparse), the t Hessian's second-order
+  trace uses the leverages instead of a product per entry, and `A⁻¹` is formed
+  once per inner fit. Synthetic data, single thread, four CR smooths plus one
+  random effect: n = 20,000 with 1,000 levels, t 642 s → 22 s and Poisson
+  259 s → 14 s (mgcv `bam` 221 s and 113 s); with 50 levels, t 8.0 s → 2.6 s
+  and Poisson 3.9 s → 1.8 s; n = 5,000 with 200 levels, t 8.5 s → 0.8 s and
+  Poisson 4.3 s → 0.7 s. Same iterations; fitted values agree to 1e-11 and
+  REML scores to 3e-13 (relative); only the λ of a term fitted as a straight
+  line (λ ≈ 1e9, edf ≈ 1) moves, by up to 2e-5 relative. Across the Python
+  battery, one multi-smooth quantile fit with a term at edf 1.02 now takes 11
+  outer iterations instead of 7 and stops 9e-6 lower on its criterion
+  (predictions 2e-5 relative); every other fit is within 1.1e-7 in fitted
+  values.
 
 ## [0.16.1] — 2026-11-10
 
