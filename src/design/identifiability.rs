@@ -16,6 +16,7 @@ use ndarray::{Array1, Array2, ArrayView1, Axis};
 use ndarray_linalg::{Cholesky, Eigh, UPLO};
 
 use crate::error::{GamrsError, Result};
+use crate::inner::split::SplitDesign;
 
 use super::{rank_and_log_pseudo_det, PreparedDesign};
 
@@ -50,14 +51,11 @@ pub(crate) fn aliased_columns(
     if p == 0 {
         return Ok(Vec::new());
     }
-    let mut wx = x_design.clone();
-    if let Some(w) = prior_weights {
-        for (mut row, &wi) in wx.axis_iter_mut(Axis(0)).zip(w.iter()) {
-            let s = wi.max(0.0).sqrt();
-            row.mapv_inplace(|v| v * s);
-        }
-    }
-    let mut gram = wx.t().dot(&wx);
+    let w = match prior_weights {
+        Some(w) => w.mapv(|wi| wi.max(0.0)),
+        None => Array1::ones(x_design.nrows()),
+    };
+    let mut gram = SplitDesign::new(x_design.view()).xtwx(w.view());
 
     // Unit-diagonal scaling makes every tolerance below scale-free: a column
     // in dollars and a 0/1 tag are judged alike.
@@ -285,5 +283,25 @@ mod tests {
         let w = array![1.0, 1.0, 1.0, 0.0];
         assert!(aliased_columns(&x, &[], None).unwrap().is_empty());
         assert_eq!(aliased_columns(&x, &[], Some(w.view())).unwrap(), vec![2]);
+    }
+
+    #[test]
+    fn full_dummy_set_on_the_sparse_split_drops_one_level() {
+        // 40 one-hot level columns sum to the intercept; the last level goes,
+        // and a duplicated dense covariate loses its copy.
+        let (n, levels) = (400, 40);
+        let mut cols = vec![vec![1.0; n]];
+        for l in 0..levels {
+            cols.push((0..n).map(|i| f64::from(i % levels == l)).collect());
+        }
+        let x1: Vec<f64> = (0..n).map(|i| ((i * 37) % 101) as f64).collect();
+        cols.push(x1.clone());
+        cols.push(x1);
+        let x = design(&cols);
+        assert!(SplitDesign::new(x.view()).is_split());
+        assert_eq!(
+            aliased_columns(&x, &[], None).unwrap(),
+            vec![levels, levels + 2]
+        );
     }
 }

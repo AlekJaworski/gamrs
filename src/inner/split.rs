@@ -95,6 +95,10 @@ impl<'a> SplitDesign<'a> {
         }
     }
 
+    pub(crate) fn is_split(&self) -> bool {
+        self.split.is_some()
+    }
+
     /// `X' diag(w) X` and `X' diag(w) z`.
     pub(crate) fn xtwx_xtwz(
         &self,
