@@ -9,8 +9,8 @@ use crate::family::Family;
 use crate::traits::{InnerSolver, Link, Loss, VarianceFn};
 
 use super::{
-    add_penalty, beta_sbeta, factor_and_solve, halve_until_valid, weighted_xt, CholeskySolver,
-    GaussianInnerFit, LinearSolver,
+    add_penalty, beta_sbeta, factor_and_solve, halve_until_valid, split::SplitDesign,
+    CholeskySolver, GaussianInnerFit, LinearSolver,
 };
 
 /// Vectorised Newton score weights `w_newton[i] = wf · α` at converged β.
@@ -174,7 +174,6 @@ where
     V: VarianceFn + Clone,
 {
     use ndarray_linalg::{Cholesky, Eigh, UPLO};
-    let n = x_design.nrows();
     let p = x_design.ncols();
 
     let w_newton = newton_score_weights(family, y, mu, prior_w);
@@ -184,20 +183,7 @@ where
         }
     }
 
-    // Build A_score = X' diag(W_newton) X + λS (single combined penalty).
-    // BLAS-accelerated form: WX = diag(w)·X (per-row scale), then X'·WX.
-    // Mirrors mgcv_rust `src/reml/mod.rs:2366-2373`'s in-place row scaling
-    // followed by `x.t().dot(&wx)`. Manual triple-loop was the dominant
-    // O(n·p²) cost on the NegBin bench — replacing with BLAS .dot() drops
-    // it by an order of magnitude.
-    let mut wx = x_design.clone();
-    for i in 0..n {
-        let wi = w_newton[i];
-        for j in 0..p {
-            wx[[i, j]] *= wi;
-        }
-    }
-    let mut a_score: Array2<f64> = x_design.t().dot(&wx);
+    let mut a_score = SplitDesign::new(x_design.view()).xtwx(w_newton.view());
     for j in 0..p {
         for l in 0..p {
             a_score[[j, l]] += s_total[[j, l]];
@@ -290,17 +276,8 @@ where
         }
     }
 
-    // Build A_newton = X' diag(w_newton) X + λS. BLAS form (see
-    // `lazy_newton_log_det_h` for the same pattern, mirroring mgcv_rust
-    // `src/reml/mod.rs:2366-2373`).
-    let mut wx = x_design.clone();
-    for i in 0..n {
-        let wi = w_newton[i];
-        for j in 0..p {
-            wx[[i, j]] *= wi;
-        }
-    }
-    let mut a_newton: Array2<f64> = x_design.t().dot(&wx);
+    let xs = SplitDesign::new(x_design.view());
+    let mut a_newton = xs.xtwx(w_newton.view());
     for j in 0..p {
         for l in 0..p {
             a_newton[[j, l]] += s_total[[j, l]];
@@ -381,18 +358,8 @@ where
         a1[i] = wf * (alpha * (-v1n - 2.0 * g2n) + dalpha_dmu) * g_prime_mu.recip();
     }
 
-    // lev_uw[i] = x_iᵀ A_newton⁻¹ x_i. BLAS form: XAi = X · A⁻¹ (n,p),
-    // then lev_uw[i] = Σ_j X[i,j] · XAi[i,j]. Port of mgcv_rust
-    // `src/reml/mod.rs:2404-2412` (`let xa = x.dot(&a_inv); ...`).
-    let xa: Array2<f64> = x_design.dot(&a_inv);
-    let mut lev_uw = Array1::<f64>::zeros(n);
-    for i in 0..n {
-        let mut s = 0.0_f64;
-        for j in 0..p {
-            s += xa[[i, j]] * x_design[[i, j]];
-        }
-        lev_uw[i] = s;
-    }
+    // lev_uw[i] = x_iᵀ A_newton⁻¹ x_i.
+    let lev_uw = xs.leverage(a_inv.view());
 
     // Per-term b1_k = -λ_k · A_newton⁻¹ · S_k · β; eta1_k = X · b1_k;
     // tr(A_newton⁻¹ · S_k). Multi-smooth port of mgcv_rust
@@ -413,7 +380,7 @@ where
         let s_k_beta = s_k.dot(beta);
         let a_inv_s_k_beta = a_inv.dot(&s_k_beta);
         let b1_k = a_inv_s_k_beta.mapv(|v| -lambda_k * v);
-        eta1_per_term.push(x_design.dot(&b1_k));
+        eta1_per_term.push(xs.dot_vec(b1_k.view()));
         // tr(A⁻¹ · S_k) = Σ_{i,j} A⁻¹[i,j] · S_k[j,i].
         let mut tr_k = 0.0_f64;
         for i in 0..p {
@@ -588,9 +555,9 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver> I
         }
 
         // One WLS solve.
-        let xtw = crate::inner::weighted_xt(&self.x_design, &working_weights);
-        let xtwx = xtw.dot(&self.x_design);
-        let xtwz = xtw.dot(&working_response);
+        let xs = SplitDesign::new(self.x_design.view());
+        let xtwx = xs.xtwx(working_weights.view());
+        let xtwz = xs.t_dot_vec((&working_weights * &working_response).view());
         let mut a = xtwx.clone();
         add_penalty(&mut a, &s_total, 1.0);
         let (factor, beta) = factor_and_solve::<S>(&a, xtwz.view()).map_err(|e| match e {
@@ -602,7 +569,7 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver> I
 
         // Recompute (η, μ, deviance) at the new β so FS / downstream
         // consumers see a consistent state. O(n·p + n) — cheap.
-        let eta_new: Array1<f64> = self.x_design.dot(&beta);
+        let eta_new: Array1<f64> = xs.dot_vec(beta.view());
         let mu_new: Array1<f64> = eta_new
             .iter()
             .map(|&e| self.family.link.inverse_link(e))
@@ -704,6 +671,7 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
         let _ = rho; // rho is captured here via s_total; explicit token kept for grep clarity
         let n = self.x_design.nrows();
         let p = self.x_design.ncols();
+        let xs = SplitDesign::new(self.x_design.view());
         let prior_w: Array1<f64> = match &self.prior_weights {
             Some(w) => w.clone(),
             None => Array1::ones(n),
@@ -716,7 +684,7 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
         // starts (e.g. quantile warm-restart).
         let mut eta: Array1<f64> = if let Some(b0) = beta_warm {
             debug_assert_eq!(b0.len(), p);
-            self.x_design.dot(b0)
+            xs.dot_vec(b0.view())
         } else {
             let mu_init: Array1<f64> = self.family.loss.initial_mu(self.y.view());
             mu_init.iter().map(|&m| self.family.link.link(m)).collect()
@@ -824,10 +792,8 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
             }
 
             let (beta_trial, factor_trial) = {
-                let xtw = weighted_xt(&self.x_design, &working_weights);
-                let xtwx = xtw.dot(&self.x_design);
-                let xtwz = xtw.dot(&working_response);
-                let mut a = xtwx;
+                let mut a = xs.xtwx(working_weights.view());
+                let xtwz = xs.t_dot_vec((&working_weights * &working_response).view());
                 add_penalty(&mut a, &s_total, lambda);
                 let (factor, b) = factor_and_solve::<S>(&a, xtwz.view()).map_err(|e| match e {
                     GamrsError::SingularSystem(msg) => {
@@ -845,7 +811,7 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
             let pdev_old = pdev;
             let iter_one = it == 0;
             let beta_try0 = beta_trial.clone();
-            let eta_try0 = self.x_design.dot(&beta_try0);
+            let eta_try0 = xs.dot_vec(beta_try0.view());
             let mu_try0: Array1<f64> = eta_try0
                 .iter()
                 .map(|&e| self.family.link.inverse_link(e))
@@ -854,7 +820,7 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
             let pdev_try0 = dev_try0 + lambda * beta_sbeta(&s_total, &beta_try0);
 
             let recompute = |b: &Array1<f64>| {
-                let e = self.x_design.dot(b);
+                let e = xs.dot_vec(b.view());
                 let m: Array1<f64> = e
                     .iter()
                     .map(|&ev| self.family.link.inverse_link(ev))
@@ -911,9 +877,7 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
             None => {
                 // Rebuild A at the current β and factor it — initial β=0
                 // makes this `X' diag(prior) X + λS` for unweighted PIRLS.
-                let xtw = weighted_xt(&self.x_design, &prior_w);
-                let xtwx = xtw.dot(&self.x_design);
-                let mut a = xtwx;
+                let mut a = xs.xtwx(prior_w.view());
                 add_penalty(&mut a, &s_total, lambda);
                 let max_diag = a.diag().iter().map(|v| v.abs()).fold(1.0_f64, f64::max);
                 for i in 0..p {
@@ -989,8 +953,7 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
         let (a_factor, a_weights) =
             match family_observed_score_weights(&self.family, &self.y, &eta, &prior_w) {
                 Some(w_score) => {
-                    let xtw = weighted_xt(&self.x_design, &w_score);
-                    let mut a = xtw.dot(&self.x_design);
+                    let mut a = xs.xtwx(w_score.view());
                     add_penalty(&mut a, &s_total, lambda);
                     // This factorisation IS the PD decision now: mgcv permits
                     // negative `w_i` but needs `X'WX + E'E` positive definite
@@ -1025,8 +988,7 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
                 .expected_curvature_weights(self.y.view(), eta.view(), Some(prior_w.view()))
                 .filter(|w| w.iter().all(|v| v.is_finite()))
                 .and_then(|w_f| {
-                    let xtw = weighted_xt(&self.x_design, &w_f);
-                    let mut a = xtw.dot(&self.x_design);
+                    let mut a = xs.xtwx(w_f.view());
                     add_penalty(&mut a, &s_total, lambda);
                     S::factorize(a).ok().map(|f| (f, w_f))
                 })

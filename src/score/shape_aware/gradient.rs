@@ -86,9 +86,9 @@ where
             .clone()
             .unwrap_or_else(|| Array1::ones(n));
         let w_obs = crate::inner::pirls::newton_score_weights(family, &self.y, &fit.mu, &prior);
-        let wx = &self.x_design * &w_obs.view().insert_axis(ndarray::Axis(1));
+        let xs = crate::inner::split::SplitDesign::new(self.x_design.view());
         let rho_arr = Array1::from(rho_slice.to_vec());
-        let a_obs = self.x_design.t().dot(&wx)
+        let a_obs = xs.xtwx(w_obs.view())
             + crate::design::combined_s(&self.s_list, &rho_arr, self.x_design.ncols());
         // Leverages from the factor whose log-determinant the score takes.
         let a_inv = if family.loss.use_newton_irls() {
@@ -97,10 +97,7 @@ where
         } else {
             fit.a_inv()
         };
-        let xa = self.x_design.dot(&a_inv);
-        let h: Array1<f64> = (0..n)
-            .map(|i| xa.row(i).dot(&self.x_design.row(i)))
-            .collect();
+        let h = xs.leverage(a_inv.view());
         let mut out = Vec::with_capacity(dr_dtheta.ncols());
         for k in 0..dr_dtheta.ncols() {
             let db = a_obs
@@ -283,10 +280,9 @@ where
                     .unwrap_or_else(|| Array1::ones(n));
                 let w_obs =
                     crate::inner::pirls::newton_score_weights(family, &self.y, &fit.mu, &prior);
-                let wx = &self.x_design * &w_obs.view().insert_axis(ndarray::Axis(1));
                 let rho_arr = Array1::from(rho_slice.to_vec());
                 Some(
-                    self.x_design.t().dot(&wx)
+                    crate::score::hess_ift::build_xtwx(&self.x_design, &w_obs)
                         + crate::design::combined_s(&self.s_list, &rho_arr, self.x_design.ncols()),
                 )
             } else {

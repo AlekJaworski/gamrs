@@ -264,22 +264,8 @@ pub(crate) fn hess_ift_rho(ctx: &HessIftCtx<'_>) -> Array2<f64> {
 /// Build `X'WX` from cached `(X, working_weights)`. Used by the envelope
 /// + shape-aware paths to feed [`HessIftCtx::xtwx`] when no pre-cached
 /// `xtwx` is available on the converged inner fit.
-///
-/// Direct port of mgcv_rust `compute_xtwx_dispatch` (`reml/system.rs`) —
-/// BLAS-free `X' diag(w) X` accumulator.
 pub(crate) fn build_xtwx(x_design: &Array2<f64>, w: &Array1<f64>) -> Array2<f64> {
-    let n = x_design.nrows();
-    let p = x_design.ncols();
-    debug_assert_eq!(w.len(), n);
-    // `wx[i, j] = w[i] · X[i, j]` (n × p), then `X' · wx` gives X'WX (p × p).
-    let mut wx = x_design.clone();
-    for i in 0..n {
-        let wi = w[i];
-        for j in 0..p {
-            wx[[i, j]] *= wi;
-        }
-    }
-    x_design.t().dot(&wx)
+    crate::inner::split::SplitDesign::new(x_design.view()).xtwx(w.view())
 }
 
 /// Compute `∂D/∂β` at converged β for the IFT Hessian's `term_dev_b2`.

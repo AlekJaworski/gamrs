@@ -18,7 +18,7 @@ use crate::family::{ElfLoss, ElfVariance, Family, IdentityLink};
 use crate::traits::InnerSolver;
 
 use super::{
-    add_penalty, chol_back_solve, chol_forward_solve, cholesky_with_safety_ridge, weighted_xt,
+    add_penalty, chol_back_solve, chol_forward_solve, cholesky_with_safety_ridge, split::SplitDesign,
     CholeskySolver, GaussianInnerFit, LinearSolver,
 };
 
@@ -168,9 +168,7 @@ impl<S: LinearSolver> ArmijoElfInner<S> {
             }
 
             // X'WX + λ_pen S + ridge.
-            let wxt = weighted_xt(&self.x_design, &w);
-            let xtwx = wxt.dot(&self.x_design);
-            let mut a = xtwx;
+            let mut a = SplitDesign::new(self.x_design.view()).xtwx(w.view());
             add_penalty(&mut a, &s_total, lambda_pen);
 
             // RHS = X' (W·η + g) — well-defined at saturation.
@@ -273,9 +271,7 @@ impl<S: LinearSolver> ArmijoElfInner<S> {
             Some(a) => a,
             None => {
                 // Never-accepted path: rebuild A at converged β.
-                let wxt = weighted_xt(&self.x_design, &working_weights);
-                let xtwx = wxt.dot(&self.x_design);
-                let mut a = xtwx;
+                let mut a = SplitDesign::new(self.x_design.view()).xtwx(working_weights.view());
                 add_penalty(&mut a, &s_total, lambda_pen);
                 a
             }

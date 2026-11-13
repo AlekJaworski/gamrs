@@ -29,7 +29,7 @@ use crate::family::{Family, IdentityLink, OcatLoss, OcatVariance};
 use crate::traits::{InnerSolver, Loss};
 
 use super::{
-    add_penalty, beta_sbeta, halve_until_valid, weighted_xt, CholeskySolver, GaussianInnerFit,
+    add_penalty, beta_sbeta, halve_until_valid, split::SplitDesign, CholeskySolver, GaussianInnerFit,
     LinearSolver, PirlsOpts,
 };
 
@@ -132,9 +132,9 @@ impl<S: LinearSolver> OcatInner<S> {
             // solve drifts β toward an over-saturated optimum (closes
             // the 5.9% multi-smooth ocat parity gap, 2026-05-27).
             let (beta_trial, factor_trial) = {
-                let xtw = weighted_xt(&self.x_design, &working_weights);
-                let xtwx = xtw.dot(&self.x_design);
-                let xtwz = xtw.dot(&working_response);
+                let xs = SplitDesign::new(self.x_design.view());
+                let xtwx = xs.xtwx(working_weights.view());
+                let xtwz = xs.t_dot_vec((&working_weights * &working_response).view());
                 let n_pen = self.s_list.len() as f64;
                 let ridge_scale = 1.0e-5 * (1.0 + n_pen.sqrt());
                 let max_diag = xtwx.diag().iter().map(|x| x.abs()).fold(1.0_f64, f64::max);
@@ -242,9 +242,7 @@ impl<S: LinearSolver> OcatInner<S> {
             // `∂ridge/∂ρ_j · tr(H⁻¹) / 2` term because the post-penalty
             // ridge depends on λ — that term is wired in
             // `shape_aware.rs::compute_value_grad`.
-            let xtw = weighted_xt(&self.x_design, &working_weights);
-            let xtwx = xtw.dot(&self.x_design);
-            let mut a = xtwx;
+            let mut a = SplitDesign::new(self.x_design.view()).xtwx(working_weights.view());
             add_penalty(&mut a, &s_total, lambda);
             let n_pen = self.s_list.len() as f64;
             let ridge_scale = 1.0e-5 * (1.0 + n_pen.sqrt());

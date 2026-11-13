@@ -817,6 +817,7 @@ where
         debug_assert_eq!(theta.len(), ntot);
         let n = fit.n;
         let p = fit.p;
+        let xs = crate::inner::split::SplitDesign::new(self.x_design.view());
 
         // ---- Pick A_inv (Newton-A for use_newton_irls families, else
         // the Fisher A from the converged fit). Mirrors
@@ -924,7 +925,7 @@ where
         for kk in 0..n_shape {
             // shape axis: b1 = -0.5 · A_inv · X' · Dmuth[:, kk]
             let dmuth_kk: Array1<f64> = lv1.dmuth.column(kk).to_owned();
-            let xt_v: Array1<f64> = self.x_design.t().dot(&dmuth_kk);
+            let xt_v: Array1<f64> = xs.t_dot_vec(dmuth_kk.view());
             let ainv_v: Array1<f64> = a_inv.dot(&xt_v);
             let col = n_terms + kk;
             for r in 0..p {
@@ -937,7 +938,7 @@ where
         let mut eta1 = Array2::<f64>::zeros((n, ntot));
         for k in 0..ntot {
             let b1k = b1.column(k).to_owned();
-            let eta1_k = self.x_design.dot(&b1k);
+            let eta1_k = xs.dot_vec(b1k.view());
             eta1.column_mut(k).assign(&eta1_k);
         }
 
@@ -976,24 +977,10 @@ where
         // ---- Precompute A_inv · A_1[k]  (p × p) per axis (used by ldet2).
         // For ρ axis k, A_1[k] includes the λ_k·S_k term; that's a separate
         // contribution: A_inv·(X'·diag(w1)·X + λ_k·S_k).
-        // To avoid n_shape+M dense p×p matrices, we accumulate the trace
-        // pieces lazily. ldet2 needs tr((A_inv·a1[i])·(A_inv·a1[k])) —
-        // we build a_inv_xt_w (p × n) on the fly per axis (k) and reuse.
-        // `xt` is a *view* (Array2::t() returns ArrayView2; no copy).
-        // ndarray's `.dot()` accepts views, so the downstream
-        // `xt.dot(...)` sites are unchanged. Removing the previous
-        // `.to_owned()` saves one O(n·p) transpose copy (~160 KB at
-        // n=2000, p=10) per Hessian assembly call — measured ~20 μs
-        // saving per call by the `profile` feature's phase timers.
-        let xt = self.x_design.t();
         let mut ai_a1: Vec<Array2<f64>> = Vec::with_capacity(ntot);
         for k in 0..ntot {
             // A_1[k] = X' diag(w1[:, k]) X + (λ_k·S_k if k < M)
-            // Build wx = w · X via broadcast (`w.insert_axis(1)` is
-            // (n, 1) broadcasting against X's (n, p) shape).
-            let w_col = w1.column(k);
-            let wx: Array2<f64> = &self.x_design * &w_col.insert_axis(ndarray::Axis(1));
-            let mut a1_k = xt.dot(&wx);
+            let mut a1_k = xs.xtwx(w1.column(k));
             if k < n_terms {
                 let lam = lambda[k];
                 a1_k = a1_k + lam * &self.s_list[k];
@@ -1058,7 +1045,7 @@ where
                     rhs_w = rhs_w - &dmuth_i * &eta1_k;
                 }
                 // rhs (length p) = X' · rhs_w
-                let mut rhs: Array1<f64> = xt.dot(&rhs_w);
+                let mut rhs: Array1<f64> = xs.t_dot_vec(rhs_w.view());
                 // Penalty contributions to RHS:
                 //   if k is ρ: -2 λ_k · S_k · b1[i]
                 //   if i is ρ: -2 λ_i · S_i · b1[k]
@@ -1094,7 +1081,7 @@ where
                     let kk = k - n_terms;
                     let pair = shape_pair_index(ii.min(kk), ii.max(kk), n_shape);
                     let dmu_th2_p: Array1<f64> = lv2.dmu_th2.column(pair).to_owned();
-                    let xt_v: Array1<f64> = xt.dot(&dmu_th2_p);
+                    let xt_v: Array1<f64> = xs.t_dot_vec(dmu_th2_p.view());
                     for r in 0..p {
                         rhs[r] -= xt_v[r];
                     }
@@ -1103,7 +1090,7 @@ where
                 let b2_ik: Array1<f64> = a_inv.dot(&rhs);
                 let b2_ik: Array1<f64> = &b2_ik * 0.5;
                 // η2[i,k] = X · b2[i,k]
-                let eta2_ik: Array1<f64> = self.x_design.dot(&b2_ik);
+                let eta2_ik: Array1<f64> = xs.dot_vec(b2_ik.view());
 
                 // ── d2[i,k]: second deriv of D ────────────────────────
                 // Broadcast-expr form — see rhs_w build comment above for
@@ -1189,12 +1176,8 @@ where
                     w2 = w2 + lv2.dmu2_th2.column(pair);
                 }
                 // a2[i,k] = X' · diag(0.5·w2) · X  (+ λ_i·S_i if diagonal ρ).
-                // wx2 built via broadcast (n,1)·(n,p) — same pattern as
-                // the a1_loop above.
                 let half_w2 = &w2 * 0.5;
-                let wx2: Array2<f64> =
-                    &self.x_design * &half_w2.view().insert_axis(ndarray::Axis(1));
-                let mut a2_ik = xt.dot(&wx2);
+                let mut a2_ik = xs.xtwx(half_w2.view());
                 if i == k && i < n_terms {
                     let lam = lambda[i];
                     a2_ik = a2_ik + lam * &self.s_list[i];

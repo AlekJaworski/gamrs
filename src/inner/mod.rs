@@ -26,6 +26,7 @@ pub mod closed_form;
 pub mod gam_fit5;
 pub mod linalg;
 pub mod pirls;
+pub(crate) mod split;
 
 pub use armijo::{ArmijoElfInner, ArmijoElfOpts};
 pub use closed_form::{gaussian_inner_solve, GaussianClosedFormInner};
@@ -241,12 +242,6 @@ pub struct TkKKTInputs {
 // =============================================================================
 
 /// `X' diag(w)` as a `(p, n)` matrix, written without forming `diag(w)`.
-pub(crate) fn weighted_xt(x_design: &Array2<f64>, w: &Array1<f64>) -> Array2<f64> {
-    weighted_xt_view(x_design.view(), w.view())
-}
-
-/// View-accepting variant — used at hot `xtwx_xtwy` callers to avoid
-/// `to_owned()` clones (160 MB per PIRLS iter at n=1M, p=20).
 pub(crate) fn weighted_xt_view(x_design: ArrayView2<f64>, w: ArrayView1<f64>) -> Array2<f64> {
     let n = x_design.nrows();
     let p = x_design.ncols();
