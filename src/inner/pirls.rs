@@ -1120,7 +1120,7 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
         fit: &GaussianInnerFit<S>,
         rho: &Array1<f64>,
     ) -> Option<Vec<f64>> {
-        use ndarray_linalg::Solve;
+        use ndarray_linalg::{FactorizeInto, Solve};
         if self.family.loss.use_newton_irls() {
             return None;
         }
@@ -1145,18 +1145,15 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
             w_obs[i] = wf * (1.0 + (self.y[i] - mu) * (v1n + g2n));
         }
         let s_total = crate::design::combined_s(&self.s_list, rho, self.x_design.ncols());
-        let wx = &self.x_design * &w_obs.view().insert_axis(ndarray::Axis(1));
-        let a_obs = self.x_design.t().dot(&wx) + &s_total;
-        let a_inv = fit.a_inv();
-        let xa = self.x_design.dot(&a_inv);
-        let lev: Array1<f64> = (0..n)
-            .map(|i| xa.row(i).dot(&self.x_design.row(i)))
-            .collect();
+        let xs = SplitDesign::new(self.x_design.view());
+        let a_obs = xs.xtwx(w_obs.view()) + &s_total;
+        let a_obs = a_obs.factorize_into().ok()?;
+        let lev = xs.leverage(fit.a_inv().view());
         let mut out = Vec::with_capacity(self.s_list.len());
         for (k, s_k) in self.s_list.iter().enumerate() {
             let rhs = s_k.dot(&fit.beta).mapv(|v| -rho[k].exp() * v);
             let db = a_obs.solve(&rhs).ok()?;
-            let eta1 = self.x_design.dot(&db);
+            let eta1 = xs.dot_vec(db.view());
             out.push((&dw_deta * &eta1 * &lev).sum());
         }
         Some(out)

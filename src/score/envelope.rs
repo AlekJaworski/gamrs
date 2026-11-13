@@ -23,6 +23,7 @@ use ndarray::{s, Array1, Array2, ArrayView2};
 use crate::design::PenaltyBlock;
 use crate::error::Result;
 use crate::family::Gaussian;
+use crate::inner::split::SplitDesign;
 use crate::inner::{CholeskySolver, GaussianClosedFormInner, GaussianInnerFit, LinearSolver};
 use crate::traits::{CoordsKind, InnerSolver, Loss, ScoreDerivatives};
 
@@ -726,31 +727,28 @@ where
             skip_w_chain,
         ) {
             (Some(_dw), Some(x), false) => {
-                let n = x.nrows();
+                let xs = SplitDesign::new(x.view());
                 // xdbeta[i] = X·(−λ_i A⁻¹S_iβ) = −λ_i · X·ainv_s_beta[i]
                 let mut xdbeta: Vec<Array1<f64>> = Vec::with_capacity(m);
                 for i in 0..m {
-                    let mut v = x.dot(&ainv_s_beta[i]);
+                    let mut v = xs.dot_vec(ainv_s_beta[i].view());
                     v.mapv_inplace(|t| -lambda[i] * t);
                     xdbeta.push(v);
                 }
-                // lev_mj[j][k] = Σ_b (X·ainv_s[j]·A⁻¹)[k,b]·X[k,b]
-                //              = row_k(X·ainv_s[j]·A⁻¹) · row_k(X)
+                // lev_mj[j][k] = (X·A⁻¹S_jA⁻¹·X')_{kk} = row_k(XA_j · S_j) · row_k(XA_j),
+                // XA_j = (X·A⁻¹)[:, block j]
+                let xa = xs.dot(a_inv.view());
                 let mut lev_mj: Vec<Array1<f64>> = Vec::with_capacity(m);
                 for j in 0..m {
-                    let r = self.s_blocks[j].range.clone();
-                    let mut ainv_s_j = Array2::<f64>::zeros((inner.p, inner.p));
-                    ainv_s_j.slice_mut(s![.., r]).assign(&ainv_s[j]);
-                    let xmj = x.dot(&ainv_s_j).dot(a_inv); // (n×p)
-                    let mut diag = Array1::<f64>::zeros(n);
-                    for k in 0..n {
-                        let mut s = 0.0;
-                        for b in 0..x.ncols() {
-                            s += xmj[[k, b]] * x[[k, b]];
-                        }
-                        diag[k] = s;
-                    }
-                    lev_mj.push(diag);
+                    let PenaltyBlock { range, diagonal } = &self.s_blocks[j];
+                    let xa_j = xa.slice(s![.., range.clone()]);
+                    let s_j = self.s_list[j].slice(s![range.clone(), range.clone()]);
+                    let xa_s = if *diagonal {
+                        &xa_j * &s_j.diag()
+                    } else {
+                        xa_j.dot(&s_j)
+                    };
+                    lev_mj.push((&xa_s * &xa_j).sum_axis(ndarray::Axis(1)));
                 }
                 Some((xdbeta, lev_mj))
             }
