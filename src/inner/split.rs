@@ -44,7 +44,10 @@ impl ColumnSplit {
             return None;
         }
         let dense: Vec<usize> = (0..p).filter(|&c| !is_sparse[c]).collect();
-        let xd = x_c.select(Axis(1), &dense).as_standard_layout().into_owned();
+        let xd = x_c
+            .select(Axis(1), &dense)
+            .as_standard_layout()
+            .into_owned();
         let total: usize = sparse.iter().map(|&c| nnz[c]).sum();
         let mut row_ptr = Vec::with_capacity(n + 1);
         let mut cols = Vec::with_capacity(total);
@@ -93,7 +96,11 @@ impl<'a> SplitDesign<'a> {
     }
 
     /// `X' diag(w) X` and `X' diag(w) z`.
-    pub(crate) fn xtwx_xtwz(&self, w: ArrayView1<f64>, z: ArrayView1<f64>) -> (Array2<f64>, Array1<f64>) {
+    pub(crate) fn xtwx_xtwz(
+        &self,
+        w: ArrayView1<f64>,
+        z: ArrayView1<f64>,
+    ) -> (Array2<f64>, Array1<f64>) {
         if self.split.is_none() {
             let xtw = super::weighted_xt_view(self.x, w);
             return (xtw.dot(&self.x), xtw.dot(&z));
@@ -213,7 +220,10 @@ impl<'a> SplitDesign<'a> {
             return Array1::from_shape_fn(self.x.nrows(), |r| xm.row(r).dot(&self.x.row(r)));
         };
         let m_d = m.select(Axis(0), &s.dense);
-        let m_cd = m.select(Axis(1), &s.dense).as_standard_layout().into_owned();
+        let m_cd = m
+            .select(Axis(1), &s.dense)
+            .as_standard_layout()
+            .into_owned();
         let m_dc = m_d.t().as_standard_layout().into_owned();
         let xm = s.xd.dot(&m_d.select(Axis(1), &s.dense));
         Array1::from_shape_fn(self.x.nrows(), |r| {
@@ -257,13 +267,26 @@ pub(crate) fn dot_sparse_cols(a: ArrayView2<f64>, b: ArrayView2<f64>) -> Array2<
     let (p, q) = b.dim();
     let a_t = a.t().as_standard_layout().into_owned();
     let b_t = b.t().as_standard_layout().into_owned();
-    let row_nnz = b.rows().into_iter().map(|r| r.iter().filter(|&&v| v != 0.0).count());
-    let dense_rows: Vec<usize> = row_nnz.enumerate().filter(|&(_, k)| 4 * k > q).map(|(r, _)| r).collect();
+    let row_nnz = b
+        .rows()
+        .into_iter()
+        .map(|r| r.iter().filter(|&&v| v != 0.0).count());
+    let dense_rows: Vec<usize> = row_nnz
+        .enumerate()
+        .filter(|&(_, k)| 4 * k > q)
+        .map(|(r, _)| r)
+        .collect();
     let other_rows: Vec<usize> = (0..p).filter(|r| !dense_rows.contains(r)).collect();
-    let mut out_t = b_t.select(Axis(1), &dense_rows).dot(&a_t.select(Axis(0), &dense_rows));
+    let mut out_t = b_t
+        .select(Axis(1), &dense_rows)
+        .dot(&a_t.select(Axis(0), &dense_rows));
     let mut dense_cols = Vec::new();
     for (c, b_col) in b_t.rows().into_iter().enumerate() {
-        let nz: Vec<usize> = other_rows.iter().copied().filter(|&r| b_col[r] != 0.0).collect();
+        let nz: Vec<usize> = other_rows
+            .iter()
+            .copied()
+            .filter(|&r| b_col[r] != 0.0)
+            .collect();
         if 4 * nz.len() > p {
             dense_cols.push(c);
             continue;
@@ -324,10 +347,16 @@ mod tests {
 
         let wx = &x * &w.view().insert_axis(Axis(1));
         assert!(max_abs(&xs.xtwx(w.view()), &x.t().dot(&wx)) < 1e-12);
-        assert!((&xs.dot_vec(b.view()) - &x.dot(&b)).iter().all(|d| d.abs() < 1e-12));
-        assert!((&xs.t_dot_vec(v.view()) - &x.t().dot(&v)).iter().all(|d| d.abs() < 1e-12));
+        assert!((&xs.dot_vec(b.view()) - &x.dot(&b))
+            .iter()
+            .all(|d| d.abs() < 1e-12));
+        assert!((&xs.t_dot_vec(v.view()) - &x.t().dot(&v))
+            .iter()
+            .all(|d| d.abs() < 1e-12));
         let lev = x.dot(&m).dot(&x.t()).diag().to_owned();
-        assert!((&xs.leverage(m.view()) - &lev).iter().all(|d| d.abs() < 1e-11));
+        assert!((&xs.leverage(m.view()) - &lev)
+            .iter()
+            .all(|d| d.abs() < 1e-11));
         let mut s_re = Array2::<f64>::zeros((p, p));
         let mut s_sm = Array2::<f64>::zeros((p, p));
         for c in q..p {
@@ -341,13 +370,18 @@ mod tests {
         let a_sym = &m + &m.t();
         let s_list = [s_re, s_sm];
         let blocks: Vec<PenaltyBlock> = s_list.iter().map(|s| PenaltyBlock::of(s.view())).collect();
-        let dense = SplitDesign { x: x.view(), split: None };
+        let dense = SplitDesign {
+            x: x.view(),
+            split: None,
+        };
         for (lev_s, lev_d) in xs
             .penalty_leverages(a_sym.view(), &s_list, &blocks)
             .iter()
             .zip(dense.penalty_leverages(a_sym.view(), &s_list, &blocks))
         {
-            assert!((lev_s - &lev_d).iter().all(|d| d.abs() < 1e-10 * (1.0 + lev_d[0].abs())));
+            assert!((lev_s - &lev_d)
+                .iter()
+                .all(|d| d.abs() < 1e-10 * (1.0 + lev_d[0].abs())));
         }
         let g = xs.xtwx(w.view());
         assert!(max_abs(&dot_sparse_cols(m.view(), g.view()), &m.dot(&g)) < 1e-11);

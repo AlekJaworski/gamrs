@@ -985,7 +985,10 @@ where
                 let lam = lambda[k];
                 a1_k = a1_k + lam * &self.s_list[k];
             }
-            ai_a1.push(crate::inner::split::dot_sparse_cols(a_inv.view(), a1_k.view()));
+            ai_a1.push(crate::inner::split::dot_sparse_cols(
+                a_inv.view(),
+                a1_k.view(),
+            ));
         }
 
         // ---- ls1, ls2 (saturated-LL gradient + Hessian over θ-shape only).
@@ -1019,10 +1022,16 @@ where
         // S_m·b1[k] and S_j·β, reused across the (i, k) pairs.
         let s_b1: Vec<Array2<f64>> = self.s_list.iter().map(|s_m| s_m.dot(&b1)).collect();
         let s_beta: Vec<Array1<f64>> = self.s_list.iter().map(|s_j| s_j.dot(&fit.beta)).collect();
-        let ai_a1_t: Vec<Array2<f64>> =
-            ai_a1.iter().map(|m| m.t().as_standard_layout().into_owned()).collect();
+        let ai_a1_t: Vec<Array2<f64>> = ai_a1
+            .iter()
+            .map(|m| m.t().as_standard_layout().into_owned())
+            .collect();
         let h = xs.leverage(a_inv.view());
-        let tr_ainv_s: Vec<f64> = self.s_list.iter().map(|s_j| (&a_inv * &s_j.t()).sum()).collect();
+        let tr_ainv_s: Vec<f64> = self
+            .s_list
+            .iter()
+            .map(|s_j| (&a_inv * &s_j.t()).sum())
+            .collect();
         let mut hess = Array2::<f64>::zeros((ntot, ntot));
         for i in 0..ntot {
             for k in i..ntot {

@@ -18,8 +18,8 @@ use crate::family::{ElfLoss, ElfVariance, Family, IdentityLink};
 use crate::traits::InnerSolver;
 
 use super::{
-    add_penalty, chol_back_solve, chol_forward_solve, cholesky_with_safety_ridge, split::SplitDesign,
-    CholeskySolver, GaussianInnerFit, LinearSolver,
+    add_penalty, chol_back_solve, chol_forward_solve, cholesky_with_safety_ridge,
+    split::SplitDesign, CholeskySolver, GaussianInnerFit, LinearSolver,
 };
 
 /// `InnerSolver` for the qgam-style Quantile/ELF family.

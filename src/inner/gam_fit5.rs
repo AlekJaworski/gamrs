@@ -29,8 +29,8 @@ use crate::family::{Family, IdentityLink, OcatLoss, OcatVariance};
 use crate::traits::{InnerSolver, Loss};
 
 use super::{
-    add_penalty, beta_sbeta, halve_until_valid, split::SplitDesign, CholeskySolver, GaussianInnerFit,
-    LinearSolver, PirlsOpts,
+    add_penalty, beta_sbeta, halve_until_valid, split::SplitDesign, CholeskySolver,
+    GaussianInnerFit, LinearSolver, PirlsOpts,
 };
 
 /// PIRLS-style inner solver for the `ocat` extended family. β is solved
