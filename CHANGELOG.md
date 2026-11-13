@@ -15,8 +15,8 @@ is locked. Versions correspond to the published PyPI wheels.
   by itself; they now go through the same sparse column split as the inner
   fit, so a random effect's indicator columns no longer cost `O(n·p²)`.
   On n=20,000 with a 1000-level random effect and four CR smooths, single
-  thread: Gaussian 6.8 s → 2.6 s, Poisson 12.9 s → 10.9 s, scaled-t
-  19.1 s → 18.1 s. Poisson and scaled-t results are bit-identical on those
+  thread: Gaussian 6.8 s → 2.6 s, and about 2 s off each Poisson and
+  scaled-t fit (11.0 s → 8.9 s and 16.6 s → 14.6 s). Poisson and scaled-t results are bit-identical on those
   fits. On the Gaussian ones, where the cached product feeds the search,
   REML agrees to 1e-13 and well-determined λ to 1e-12; a λ near 7e7 on a
   term already fitted as a straight line moves by up to 8e-8 (relative),
