@@ -7,8 +7,16 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+## [0.16.3] — 2026-11-13
+
 ### Performance
 
+- **Fits with a large random effect are about twice as fast again.** The two
+  changes below together, single thread, n=20,000, random effect + four CR
+  smooths, against 0.16.2: scat with 1,000 levels 20.0 → 9.2 s, Poisson with
+  1,000 levels 11.6 → 5.2 s, Gaussian with 1,000 levels 5.6 → 1.9 s; with 50
+  levels scat 2.40 → 1.61 s and Poisson 1.55 → 1.04 s. Poisson and scaled-t
+  results are bit-identical; Gaussian ones agree to rounding (details below).
 - **The design's sparse/dense column split is built once per fit.** Every
   PIRLS step, score evaluation and Hessian used to rescan the n×p design and
   rebuild the split (a sparse copy of the random-effect columns plus a dense
