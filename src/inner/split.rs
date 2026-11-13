@@ -30,12 +30,12 @@ impl ColumnSplit {
         if p < MIN_SPARSE_COLS {
             return None;
         }
+        let x_c = x.as_standard_layout();
+        let rows = || x_c.as_slice().expect("standard layout").chunks_exact(p);
         let mut nnz = vec![0usize; p];
-        for row in x.rows() {
-            for (c, &v) in row.iter().enumerate() {
-                if v != 0.0 {
-                    nnz[c] += 1;
-                }
+        for row in rows() {
+            for (k, &v) in nnz.iter_mut().zip(row) {
+                *k += (v != 0.0) as usize;
             }
         }
         let is_sparse: Vec<bool> = nnz.iter().map(|&k| 8 * k <= n).collect();
@@ -44,17 +44,17 @@ impl ColumnSplit {
             return None;
         }
         let dense: Vec<usize> = (0..p).filter(|&c| !is_sparse[c]).collect();
-        let xd = x.select(Axis(1), &dense);
+        let xd = x_c.select(Axis(1), &dense).as_standard_layout().into_owned();
         let total: usize = sparse.iter().map(|&c| nnz[c]).sum();
         let mut row_ptr = Vec::with_capacity(n + 1);
         let mut cols = Vec::with_capacity(total);
         let mut vals = Vec::with_capacity(total);
         row_ptr.push(0);
-        for row in x.rows() {
-            for (c, &v) in row.iter().enumerate() {
-                if is_sparse[c] && v != 0.0 {
+        for row in rows() {
+            for &c in &sparse {
+                if row[c] != 0.0 {
                     cols.push(c);
-                    vals.push(v);
+                    vals.push(row[c]);
                 }
             }
             row_ptr.push(cols.len());
@@ -71,6 +71,10 @@ impl ColumnSplit {
 
     fn row(&self, r: usize) -> std::ops::Range<usize> {
         self.row_ptr[r]..self.row_ptr[r + 1]
+    }
+
+    fn xd_row(&self, r: usize) -> &[f64] {
+        row(&self.xd, r)
     }
 }
 
@@ -102,26 +106,30 @@ impl<'a> SplitDesign<'a> {
                 out[[ca, cb]] = gd[[a, b]];
             }
         }
+        let mut pos = vec![0usize; p];
+        for (a, &ca) in s.sparse.iter().enumerate() {
+            pos[ca] = a;
+        }
+        let d = s.dense.len();
+        let mut cross = vec![0.0; s.sparse.len() * d];
         for r in 0..self.x.nrows() {
             let range = s.row(r);
-            if range.is_empty() {
-                continue;
-            }
-            let xr = s.xd.row(r);
+            let xr = s.xd_row(r);
             for t in range.clone() {
                 let ca = s.cols[t];
                 let f = w[r] * s.vals[t];
-                for (j, &cj) in s.dense.iter().enumerate() {
-                    out[[ca, cj]] += f * xr[j];
+                for (o, &x) in cross[pos[ca] * d..][..d].iter_mut().zip(xr) {
+                    *o += f * x;
                 }
                 for u in range.clone() {
                     out[[ca, s.cols[u]]] += f * s.vals[u];
                 }
             }
         }
-        for &ca in &s.sparse {
-            for &cj in &s.dense {
-                out[[cj, ca]] = out[[ca, cj]];
+        for (a, &ca) in s.sparse.iter().enumerate() {
+            for (j, &cj) in s.dense.iter().enumerate() {
+                out[[ca, cj]] = cross[a * d + j];
+                out[[cj, ca]] = cross[a * d + j];
             }
         }
         out
@@ -195,15 +203,15 @@ impl<'a> SplitDesign<'a> {
             return (&self.x * &xm).sum_axis(Axis(1));
         };
         let m_d = m.select(Axis(0), &s.dense);
-        let m_cd = m.select(Axis(1), &s.dense);
+        let m_cd = m.select(Axis(1), &s.dense).as_standard_layout().into_owned();
         let m_dc = m_d.t().as_standard_layout().into_owned();
         let xm = s.xd.dot(&m_d.select(Axis(1), &s.dense));
         Array1::from_shape_fn(self.x.nrows(), |r| {
-            let xr = s.xd.row(r);
-            let mut h = xr.dot(&xm.row(r));
+            let xr = s.xd_row(r);
+            let mut h = dot(xr, row(&xm, r));
             for t in s.row(r) {
                 let (c, v) = (s.cols[t], s.vals[t]);
-                h += v * (m_cd.row(c).dot(&xr) + m_dc.row(c).dot(&xr));
+                h += v * (dot(row(&m_cd, c), xr) + dot(row(&m_dc, c), xr));
                 for u in s.row(r) {
                     h += v * s.vals[u] * m[[c, s.cols[u]]];
                 }
@@ -211,6 +219,16 @@ impl<'a> SplitDesign<'a> {
             h
         })
     }
+}
+
+fn dot(a: &[f64], b: &[f64]) -> f64 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+/// Row `r` of a standard-layout matrix.
+fn row(a: &Array2<f64>, r: usize) -> &[f64] {
+    let k = a.ncols();
+    &a.as_slice().expect("standard layout")[r * k..][..k]
 }
 
 /// `Y · S[block, block]` for the `block` columns `Y` of a penalty `S`.
