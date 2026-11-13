@@ -7,6 +7,8 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+## [0.16.2] — 2026-11-13
+
 ### Performance
 
 - **Fits with many coefficients spent most of their time inverting the
