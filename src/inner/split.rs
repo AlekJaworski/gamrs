@@ -6,7 +6,9 @@
 //! hundreds of levels is the difference between seconds and milliseconds.
 //! Results equal the dense products up to summation order.
 
-use ndarray::{Array1, Array2, ArrayView1, ArrayView2, Axis};
+use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2, Axis};
+
+use crate::design::PenaltyBlock;
 
 /// Below this many sparse columns the dense BLAS products are as fast.
 const MIN_SPARSE_COLS: usize = 32;
@@ -157,18 +159,33 @@ impl<'a> SplitDesign<'a> {
         out
     }
 
-    /// `X · M` for a `(p, k)` matrix `M`.
-    pub(crate) fn dot(&self, m: ArrayView2<f64>) -> Array2<f64> {
-        let Some(s) = &self.split else {
-            return self.x.dot(&m);
-        };
-        let mut out = s.xd.dot(&m.select(Axis(0), &s.dense));
-        for (r, mut o) in out.rows_mut().into_iter().enumerate() {
-            for t in s.row(r) {
-                o.scaled_add(s.vals[t], &m.row(s.cols[t]));
-            }
+    /// `diag(X · A⁻¹S_jA⁻¹ · X')` for each penalty `S_j`.
+    pub(crate) fn penalty_leverages(
+        &self,
+        a_inv: ArrayView2<f64>,
+        s_list: &[Array2<f64>],
+        blocks: &[PenaltyBlock],
+    ) -> Vec<Array1<f64>> {
+        if self.split.is_some() {
+            return s_list
+                .iter()
+                .zip(blocks)
+                .map(|(s_j, b)| {
+                    let cols = a_inv.slice(s![.., b.range.clone()]);
+                    let m = times_block(cols, s_j, b).dot(&a_inv.slice(s![b.range.clone(), ..]));
+                    self.leverage(m.view())
+                })
+                .collect();
         }
-        out
+        let xa = self.x.dot(&a_inv);
+        s_list
+            .iter()
+            .zip(blocks)
+            .map(|(s_j, b)| {
+                let xa_b = xa.slice(s![.., b.range.clone()]);
+                (&times_block(xa_b, s_j, b) * &xa_b).sum_axis(Axis(1))
+            })
+            .collect()
     }
 
     /// Leverages `diag(X · M · X')` for a `(p, p)` matrix `M`.
@@ -193,6 +210,16 @@ impl<'a> SplitDesign<'a> {
             }
             h
         })
+    }
+}
+
+/// `Y · S[block, block]` for the `block` columns `Y` of a penalty `S`.
+fn times_block(y: ArrayView2<f64>, s: &Array2<f64>, b: &PenaltyBlock) -> Array2<f64> {
+    let s_b = s.slice(s![b.range.clone(), b.range.clone()]);
+    if b.diagonal {
+        &y * &s_b.diag()
+    } else {
+        y.dot(&s_b)
     }
 }
 
@@ -271,9 +298,29 @@ mod tests {
         assert!(max_abs(&xs.xtwx(w.view()), &x.t().dot(&wx)) < 1e-12);
         assert!((&xs.dot_vec(b.view()) - &x.dot(&b)).iter().all(|d| d.abs() < 1e-12));
         assert!((&xs.t_dot_vec(v.view()) - &x.t().dot(&v)).iter().all(|d| d.abs() < 1e-12));
-        assert!(max_abs(&xs.dot(m.view()), &x.dot(&m)) < 1e-12);
         let lev = x.dot(&m).dot(&x.t()).diag().to_owned();
         assert!((&xs.leverage(m.view()) - &lev).iter().all(|d| d.abs() < 1e-11));
+        let mut s_re = Array2::<f64>::zeros((p, p));
+        let mut s_sm = Array2::<f64>::zeros((p, p));
+        for c in q..p {
+            s_re[[c, c]] = 1.0;
+        }
+        for a in 1..q {
+            for b in 1..q {
+                s_sm[[a, b]] = 1.0 / (1 + a + b) as f64;
+            }
+        }
+        let a_sym = &m + &m.t();
+        let s_list = [s_re, s_sm];
+        let blocks: Vec<PenaltyBlock> = s_list.iter().map(|s| PenaltyBlock::of(s.view())).collect();
+        let dense = SplitDesign { x: x.view(), split: None };
+        for (lev_s, lev_d) in xs
+            .penalty_leverages(a_sym.view(), &s_list, &blocks)
+            .iter()
+            .zip(dense.penalty_leverages(a_sym.view(), &s_list, &blocks))
+        {
+            assert!((lev_s - &lev_d).iter().all(|d| d.abs() < 1e-10 * (1.0 + lev_d[0].abs())));
+        }
         let g = xs.xtwx(w.view());
         assert!(max_abs(&dot_sparse_cols(m.view(), g.view()), &m.dot(&g)) < 1e-11);
     }

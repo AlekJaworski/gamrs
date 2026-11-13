@@ -735,21 +735,8 @@ where
                     v.mapv_inplace(|t| -lambda[i] * t);
                     xdbeta.push(v);
                 }
-                // lev_mj[j][k] = (X·A⁻¹S_jA⁻¹·X')_{kk} = row_k(XA_j · S_j) · row_k(XA_j),
-                // XA_j = (X·A⁻¹)[:, block j]
-                let xa = xs.dot(a_inv.view());
-                let mut lev_mj: Vec<Array1<f64>> = Vec::with_capacity(m);
-                for j in 0..m {
-                    let PenaltyBlock { range, diagonal } = &self.s_blocks[j];
-                    let xa_j = xa.slice(s![.., range.clone()]);
-                    let s_j = self.s_list[j].slice(s![range.clone(), range.clone()]);
-                    let xa_s = if *diagonal {
-                        &xa_j * &s_j.diag()
-                    } else {
-                        xa_j.dot(&s_j)
-                    };
-                    lev_mj.push((&xa_s * &xa_j).sum_axis(ndarray::Axis(1)));
-                }
+                // lev_mj[j][k] = (X·A⁻¹S_jA⁻¹·X')_{kk}
+                let lev_mj = xs.penalty_leverages(a_inv.view(), &self.s_list, &self.s_blocks);
                 Some((xdbeta, lev_mj))
             }
             _ => None,
