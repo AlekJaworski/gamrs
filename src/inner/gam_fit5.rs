@@ -280,6 +280,7 @@ impl<S: LinearSolver> OcatInner<S> {
             // `EnvelopeScore` analytic Hessian — no `∂W/∂η` needed here.
             dw_deta: None,
             x_design: None,
+            a_inv_cache: Default::default(),
         })
     }
 

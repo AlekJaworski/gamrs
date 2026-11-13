@@ -171,25 +171,28 @@ impl<'a> SplitDesign<'a> {
         out
     }
 
-    /// Row-wise `Σ_c X[r, c] · M[r, c]` for an `(n, p)` matrix `M`.
-    pub(crate) fn row_dots(&self, m: ArrayView2<f64>) -> Array1<f64> {
-        let Some(s) = &self.split else {
-            return (&self.x * &m).sum_axis(Axis(1));
-        };
-        Array1::from_shape_fn(self.x.nrows(), |r| {
-            let mr = m.row(r);
-            let mut acc: f64 = s.dense.iter().zip(s.xd.row(r)).map(|(&c, &x)| x * mr[c]).sum();
-            for t in s.row(r) {
-                acc += s.vals[t] * mr[s.cols[t]];
-            }
-            acc
-        })
-    }
-
     /// Leverages `diag(X · M · X')` for a `(p, p)` matrix `M`.
     pub(crate) fn leverage(&self, m: ArrayView2<f64>) -> Array1<f64> {
-        let xm = self.dot(m);
-        self.row_dots(xm.view())
+        let Some(s) = &self.split else {
+            let xm = self.x.dot(&m);
+            return (&self.x * &xm).sum_axis(Axis(1));
+        };
+        let m_d = m.select(Axis(0), &s.dense);
+        let m_cd = m.select(Axis(1), &s.dense);
+        let m_dc = m_d.t().as_standard_layout().into_owned();
+        let xm = s.xd.dot(&m_d.select(Axis(1), &s.dense));
+        Array1::from_shape_fn(self.x.nrows(), |r| {
+            let xr = s.xd.row(r);
+            let mut h = xr.dot(&xm.row(r));
+            for t in s.row(r) {
+                let (c, v) = (s.cols[t], s.vals[t]);
+                h += v * (m_cd.row(c).dot(&xr) + m_dc.row(c).dot(&xr));
+                for u in s.row(r) {
+                    h += v * s.vals[u] * m[[c, s.cols[u]]];
+                }
+            }
+            h
+        })
     }
 }
 

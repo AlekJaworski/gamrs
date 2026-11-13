@@ -598,6 +598,7 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver> I
             tk_kkt_inputs: None,
             dw_deta: None,
             x_design: None,
+            a_inv_cache: Default::default(),
         })
     }
 
@@ -1070,6 +1071,7 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
             tk_kkt_inputs,
             dw_deta: Some(dw_deta),
             x_design: Some(self.x_design.clone()),
+            a_inv_cache: Default::default(),
         })
     }
 

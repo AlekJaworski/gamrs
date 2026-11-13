@@ -157,6 +157,8 @@ pub struct GaussianInnerFit<S: LinearSolver = CholeskySolver> {
     /// — the analytic Hessian's W-chain term needs `X·dβ/dρ` and the
     /// leverage-like `(X·A⁻¹S_jA⁻¹·X')_{ii}`. Gaussian leaves it `None`.
     pub x_design: Option<Array2<f64>>,
+    /// `A⁻¹`, formed on first use: the score reads it several times per fit.
+    pub a_inv_cache: std::sync::OnceLock<Array2<f64>>,
 }
 
 impl<S: LinearSolver> GaussianInnerFit<S> {
@@ -170,9 +172,16 @@ impl<S: LinearSolver> GaussianInnerFit<S> {
     /// `tr(A⁻¹·M)` via the backend's elementwise pattern (matches v0.x's
     /// `src/reml/mod.rs:914-918` iteration order — closes audit finding
     /// #4 by collapsing the duplicate `trace_solve` impls).
-    #[inline]
     pub fn trace_a_inv(&self, m: ArrayView2<f64>) -> f64 {
-        S::trace_a_inv(&self.a_factor, m)
+        let a_inv = self.a_inv_ref();
+        let p = a_inv.nrows();
+        let mut tr = 0.0;
+        for i in 0..p {
+            for j in 0..p {
+                tr += a_inv[[i, j]] * m[[j, i]];
+            }
+        }
+        tr
     }
 
     /// Solve `A·x = b` using the stored factorisation. Used by the score
@@ -184,9 +193,12 @@ impl<S: LinearSolver> GaussianInnerFit<S> {
 
     /// Form `A⁻¹` explicitly. Used by the Tk·KK' pipeline when many
     /// solves against the same A are required (`A⁻¹·x_i` for every row).
-    #[inline]
     pub fn a_inv(&self) -> Array2<f64> {
-        S::invert(&self.a_factor)
+        self.a_inv_ref().clone()
+    }
+
+    pub fn a_inv_ref(&self) -> &Array2<f64> {
+        self.a_inv_cache.get_or_init(|| S::invert(&self.a_factor))
     }
 }
 

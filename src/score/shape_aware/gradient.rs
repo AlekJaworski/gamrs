@@ -241,14 +241,8 @@ where
         });
 
         let tk_kkt_per_term: Vec<f64> = if let Some(dw_dmu) = dw_dmu_rows {
-            // h_diag[i] = (X · A⁻¹ · X')_ii. Materialise A_inv once then
-            // A_inv·X' as one matmul (instead of n per-row solves).
-            let a_inv: Array2<f64> = fit.a_inv();
-            let a_inv_xt: Array2<f64> = a_inv.dot(&self.x_design.t());
-            let mut h_diag = Array1::<f64>::zeros(n);
-            for i in 0..n {
-                h_diag[i] = (&self.x_design.row(i) * &a_inv_xt.column(i)).sum();
-            }
+            let xs = crate::inner::split::SplitDesign::new(self.x_design.view());
+            let h_diag = xs.leverage(fit.a_inv_ref().view());
             // tk_kkt[j] = Σᵢ ∂W_i/∂μ_i · η1_j[i] · h_diag[i]  (broadcast sum),
             // where η1_j = X·∂β/∂ρ_j and ∂β/∂ρ_j = −λ_j·A⁻¹·S_j·β (IFT on the
             // PIRLS score equation). The caller applies the outer ½.
@@ -301,7 +295,7 @@ where
                     }
                     None => S::solve(&fit.a_factor, rhs.view()),
                 };
-                let eta1_j = self.x_design.dot(&dbeta_drho_j);
+                let eta1_j = xs.dot_vec(dbeta_drho_j.view());
                 tk_kkt[j] = (&dw_dmu * &eta1_j * &h_diag).sum();
             }
             tk_kkt
@@ -859,12 +853,13 @@ where
         let deta3: Array1<f64> = &level1.dmu3 * &ig1_3 - 3.0 * (&dmu2_arr * &g2g) * &ig1_2
             + &dmu_arr * (3.0 * &g2g_2 - &g3g) * &ig1;
 
+        let xs = crate::inner::split::SplitDesign::new(self.x_design.view());
         // dβ/dθ_k = −H⁻¹ · X' · Detath[:, k] / 2 (η-coord IFT).
         // Broadcast for Detath build; matvec for X' · Detath.
         let mut dbeta_dtheta = Array2::<f64>::zeros((p, n_theta));
         for k in 0..n_theta {
             let detath_k: Array1<f64> = &level1.dmuth.column(k) * &ig1;
-            let rhs: Array1<f64> = self.x_design.t().dot(&detath_k) * 0.5;
+            let rhs: Array1<f64> = xs.t_dot_vec(detath_k.view()) * 0.5;
             let v: Array1<f64> = if let Some(a_inv) = newton_a_inv {
                 a_inv.dot(&rhs)
             } else {
@@ -882,21 +877,7 @@ where
         let h_diag: Array1<f64> = if let Some(tk) = lazy_tk_kkt.as_ref() {
             tk.lev_uw.clone()
         } else {
-            // Fisher path: h_diag[i] = X_i' · A⁻¹ · X_i.
-            // Materialise A_inv ONCE (p × p, via p column-wise solves)
-            // then compute A⁻¹ · X' as a single (p×p) · (p×n) matmul,
-            // not n separate solves. At n=2000, p=10 this is the
-            // difference between 2000 forward-back-substitution calls
-            // and one BLAS dgemm — the matmul wins by removing the
-            // per-row Rust-function-call overhead.
-            let a_inv: Array2<f64> = fit.a_inv();
-            let a_inv_xt: Array2<f64> = a_inv.dot(&self.x_design.t());
-            // h_diag[i] = Σ_r X[i,r] · a_inv_xt[r,i]  — broadcast sum.
-            let mut h_diag_local = Array1::<f64>::zeros(n);
-            for i in 0..n {
-                h_diag_local[i] = (&self.x_design.row(i) * &a_inv_xt.column(i)).sum();
-            }
-            h_diag_local
+            xs.leverage(fit.a_inv_ref().view())
         };
 
         // `Σᵢ ∂ls_i/∂θ_k` per shape axis — the `-ls$d1` row of mgcv
@@ -941,7 +922,7 @@ where
             // tr(H⁻¹ ∂H/∂θ_k) = Σᵢ ∂W_i/∂θ_k|_total · h_diag[i], where the
             // total weight derivative folds in the μ-chain via
             // x_db = X · dbeta_dtheta[:,k] (hoisted as a single matvec).
-            let x_db: Array1<f64> = self.x_design.dot(&dbeta_dtheta.column(k));
+            let x_db: Array1<f64> = xs.dot_vec(dbeta_dtheta.column(k));
             let s_arr: Array1<f64> = if let Some((dw_dtheta, dw_dmu)) = trace_override.as_ref() {
                 // ∂W_i/∂θ_k + ∂W_i/∂μ_i · x_db_i (working-weight coords;
                 // identity link, so no ig1/g2g conversion needed).

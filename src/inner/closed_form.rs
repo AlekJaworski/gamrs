@@ -182,5 +182,6 @@ fn gaussian_inner_solve_cached<S: LinearSolver>(
         // `∂W/∂η` term in the analytic Hessian.
         dw_deta: None,
         x_design: None,
+        a_inv_cache: Default::default(),
     })
 }

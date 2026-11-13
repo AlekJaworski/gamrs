@@ -327,6 +327,7 @@ impl<S: LinearSolver> ArmijoElfInner<S> {
             tk_kkt_inputs: None,
             dw_deta: Some(dw_deta),
             x_design: Some(self.x_design.clone()),
+            a_inv_cache: Default::default(),
         })
     }
 }
