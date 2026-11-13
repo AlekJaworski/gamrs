@@ -196,6 +196,41 @@ impl<'a> SplitDesign<'a> {
     }
 }
 
+/// `A · B` without the zero products of a `B` that is dense only in a few
+/// rows and columns, as `X'WX` is outside its random-effect block.
+pub(crate) fn dot_sparse_cols(a: ArrayView2<f64>, b: ArrayView2<f64>) -> Array2<f64> {
+    let (p, q) = b.dim();
+    let a_t = a.t().as_standard_layout().into_owned();
+    let b_t = b.t().as_standard_layout().into_owned();
+    let row_nnz = b.rows().into_iter().map(|r| r.iter().filter(|&&v| v != 0.0).count());
+    let dense_rows: Vec<usize> = row_nnz.enumerate().filter(|&(_, k)| 4 * k > q).map(|(r, _)| r).collect();
+    let other_rows: Vec<usize> = (0..p).filter(|r| !dense_rows.contains(r)).collect();
+    let mut out_t = b_t.select(Axis(1), &dense_rows).dot(&a_t.select(Axis(0), &dense_rows));
+    let mut dense_cols = Vec::new();
+    for (c, b_col) in b_t.rows().into_iter().enumerate() {
+        let nz: Vec<usize> = other_rows.iter().copied().filter(|&r| b_col[r] != 0.0).collect();
+        if 4 * nz.len() > p {
+            dense_cols.push(c);
+            continue;
+        }
+        let mut o = out_t.row_mut(c);
+        for r in nz {
+            o.scaled_add(b_col[r], &a_t.row(r));
+        }
+    }
+    if !dense_cols.is_empty() {
+        let rest = b_t
+            .select(Axis(0), &dense_cols)
+            .select(Axis(1), &other_rows)
+            .dot(&a_t.select(Axis(0), &other_rows));
+        for (j, &c) in dense_cols.iter().enumerate() {
+            let mut o = out_t.row_mut(c);
+            o += &rest.row(j);
+        }
+    }
+    out_t.reversed_axes().as_standard_layout().into_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,5 +274,7 @@ mod tests {
         assert!(max_abs(&xs.dot(m.view()), &x.dot(&m)) < 1e-12);
         let lev = x.dot(&m).dot(&x.t()).diag().to_owned();
         assert!((&xs.leverage(m.view()) - &lev).iter().all(|d| d.abs() < 1e-11));
+        let g = xs.xtwx(w.view());
+        assert!(max_abs(&dot_sparse_cols(m.view(), g.view()), &m.dot(&g)) < 1e-11);
     }
 }

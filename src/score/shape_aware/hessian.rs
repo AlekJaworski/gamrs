@@ -985,7 +985,7 @@ where
                 let lam = lambda[k];
                 a1_k = a1_k + lam * &self.s_list[k];
             }
-            ai_a1.push(a_inv.dot(&a1_k));
+            ai_a1.push(crate::inner::split::dot_sparse_cols(a_inv.view(), a1_k.view()));
         }
 
         // ---- ls1, ls2 (saturated-LL gradient + Hessian over θ-shape only).
@@ -1016,6 +1016,11 @@ where
         // ---- Main symmetric loop: for each (i, k) with i ≤ k, fill the
         // Hessian entry. Mirrors `tdist_gdi2_native` lines 1441-1551 with
         // index ranges adjusted to gamrs's `[ρ; θ]` layout.
+        // S_m·b1[k] and S_j·β, reused across the (i, k) pairs.
+        let s_b1: Vec<Array2<f64>> = self.s_list.iter().map(|s_m| s_m.dot(&b1)).collect();
+        let s_beta: Vec<Array1<f64>> = self.s_list.iter().map(|s_j| s_j.dot(&fit.beta)).collect();
+        let ai_a1_t: Vec<Array2<f64>> =
+            ai_a1.iter().map(|m| m.t().as_standard_layout().into_owned()).collect();
         let h = xs.leverage(a_inv.view());
         let tr_ainv_s: Vec<f64> = self.s_list.iter().map(|s_j| (&a_inv * &s_j.t()).sum()).collect();
         let mut hess = Array2::<f64>::zeros((ntot, ntot));
@@ -1053,14 +1058,14 @@ where
                 //   if i is ρ: -2 λ_i · S_i · b1[k]
                 //   if i == k AND ρ: extra -2 λ_i · S_i · β
                 if k < n_terms {
-                    let s_k_b1_i: Array1<f64> = self.s_list[k].dot(&b1.column(i).to_owned());
+                    let s_k_b1_i = s_b1[k].column(i);
                     let lam = lambda[k];
                     for r in 0..p {
                         rhs[r] -= 2.0 * lam * s_k_b1_i[r];
                     }
                 }
                 if i < n_terms {
-                    let s_i_b1_k: Array1<f64> = self.s_list[i].dot(&b1.column(k).to_owned());
+                    let s_i_b1_k = s_b1[i].column(k);
                     let lam = lambda[i];
                     for r in 0..p {
                         rhs[r] -= 2.0 * lam * s_i_b1_k[r];
@@ -1071,7 +1076,7 @@ where
                     // for the diagonal ρ entry (catches the second λ in
                     // ρ_i's RHS — `2·λ_i·S_i·β` total counted twice via b1[i]
                     // already gives one; the diagonal needs one more).
-                    let s_i_beta: Array1<f64> = self.s_list[i].dot(&fit.beta);
+                    let s_i_beta = &s_beta[i];
                     let lam = lambda[i];
                     for r in 0..p {
                         rhs[r] -= 2.0 * lam * s_i_beta[r];
@@ -1123,7 +1128,7 @@ where
                 // 2 · b1[i]' · (Σ λ_m S_m · b1[k])
                 let mut s_b1_k = Array1::<f64>::zeros(p);
                 for m in 0..n_terms {
-                    let s_m_b1_k: Array1<f64> = self.s_list[m].dot(&b1.column(k).to_owned());
+                    let s_m_b1_k = s_b1[m].column(k);
                     for r in 0..p {
                         s_b1_k[r] += lambda[m] * s_m_b1_k[r];
                     }
@@ -1132,7 +1137,7 @@ where
                     p2_ik += 2.0 * b1[[r, i]] * s_b1_k[r];
                 }
                 if k < n_terms {
-                    let s_k_beta: Array1<f64> = self.s_list[k].dot(&fit.beta);
+                    let s_k_beta = &s_beta[k];
                     let lam = lambda[k];
                     let mut acc = 0.0_f64;
                     for r in 0..p {
@@ -1141,7 +1146,7 @@ where
                     p2_ik += 2.0 * lam * acc;
                 }
                 if i < n_terms {
-                    let s_i_beta: Array1<f64> = self.s_list[i].dot(&fit.beta);
+                    let s_i_beta = &s_beta[i];
                     let lam = lambda[i];
                     let mut acc = 0.0_f64;
                     for r in 0..p {
@@ -1150,7 +1155,7 @@ where
                     p2_ik += 2.0 * lam * acc;
                 }
                 if i == k && i < n_terms {
-                    let s_i_beta: Array1<f64> = self.s_list[i].dot(&fit.beta);
+                    let s_i_beta = &s_beta[i];
                     let lam = lambda[i];
                     let mut acc = 0.0_f64;
                     for r in 0..p {
@@ -1184,7 +1189,9 @@ where
                     tr_term1 += lambda[i] * tr_ainv_s[i];
                 }
                 // tr((A_inv·a1[i])·(A_inv·a1[k])) — symmetric matrix prod.
-                let tr_term2: f64 = (&ai_a1[i] * &ai_a1[k].t()).sum();
+                let tr_term2: f64 = ndarray::Zip::from(&ai_a1[i])
+                    .and(&ai_a1_t[k])
+                    .fold(0.0, |acc, a, b| acc + a * b);
                 let ldet2_ik = tr_term1 - tr_term2;
 
                 // ── Assemble Hessian entry ────────────────────────────
