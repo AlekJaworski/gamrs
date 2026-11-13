@@ -65,7 +65,7 @@ fn envelope_gradient_matches_fixed_sigma2_fd() {
     let y: Array1<f64> = array![1.1, 1.9, 3.0, 4.05];
     let s: Array2<f64> = array![[0.0, 0.0], [0.0, 1.0]];
     let score = GaussianClosedFormScore::new(
-        x.clone(),
+        x.clone().into(),
         y.clone(),
         vec![s.clone()],
         None,

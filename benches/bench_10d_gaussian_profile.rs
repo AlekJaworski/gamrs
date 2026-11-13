@@ -54,7 +54,7 @@ fn main() {
     println!("[profile] n={n} d={d} p={p}");
 
     let score = GaussianClosedFormScore::new(
-        prep.x_design.view().to_owned(),
+        prep.x_design.clone(),
         y.clone(),
         prep.s_list.clone(),
         None,

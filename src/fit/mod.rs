@@ -562,7 +562,7 @@ pub(crate) fn compute_vcov<S: crate::inner::LinearSolver>(
 /// `fit.a_weights`; the parameter is kept explicit because the ocat path feeds
 /// a ridged factor whose weights are its own.
 pub(crate) fn compute_edf<S: crate::inner::LinearSolver>(
-    x_design: &ndarray::Array2<f64>,
+    x_design: &crate::inner::DesignMatrix,
     working_weights: &Array1<f64>,
     fit: &crate::inner::GaussianInnerFit<S>,
 ) -> f64 {
@@ -579,15 +579,7 @@ pub(crate) fn compute_edf<S: crate::inner::LinearSolver>(
         Some((f, w_f)) => (w_f, Some(f)),
         None => (working_weights, None),
     };
-    let p = x_design.ncols();
-    let n = x_design.nrows();
-    let mut wxt = ndarray::Array2::<f64>::zeros((p, n));
-    for j in 0..n {
-        for i in 0..p {
-            wxt[[i, j]] = x_design[[j, i]] * weights[j];
-        }
-    }
-    let xtwx = wxt.dot(x_design);
+    let xtwx = x_design.split().xtwx(weights.view());
     match factor {
         Some(f) => S::trace_a_inv(f, xtwx.view()),
         None => fit.trace_a_inv(xtwx.view()),

@@ -6,6 +6,7 @@
 //! hundreds of levels is the difference between seconds and milliseconds.
 //! Results equal the dense products up to summation order.
 
+use std::borrow::Cow;
 use std::ops::Deref;
 use std::sync::{Arc, OnceLock};
 
@@ -16,6 +17,7 @@ use crate::design::PenaltyBlock;
 /// Below this many sparse columns the dense BLAS products are as fast.
 const MIN_SPARSE_COLS: usize = 32;
 
+#[derive(Clone)]
 struct ColumnSplit {
     dense: Vec<usize>,
     sparse: Vec<usize>,
@@ -107,7 +109,7 @@ impl DesignMatrix {
         let split = self.0.split.get_or_init(|| ColumnSplit::of(x));
         SplitDesign {
             x,
-            split: split.as_ref(),
+            split: split.as_ref().map(Cow::Borrowed),
         }
     }
 }
@@ -135,10 +137,26 @@ impl std::fmt::Debug for DesignMatrix {
 /// A borrowed design matrix plus, when it pays, its dense/sparse column split.
 pub(crate) struct SplitDesign<'a> {
     x: ArrayView2<'a, f64>,
-    split: Option<&'a ColumnSplit>,
+    split: Option<Cow<'a, ColumnSplit>>,
 }
 
-impl SplitDesign<'_> {
+impl<'a> SplitDesign<'a> {
+    /// For a bare view; a [`DesignMatrix`] keeps its split across calls instead.
+    pub(crate) fn new(x: ArrayView2<'a, f64>) -> Self {
+        Self {
+            x,
+            split: ColumnSplit::of(x).map(Cow::Owned),
+        }
+    }
+
+    pub(crate) fn is_split(&self) -> bool {
+        self.split.is_some()
+    }
+
+    pub(crate) fn x(&self) -> ArrayView2<'a, f64> {
+        self.x
+    }
+
     /// `X' diag(w) X` and `X' diag(w) z`.
     pub(crate) fn xtwx_xtwz(
         &self,
@@ -390,8 +408,8 @@ mod tests {
         let xs = design.split();
         assert!(xs.split.is_some());
         assert!(std::ptr::eq(
-            xs.split.unwrap(),
-            design.split().split.unwrap()
+            &**xs.split.as_ref().unwrap(),
+            &*design.split().split.unwrap()
         ));
 
         let wx = &x * &w.view().insert_axis(Axis(1));

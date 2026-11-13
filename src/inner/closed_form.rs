@@ -23,7 +23,10 @@ use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use crate::error::Result;
 use crate::traits::InnerSolver;
 
-use super::{factor_and_solve, xtwx_xtwy, CholeskySolver, GaussianInnerFit, LinearSolver};
+use super::{
+    factor_and_solve, split::SplitDesign, xtwx_xtwy, CholeskySolver, DesignMatrix,
+    GaussianInnerFit, LinearSolver,
+};
 
 /// Solve `(X'WX + S_total) β = X'Wy` for the combined `S_total = Σ_j
 /// λ_j S_j`. `weights` is the prior weight vector; pass `None` for
@@ -42,7 +45,7 @@ pub fn gaussian_inner_solve<S: LinearSolver>(
     weights: Option<ArrayView1<f64>>,
     s_total: ArrayView2<f64>,
 ) -> Result<GaussianInnerFit<S>> {
-    let (xtwx, xtwy) = xtwx_xtwy(x_design, y, weights);
+    let (xtwx, xtwy) = xtwx_xtwy(&SplitDesign::new(x_design), y, weights);
     gaussian_inner_solve_cached::<S>(x_design, y, weights, xtwx.view(), xtwy.view(), s_total)
 }
 
@@ -55,7 +58,7 @@ pub fn gaussian_inner_solve<S: LinearSolver>(
 /// `S: LinearSolver` (default `CholeskySolver`) picks the factorisation
 /// backend at the type level.
 pub struct GaussianClosedFormInner<S: LinearSolver = CholeskySolver> {
-    pub x_design: Array2<f64>,
+    pub x_design: DesignMatrix,
     pub y: Array1<f64>,
     pub weights: Option<Array1<f64>>,
     /// Per-term penalty blocks. The closed-form solver assembles
@@ -70,13 +73,13 @@ pub struct GaussianClosedFormInner<S: LinearSolver = CholeskySolver> {
 
 impl<S: LinearSolver> GaussianClosedFormInner<S> {
     pub fn new(
-        x_design: Array2<f64>,
+        x_design: DesignMatrix,
         y: Array1<f64>,
         weights: Option<Array1<f64>>,
         s_list: Vec<Array2<f64>>,
     ) -> Self {
         let (cached_xtwx, cached_xtwy) = xtwx_xtwy(
-            x_design.view(),
+            &x_design.split(),
             y.view(),
             weights.as_ref().map(|w| w.view()),
         );

@@ -387,17 +387,14 @@ where
 /// Build `X'WX` and `X'Wy` once. Both are needed by the inner solver and
 /// by the score's effective-dof / σ̂² computation.
 pub(crate) fn xtwx_xtwy(
-    x: ArrayView2<f64>,
+    split: &split::SplitDesign,
     y: ArrayView1<f64>,
     w: Option<ArrayView1<f64>>,
 ) -> (Array2<f64>, Array1<f64>) {
+    let x = split.x();
     match w {
-        Some(w) => {
-            // Avoid to_owned() clones of x/w (combined ~168 MB at n=1M)
-            // by routing the view-accepting weighted_xt directly.
-            let wxt = weighted_xt_view(x, w);
-            (wxt.dot(&x), wxt.dot(&y))
-        }
+        Some(w) => split.xtwx_xtwz(w, y),
+        None if split.is_split() => split.xtwx_xtwz(Array1::ones(x.nrows()).view(), y),
         None => (x.t().dot(&x), x.t().dot(&y)),
     }
 }

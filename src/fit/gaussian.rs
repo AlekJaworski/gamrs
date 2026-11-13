@@ -33,7 +33,7 @@ pub(crate) fn fit_gaussian_from_prep<S: LinearSolver>(
     let n_terms = prep.s_list.len();
 
     let inner = GaussianClosedFormInner::<S>::new(
-        prep.x_design.view().to_owned(),
+        prep.x_design.clone(),
         y.to_owned(),
         weights.map(|w| w.to_owned()),
         prep.s_list.clone(),

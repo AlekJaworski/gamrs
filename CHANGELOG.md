@@ -27,7 +27,21 @@ is locked. Versions correspond to the published PyPI wheels.
   are now `gamrs::inner::DesignMatrix` (dereferences to `Array2<f64>`; build
   one with `.into()`); `GaussianInnerFit::x_design` is `Option<DesignMatrix>`;
   the `s_list` fields of `PirlsInner`, `OcatInner` and
-  `ShapeAwareEnvelopeScore` are `Arc<[Array2<f64>]>`.
+  `ShapeAwareEnvelopeScore` are `Arc<[Array2<f64>]>`;
+  `GaussianClosedFormInner::new` and `GaussianClosedFormScore::new` take a
+  `DesignMatrix`, so a Gaussian fit no longer copies its design either.
+- **The work around the smoothing-parameter search no longer forms dense
+  `X'WX` products.** The rank-deficiency check, the final edf, and the
+  Gaussian closed form's cached `X'WX`/`X'Wy` each multiplied the full design
+  by itself; they now go through the same sparse column split as the inner
+  fit, so a random effect's indicator columns no longer cost `O(n·p²)`.
+  On n=20,000 with a 1000-level random effect and four CR smooths, single
+  thread: Gaussian 6.8 s → 2.6 s, and about 2 s off each Poisson and
+  scaled-t fit (11.0 s → 8.9 s and 16.6 s → 14.6 s). Poisson and scaled-t results are bit-identical on those
+  fits. On the Gaussian ones, where the cached product feeds the search,
+  REML agrees to 1e-13 and well-determined λ to 1e-12; a λ near 7e7 on a
+  term already fitted as a straight line moves by up to 8e-8 (relative),
+  which moves edf by at most 2e-10. The rank check drops the same columns.
 
 ## [0.16.2] — 2026-11-13
 

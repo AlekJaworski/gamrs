@@ -151,7 +151,7 @@ impl GaussianClosedFormScore {
     /// inner with the mgcv two-σ² profile. Equivalent to
     /// `with_inner(GaussianClosedFormInner::new(...), Gaussian, MgcvTwoSigmaProfile, ...)`.
     pub fn new(
-        x_design: Array2<f64>,
+        x_design: crate::inner::DesignMatrix,
         y: Array1<f64>,
         s_list: Vec<Array2<f64>>,
         weights: Option<Array1<f64>>,
@@ -1017,7 +1017,7 @@ mod fd_match_tests {
         let (x, y) = load_xy("1d_gaussian_smooth_n500_k10_cr");
         let prep: PreparedDesign = Cr { k: 10 }.prepare(x.view()).unwrap();
         let score = GaussianClosedFormScore::new(
-            prep.x_design.view().to_owned(),
+            prep.x_design.clone(),
             y.clone(),
             prep.s_list.clone(),
             None,
@@ -1052,7 +1052,7 @@ mod fd_match_tests {
         let prep = Additive { terms }.prepare(x.view()).unwrap();
         assert_eq!(prep.s_list.len(), 2, "expected d=2 multi-smooth");
         let score = GaussianClosedFormScore::new(
-            prep.x_design.view().to_owned(),
+            prep.x_design.clone(),
             y.clone(),
             prep.s_list.clone(),
             None,
@@ -1107,7 +1107,7 @@ mod fd_match_tests {
             prep.mp
         );
         let score = GaussianClosedFormScore::new(
-            prep.x_design.view().to_owned(),
+            prep.x_design.clone(),
             y.clone(),
             prep.s_list.clone(),
             None,
