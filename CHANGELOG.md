@@ -7,6 +7,28 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+### Performance
+
+- **The design's sparse/dense column split is built once per fit.** Every
+  PIRLS step, score evaluation and Hessian used to rescan the n×p design and
+  rebuild the split (a sparse copy of the random-effect columns plus a dense
+  copy of the rest), 44–66 times per fit. The design is now held as a shared
+  `DesignMatrix` that builds its split on first use. Inner fits, the per-probe
+  inner solvers of the shape-parameter families and the final fit share the
+  design and the penalty list instead of copying them (166 MB per copy at
+  n=20,000 with 1,037 coefficients). Results are bit-identical. Single thread,
+  n=20,000, random effect + four CR smooths: scat with 1,000 levels 20.0 →
+  12.6 s, Poisson with 1,000 levels 11.6 → 7.8 s, scat with 50 levels 2.40 →
+  1.65 s, Poisson with 50 levels 1.55 → 1.03 s; scat at n=5,000 with 200
+  levels 0.67 → 0.54 s. Gaussian fits, which never rebuilt the split per
+  step, are unchanged.
+- **Rust API:** `PreparedDesign::x_design` and the `x_design` fields of
+  `PirlsInner`, `OcatInner`, `ArmijoElfInner` and `ShapeAwareEnvelopeScore`
+  are now `gamrs::inner::DesignMatrix` (dereferences to `Array2<f64>`; build
+  one with `.into()`); `GaussianInnerFit::x_design` is `Option<DesignMatrix>`;
+  the `s_list` fields of `PirlsInner`, `OcatInner` and
+  `ShapeAwareEnvelopeScore` are `Arc<[Array2<f64>]>`.
+
 ## [0.16.2] — 2026-11-13
 
 ### Performance
