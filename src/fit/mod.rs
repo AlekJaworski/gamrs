@@ -579,15 +579,7 @@ pub(crate) fn compute_edf<S: crate::inner::LinearSolver>(
         Some((f, w_f)) => (w_f, Some(f)),
         None => (working_weights, None),
     };
-    let p = x_design.ncols();
-    let n = x_design.nrows();
-    let mut wxt = ndarray::Array2::<f64>::zeros((p, n));
-    for j in 0..n {
-        for i in 0..p {
-            wxt[[i, j]] = x_design[[j, i]] * weights[j];
-        }
-    }
-    let xtwx = wxt.dot(x_design);
+    let xtwx = crate::inner::split::SplitDesign::new(x_design.view()).xtwx(weights.view());
     match factor {
         Some(f) => S::trace_a_inv(f, xtwx.view()),
         None => fit.trace_a_inv(xtwx.view()),
