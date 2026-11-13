@@ -302,7 +302,7 @@ fn scat_criterion_matches_mgcv_on_its_own_sp_ladder() {
         x_design: prep.x_design.clone(),
         y: y.clone(),
         prior_weights: None,
-        s_list: prep.s_list.clone(),
+        s_list: prep.s_list.clone().into(),
         family_base: tdist_identity(nu, sigma2),
         rank_s_list: prep.rank_s_list.clone(),
         mp: prep.mp,
@@ -448,7 +448,7 @@ fn scat_vcov_is_the_fisher_inverse() {
     }
     .prepare(x.view())
     .expect("design");
-    let xd = &prep.x_design;
+    let xd: &Array2<f64> = &prep.x_design;
     let p = xd.ncols();
     let mut a = xd.t().dot(xd).mapv(|v| c * v);
     for (j, s_j) in prep.s_list.iter().enumerate() {

@@ -34,7 +34,7 @@ fn qgam_warm_start(
     let p = prep.x_design.ncols();
 
     // 1) Solve unpenalised-loss Gaussian at λ_pen = 1 (default outer start).
-    let xtx: Array2<f64> = prep.x_design.t().dot(&prep.x_design);
+    let xtx: Array2<f64> = prep.x_design.t().dot(&*prep.x_design);
     // S_total at ρ = 0 (i.e. λ_j = 1 for every term). `combined_s` with a
     // zero rho of length `s_list.len()` yields `Σ_j S_j` (each `exp(0)=1`),
     // so this warm start is correct for both single- and multi-smooth.

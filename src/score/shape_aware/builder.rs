@@ -36,10 +36,10 @@ pub trait ShapeInnerBuilder<
     fn build(
         &self,
         family: Family<L, K, V>,
-        x_design: Array2<f64>,
+        x_design: crate::inner::DesignMatrix,
         y: Array1<f64>,
         prior_weights: Option<Array1<f64>>,
-        s_list: Vec<Array2<f64>>,
+        s_list: std::sync::Arc<[Array2<f64>]>,
         opts: PirlsOpts,
     ) -> Self::Inner;
 
@@ -79,10 +79,10 @@ where
     fn build(
         &self,
         family: Family<L, K, V>,
-        x_design: Array2<f64>,
+        x_design: crate::inner::DesignMatrix,
         y: Array1<f64>,
         prior_weights: Option<Array1<f64>>,
-        s_list: Vec<Array2<f64>>,
+        s_list: std::sync::Arc<[Array2<f64>]>,
         opts: PirlsOpts,
     ) -> Self::Inner {
         PirlsInner {
@@ -110,10 +110,10 @@ impl<S: LinearSolver> ShapeInnerBuilder<OcatLoss, IdentityLink, OcatVariance, S>
     fn build(
         &self,
         family: Family<OcatLoss, IdentityLink, OcatVariance>,
-        x_design: Array2<f64>,
+        x_design: crate::inner::DesignMatrix,
         y: Array1<f64>,
         prior_weights: Option<Array1<f64>>,
-        s_list: Vec<Array2<f64>>,
+        s_list: std::sync::Arc<[Array2<f64>]>,
         opts: PirlsOpts,
     ) -> Self::Inner {
         OcatInner {

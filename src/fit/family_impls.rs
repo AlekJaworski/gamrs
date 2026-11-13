@@ -660,7 +660,7 @@ impl<S: LinearSolver> FamilyFitWithSolver<IdentityLink, OcatVariance, S> for Oca
             x_design: prep.x_design.clone(),
             y: y.to_owned(),
             prior_weights: prior.clone(),
-            s_list: prep.s_list.clone(),
+            s_list: prep.s_list.clone().into(),
             family_base,
             rank_s_list: prep.rank_s_list.clone(),
             mp: prep.mp,
@@ -714,10 +714,10 @@ impl<S: LinearSolver> FamilyFitWithSolver<IdentityLink, OcatVariance, S> for Oca
         let final_inner = ShapeInnerBuilder::<OcatLoss, IdentityLink, OcatVariance, S>::build(
             &score.inner_builder,
             family_final.clone(),
-            prep.x_design.clone(),
+            score.x_design.clone(),
             y.to_owned(),
             prior,
-            prep.s_list.clone(),
+            score.s_list.clone(),
             // edf and vcov read the Fisher pair, and this is the one fit they
             // read — so ask for it here and nowhere else.
             PirlsOpts {

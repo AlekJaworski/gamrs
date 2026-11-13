@@ -84,10 +84,10 @@ fn tdist_pirls_runs_via_trait_stack() {
     // now with TDist plugged in. The trait architecture's "single PIRLS
     // for every family" promise.
     let pirls = PirlsInner::<_, _, _, gamrs::CholeskySolver> {
-        x_design: x_design.clone(),
+        x_design: x_design.clone().into(),
         y: y.clone(),
         prior_weights: None,
-        s_list: vec![s_total.clone()],
+        s_list: vec![s_total.clone()].into(),
         family: tdist_identity(4.0, 0.04),
         opts: PirlsOpts::default(),
         _solver: std::marker::PhantomData,

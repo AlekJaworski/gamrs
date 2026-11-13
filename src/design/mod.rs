@@ -151,7 +151,7 @@ impl Predictor {
 /// vector ρ is `S_total(ρ) = Σ_j exp(ρ_j) · s_list[j]`.
 pub struct PreparedDesign {
     /// `(n, p)` design with intercept column at index 0.
-    pub x_design: Array2<f64>,
+    pub x_design: crate::inner::DesignMatrix,
     /// `Vec<(p, p)>` — one block-embedded penalty per smoothing parameter.
     /// Each matrix has the term's penalty in its column block and zeros
     /// elsewhere (so addition assembles a block-diagonal `S_total`).

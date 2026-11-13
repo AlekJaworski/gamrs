@@ -817,7 +817,7 @@ where
         debug_assert_eq!(theta.len(), ntot);
         let n = fit.n;
         let p = fit.p;
-        let xs = crate::inner::split::SplitDesign::new(self.x_design.view());
+        let xs = self.x_design.split();
 
         // ---- Pick A_inv (Newton-A for use_newton_irls families, else
         // the Fisher A from the converged fit). Mirrors

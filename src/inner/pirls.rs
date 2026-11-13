@@ -9,8 +9,8 @@ use crate::family::Family;
 use crate::traits::{InnerSolver, Link, Loss, VarianceFn};
 
 use super::{
-    add_penalty, beta_sbeta, factor_and_solve, halve_until_valid, split::SplitDesign,
-    CholeskySolver, GaussianInnerFit, LinearSolver,
+    add_penalty, beta_sbeta, factor_and_solve, halve_until_valid, CholeskySolver, GaussianInnerFit,
+    LinearSolver,
 };
 
 /// Vectorised Newton score weights `w_newton[i] = wf · α` at converged β.
@@ -125,7 +125,7 @@ pub(crate) fn score_log_det_h<L, K, V, S>(
     eta: &Array1<f64>,
     mu: &Array1<f64>,
     prior_w: &Array1<f64>,
-    x_design: &Array2<f64>,
+    x_design: &super::DesignMatrix,
     s_total: &Array2<f64>,
     fit: &crate::inner::GaussianInnerFit<S>,
 ) -> f64
@@ -165,7 +165,7 @@ pub(crate) fn lazy_newton_log_det_h<L, K, V>(
     y: &Array1<f64>,
     mu: &Array1<f64>,
     prior_w: &Array1<f64>,
-    x_design: &Array2<f64>,
+    x_design: &super::DesignMatrix,
     s_total: &Array2<f64>,
 ) -> Option<f64>
 where
@@ -183,7 +183,7 @@ where
         }
     }
 
-    let mut a_score = SplitDesign::new(x_design.view()).xtwx(w_newton.view());
+    let mut a_score = x_design.split().xtwx(w_newton.view());
     for j in 0..p {
         for l in 0..p {
             a_score[[j, l]] += s_total[[j, l]];
@@ -240,7 +240,7 @@ pub(crate) fn lazy_tk_kkt_inputs<L, K, V>(
     mu: &Array1<f64>,
     beta: &Array1<f64>,
     prior_w: &Array1<f64>,
-    x_design: &Array2<f64>,
+    x_design: &super::DesignMatrix,
     s_list: &[Array2<f64>],
     s_total: &Array2<f64>,
     rho: &Array1<f64>,
@@ -276,7 +276,7 @@ where
         }
     }
 
-    let xs = SplitDesign::new(x_design.view());
+    let xs = x_design.split();
     let mut a_newton = xs.xtwx(w_newton.view());
     for j in 0..p {
         for l in 0..p {
@@ -431,14 +431,14 @@ pub struct PirlsInner<
     V: VarianceFn + Clone,
     S: LinearSolver = CholeskySolver,
 > {
-    pub x_design: Array2<f64>,
+    pub x_design: crate::inner::DesignMatrix,
     pub y: Array1<f64>,
     pub prior_weights: Option<Array1<f64>>,
     /// Per-term penalty blocks `Vec<S_j>` of `(p, p)`. The PIRLS loop
     /// assembles `S_total(ρ) = Σ_j exp(ρ_j) · S_j` per call to `fit(ρ)`.
     /// Single-smooth callers pass `vec![S]`; multi-smooth `Additive`
     /// passes one block per term.
-    pub s_list: Vec<Array2<f64>>,
+    pub s_list: std::sync::Arc<[Array2<f64>]>,
     pub family: Family<L, K, V>,
     pub opts: PirlsOpts,
     pub _solver: PhantomData<S>,
@@ -555,7 +555,7 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver> I
         }
 
         // One WLS solve.
-        let xs = SplitDesign::new(self.x_design.view());
+        let xs = self.x_design.split();
         let (xtwx, xtwz) = xs.xtwx_xtwz(working_weights.view(), working_response.view());
         let mut a = xtwx.clone();
         add_penalty(&mut a, &s_total, 1.0);
@@ -671,7 +671,7 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
         let _ = rho; // rho is captured here via s_total; explicit token kept for grep clarity
         let n = self.x_design.nrows();
         let p = self.x_design.ncols();
-        let xs = SplitDesign::new(self.x_design.view());
+        let xs = self.x_design.split();
         let prior_w: Array1<f64> = match &self.prior_weights {
             Some(w) => w.clone(),
             None => Array1::ones(n),
@@ -1145,7 +1145,7 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
             w_obs[i] = wf * (1.0 + (self.y[i] - mu) * (v1n + g2n));
         }
         let s_total = crate::design::combined_s(&self.s_list, rho, self.x_design.ncols());
-        let xs = SplitDesign::new(self.x_design.view());
+        let xs = self.x_design.split();
         let a_obs = xs.xtwx(w_obs.view()) + &s_total;
         let a_obs = a_obs.factorize_into().ok()?;
         let lev = xs.leverage(fit.a_inv().view());

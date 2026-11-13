@@ -86,7 +86,7 @@ where
             .clone()
             .unwrap_or_else(|| Array1::ones(n));
         let w_obs = crate::inner::pirls::newton_score_weights(family, &self.y, &fit.mu, &prior);
-        let xs = crate::inner::split::SplitDesign::new(self.x_design.view());
+        let xs = self.x_design.split();
         let rho_arr = Array1::from(rho_slice.to_vec());
         let a_obs = xs.xtwx(w_obs.view())
             + crate::design::combined_s(&self.s_list, &rho_arr, self.x_design.ncols());
@@ -241,7 +241,7 @@ where
         });
 
         let tk_kkt_per_term: Vec<f64> = if let Some(dw_dmu) = dw_dmu_rows {
-            let xs = crate::inner::split::SplitDesign::new(self.x_design.view());
+            let xs = self.x_design.split();
             let h_diag = xs.leverage(fit.a_inv_ref().view());
             // tk_kkt[j] = Σᵢ ∂W_i/∂μ_i · η1_j[i] · h_diag[i]  (broadcast sum),
             // where η1_j = X·∂β/∂ρ_j and ∂β/∂ρ_j = −λ_j·A⁻¹·S_j·β (IFT on the
@@ -853,7 +853,7 @@ where
         let deta3: Array1<f64> = &level1.dmu3 * &ig1_3 - 3.0 * (&dmu2_arr * &g2g) * &ig1_2
             + &dmu_arr * (3.0 * &g2g_2 - &g3g) * &ig1;
 
-        let xs = crate::inner::split::SplitDesign::new(self.x_design.view());
+        let xs = self.x_design.split();
         // dβ/dθ_k = −H⁻¹ · X' · Detath[:, k] / 2 (η-coord IFT).
         // Broadcast for Detath build; matvec for X' · Detath.
         let mut dbeta_dtheta = Array2::<f64>::zeros((p, n_theta));
@@ -1264,10 +1264,10 @@ mod ift_ladder {
         let rank = x_design.ncols() - 2;
 
         let score = ShapeAwareEnvelopeScore {
-            x_design,
+            x_design: x_design.into(),
             y,
             prior_weights: None,
-            s_list: vec![s],
+            s_list: vec![s].into(),
             family_base: tdist_identity(5.0, 1.0),
             rank_s_list: vec![rank],
             mp: 2,

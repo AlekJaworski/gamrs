@@ -46,10 +46,10 @@ fn pirls_bernoulli_recovers_logistic_fit_on_noisy_data() {
     // Tiny ridge on the slope to prevent perfect separation (defensive).
     let s = array![[0.0, 0.0], [0.0, 1.0]];
     let solver = PirlsInner::<_, _, _, CholeskySolver> {
-        x_design: x,
+        x_design: x.into(),
         y,
         prior_weights: None,
-        s_list: vec![s],
+        s_list: vec![s].into(),
         family: bernoulli_logit(),
         opts: PirlsOpts::default(),
         _solver: PhantomData,

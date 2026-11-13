@@ -93,7 +93,7 @@ impl DesignStrategy for Re {
         let mp = p - rank_s;
 
         Ok(PreparedDesign {
-            x_design,
+            x_design: x_design.into(),
             s_list: vec![s_block],
             rank_s_list: vec![rank_s],
             log_pseudo_det_s_list: vec![log_pseudo_det_s],

@@ -29,8 +29,8 @@ use crate::family::{Family, IdentityLink, OcatLoss, OcatVariance};
 use crate::traits::{InnerSolver, Loss};
 
 use super::{
-    add_penalty, beta_sbeta, halve_until_valid, split::SplitDesign, CholeskySolver,
-    GaussianInnerFit, LinearSolver, PirlsOpts,
+    add_penalty, beta_sbeta, halve_until_valid, CholeskySolver, GaussianInnerFit, LinearSolver,
+    PirlsOpts,
 };
 
 /// PIRLS-style inner solver for the `ocat` extended family. β is solved
@@ -38,14 +38,14 @@ use super::{
 /// `OcatLoss.thresholds`). Returns a `GaussianInnerFit<S>` so it composes
 /// with `ShapeAwareEnvelopeScore` unchanged.
 pub struct OcatInner<S: LinearSolver = CholeskySolver> {
-    pub x_design: Array2<f64>,
+    pub x_design: crate::inner::DesignMatrix,
     pub y: Array1<f64>,
     pub prior_weights: Option<Array1<f64>>,
     /// Per-term penalty blocks. Currently `s_list.len() == 1` is required —
     /// the ocat inner solver hasn't been lifted to true multi-smooth yet
     /// (would need a per-term gradient assembly inside the joint
     /// β + threshold step). Tracked as a follow-up to 94b.
-    pub s_list: Vec<Array2<f64>>,
+    pub s_list: std::sync::Arc<[Array2<f64>]>,
     /// Family aggregator — `loss.thresholds` is read on every iteration.
     /// `Family<OcatLoss, IdentityLink, OcatVariance>` is the only valid
     /// combination (no other link / variance impl makes sense).
@@ -132,7 +132,7 @@ impl<S: LinearSolver> OcatInner<S> {
             // solve drifts β toward an over-saturated optimum (closes
             // the 5.9% multi-smooth ocat parity gap, 2026-05-27).
             let (beta_trial, factor_trial) = {
-                let xs = SplitDesign::new(self.x_design.view());
+                let xs = self.x_design.split();
                 let (xtwx, xtwz) = xs.xtwx_xtwz(working_weights.view(), working_response.view());
                 let n_pen = self.s_list.len() as f64;
                 let ridge_scale = 1.0e-5 * (1.0 + n_pen.sqrt());
@@ -241,7 +241,7 @@ impl<S: LinearSolver> OcatInner<S> {
             // `∂ridge/∂ρ_j · tr(H⁻¹) / 2` term because the post-penalty
             // ridge depends on λ — that term is wired in
             // `shape_aware.rs::compute_value_grad`.
-            let mut a = SplitDesign::new(self.x_design.view()).xtwx(working_weights.view());
+            let mut a = self.x_design.split().xtwx(working_weights.view());
             add_penalty(&mut a, &s_total, lambda);
             let n_pen = self.s_list.len() as f64;
             let ridge_scale = 1.0e-5 * (1.0 + n_pen.sqrt());

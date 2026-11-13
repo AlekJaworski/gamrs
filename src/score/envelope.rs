@@ -23,7 +23,6 @@ use ndarray::{s, Array1, Array2, ArrayView2};
 use crate::design::PenaltyBlock;
 use crate::error::Result;
 use crate::family::Gaussian;
-use crate::inner::split::SplitDesign;
 use crate::inner::{CholeskySolver, GaussianClosedFormInner, GaussianInnerFit, LinearSolver};
 use crate::traits::{CoordsKind, InnerSolver, Loss, ScoreDerivatives};
 
@@ -727,7 +726,7 @@ where
             skip_w_chain,
         ) {
             (Some(_dw), Some(x), false) => {
-                let xs = SplitDesign::new(x.view());
+                let xs = x.split();
                 // xdbeta[i] = X·(−λ_i A⁻¹S_iβ) = −λ_i · X·ainv_s_beta[i]
                 let mut xdbeta: Vec<Array1<f64>> = Vec::with_capacity(m);
                 for i in 0..m {
@@ -1018,7 +1017,7 @@ mod fd_match_tests {
         let (x, y) = load_xy("1d_gaussian_smooth_n500_k10_cr");
         let prep: PreparedDesign = Cr { k: 10 }.prepare(x.view()).unwrap();
         let score = GaussianClosedFormScore::new(
-            prep.x_design.clone(),
+            prep.x_design.view().to_owned(),
             y.clone(),
             prep.s_list.clone(),
             None,
@@ -1053,7 +1052,7 @@ mod fd_match_tests {
         let prep = Additive { terms }.prepare(x.view()).unwrap();
         assert_eq!(prep.s_list.len(), 2, "expected d=2 multi-smooth");
         let score = GaussianClosedFormScore::new(
-            prep.x_design.clone(),
+            prep.x_design.view().to_owned(),
             y.clone(),
             prep.s_list.clone(),
             None,
@@ -1108,7 +1107,7 @@ mod fd_match_tests {
             prep.mp
         );
         let score = GaussianClosedFormScore::new(
-            prep.x_design.clone(),
+            prep.x_design.view().to_owned(),
             y.clone(),
             prep.s_list.clone(),
             None,
@@ -1163,7 +1162,7 @@ mod fd_match_tests {
             x_design: prep.x_design.clone(),
             y: y.clone(),
             prior_weights: None,
-            s_list: prep.s_list.clone(),
+            s_list: prep.s_list.clone().into(),
             family: poisson_log(),
             opts: PirlsOpts::default(),
             _solver: PhantomData,
@@ -1196,7 +1195,7 @@ mod fd_match_tests {
             x_design: prep.x_design.clone(),
             y: y.clone(),
             prior_weights: None,
-            s_list: prep.s_list.clone(),
+            s_list: prep.s_list.clone().into(),
             family: gamma_log(),
             opts: PirlsOpts::default(),
             _solver: PhantomData,

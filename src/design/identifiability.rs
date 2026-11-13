@@ -181,7 +181,8 @@ pub(crate) fn without_columns(prep: PreparedDesign, dropped: &[usize]) -> Result
             .x_design
             .select(Axis(1), &keep)
             .as_standard_layout()
-            .into_owned(),
+            .into_owned()
+            .into(),
         s_list,
         rank_s_list,
         log_pseudo_det_s_list,

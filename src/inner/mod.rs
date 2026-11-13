@@ -27,6 +27,7 @@ pub mod gam_fit5;
 pub mod linalg;
 pub mod pirls;
 pub(crate) mod split;
+pub use split::DesignMatrix;
 
 pub use armijo::{ArmijoElfInner, ArmijoElfOpts};
 pub use closed_form::{gaussian_inner_solve, GaussianClosedFormInner};
@@ -153,10 +154,10 @@ pub struct GaussianInnerFit<S: LinearSolver = CholeskySolver> {
     /// finite-difference Hessian of the same gradient by O(1e-3) for PIRLS
     /// families. Gaussian leaves it `None` (W constant ⇒ term vanishes).
     pub dw_deta: Option<Array1<f64>>,
-    /// Design matrix `X` (cloned), populated only when `dw_deta` is `Some`
+    /// Design matrix `X` (shared, not copied), populated only when `dw_deta` is `Some`
     /// — the analytic Hessian's W-chain term needs `X·dβ/dρ` and the
     /// leverage-like `(X·A⁻¹S_jA⁻¹·X')_{ii}`. Gaussian leaves it `None`.
-    pub x_design: Option<Array2<f64>>,
+    pub x_design: Option<DesignMatrix>,
     /// `A⁻¹`, formed on first use: the score reads it several times per fit.
     pub a_inv_cache: std::sync::OnceLock<Array2<f64>>,
 }

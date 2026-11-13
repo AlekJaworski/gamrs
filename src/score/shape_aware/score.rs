@@ -86,14 +86,14 @@ where
     P: Profile<L>,
     S: LinearSolver,
 {
-    pub x_design: Array2<f64>,
+    pub x_design: crate::inner::DesignMatrix,
     pub y: Array1<f64>,
     pub prior_weights: Option<Array1<f64>>,
     /// Per-term penalty blocks. Multi-smooth in 0.2 — joint outer-Newton
     /// optimises `θ = [ρ₁, …, ρ_T, shape_0, …, shape_{n_shape-1}]` where
     /// `T = s_list.len()`. The shape-aware drivers (TDist/scat, NegBin,
     /// Tweedie, Ocat) all flow through this score type unchanged.
-    pub s_list: Vec<Array2<f64>>,
+    pub s_list: std::sync::Arc<[Array2<f64>]>,
     /// "Base" family — cloned per probe, then shape params updated from θ.
     pub family_base: Family<L, K, V>,
     /// Per-term rank, length `T = s_list.len()`.

@@ -65,7 +65,7 @@ fn check<L, K, V, P>(
         x_design: prep.x_design.clone(),
         y: y.clone(),
         prior_weights: None,
-        s_list: prep.s_list.clone(),
+        s_list: prep.s_list.clone().into(),
         family,
         // The FD reference needs β̂ converged far below the FD step.
         opts: PirlsOpts {

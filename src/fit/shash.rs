@@ -260,7 +260,7 @@ fn build_block(
         None
     };
     Ok((
-        prepared.x_design,
+        prepared.x_design.view().to_owned(),
         penalty,
         Some(prepared.predictor),
         dropped,

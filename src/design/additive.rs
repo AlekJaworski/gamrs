@@ -482,7 +482,7 @@ impl DesignStrategy for Additive {
         let mp = super::penalty_null_space_dim(p, &s_list, &rank_s_list);
 
         Ok(PreparedDesign {
-            x_design,
+            x_design: x_design.into(),
             s_list,
             rank_s_list,
             log_pseudo_det_s_list,

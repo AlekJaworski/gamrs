@@ -6,6 +6,9 @@
 //! hundreds of levels is the difference between seconds and milliseconds.
 //! Results equal the dense products up to summation order.
 
+use std::ops::Deref;
+use std::sync::{Arc, OnceLock};
+
 use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2, Axis};
 
 use crate::design::PenaltyBlock;
@@ -81,20 +84,61 @@ impl ColumnSplit {
     }
 }
 
+/// A design matrix shared by reference count, with its column split built
+/// on first use: cloning it, and every [`DesignMatrix::split`], is free.
+#[derive(Clone)]
+pub struct DesignMatrix(Arc<DesignData>);
+
+struct DesignData {
+    x: Array2<f64>,
+    split: OnceLock<Option<ColumnSplit>>,
+}
+
+impl DesignMatrix {
+    pub fn new(x: Array2<f64>) -> Self {
+        Self(Arc::new(DesignData {
+            x,
+            split: OnceLock::new(),
+        }))
+    }
+
+    pub(crate) fn split(&self) -> SplitDesign<'_> {
+        let x = self.0.x.view();
+        let split = self.0.split.get_or_init(|| ColumnSplit::of(x));
+        SplitDesign {
+            x,
+            split: split.as_ref(),
+        }
+    }
+}
+
+impl Deref for DesignMatrix {
+    type Target = Array2<f64>;
+
+    fn deref(&self) -> &Array2<f64> {
+        &self.0.x
+    }
+}
+
+impl From<Array2<f64>> for DesignMatrix {
+    fn from(x: Array2<f64>) -> Self {
+        Self::new(x)
+    }
+}
+
+impl std::fmt::Debug for DesignMatrix {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.x.fmt(f)
+    }
+}
+
 /// A borrowed design matrix plus, when it pays, its dense/sparse column split.
 pub(crate) struct SplitDesign<'a> {
     x: ArrayView2<'a, f64>,
-    split: Option<ColumnSplit>,
+    split: Option<&'a ColumnSplit>,
 }
 
-impl<'a> SplitDesign<'a> {
-    pub(crate) fn new(x: ArrayView2<'a, f64>) -> Self {
-        Self {
-            x,
-            split: ColumnSplit::of(x),
-        }
-    }
-
+impl SplitDesign<'_> {
     /// `X' diag(w) X` and `X' diag(w) z`.
     pub(crate) fn xtwx_xtwz(
         &self,
@@ -342,8 +386,13 @@ mod tests {
         let v = Array1::from_shape_fn(n, |_| u());
         let b = Array1::from_shape_fn(p, |_| u());
         let m = Array2::from_shape_fn((p, p), |_| u());
-        let xs = SplitDesign::new(x.view());
+        let design = DesignMatrix::new(x.clone());
+        let xs = design.split();
         assert!(xs.split.is_some());
+        assert!(std::ptr::eq(
+            xs.split.unwrap(),
+            design.split().split.unwrap()
+        ));
 
         let wx = &x * &w.view().insert_axis(Axis(1));
         assert!(max_abs(&xs.xtwx(w.view()), &x.t().dot(&wx)) < 1e-12);

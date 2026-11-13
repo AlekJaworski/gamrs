@@ -147,10 +147,10 @@ fn tdist_analytic_shape_grad_matches_fd() {
 
     let family_base = tdist_identity(5.0, 1.0);
     let score: ShapeAwarePirlsScore<_, _, _> = ShapeAwareEnvelopeScore {
-        x_design: x_design.clone(),
+        x_design: x_design.clone().into(),
         y: y.clone(),
         prior_weights: None,
-        s_list: vec![s.clone()],
+        s_list: vec![s.clone()].into(),
         family_base,
         rank_s_list: vec![x_design.ncols() - 2],
         mp: 2,
@@ -286,10 +286,10 @@ fn tdist_analytic_rho_grad_matches_fd() {
 
     let family_base = tdist_identity(5.0, 1.0);
     let score: ShapeAwarePirlsScore<_, _, _> = ShapeAwareEnvelopeScore {
-        x_design: x_design.clone(),
+        x_design: x_design.clone().into(),
         y: y.clone(),
         prior_weights: None,
-        s_list: vec![s.clone()],
+        s_list: vec![s.clone()].into(),
         family_base,
         rank_s_list: vec![x_design.ncols() - 2],
         mp: 2,
@@ -394,10 +394,10 @@ fn tweedie_analytic_shape_grad_matches_fd() {
 
     let family_base = tweedie_log(1.5, 1.0);
     let score: gamrs::score::ShapeAwarePirlsScoreOwnedPhi<_, _, _> = ShapeAwareEnvelopeScore {
-        x_design: x_design.clone(),
+        x_design: x_design.clone().into(),
         y: y.clone(),
         prior_weights: None,
-        s_list: vec![s.clone()],
+        s_list: vec![s.clone()].into(),
         family_base,
         rank_s_list: vec![x_design.ncols() - 2],
         mp: 2,
@@ -480,10 +480,10 @@ fn tweedie_analytic_hess_matches_fd_on_grad() {
 
     let family_base = tweedie_log(1.5, 1.0);
     let score: gamrs::score::ShapeAwarePirlsScoreOwnedPhi<_, _, _> = ShapeAwareEnvelopeScore {
-        x_design: x_design.clone(),
+        x_design: x_design.clone().into(),
         y: y.clone(),
         prior_weights: None,
-        s_list: vec![s.clone()],
+        s_list: vec![s.clone()].into(),
         family_base,
         rank_s_list: vec![x_design.ncols() - 2],
         mp: 2,
@@ -590,10 +590,10 @@ fn debug_tweedie_real_data_grad_walk() {
 
     let family_base = tweedie_log(1.5, 1.0);
     let score: gamrs::score::ShapeAwarePirlsScoreOwnedPhi<_, _, _> = ShapeAwareEnvelopeScore {
-        x_design: x_design.clone(),
+        x_design: x_design.clone().into(),
         y: y.clone(),
         prior_weights: None,
-        s_list: vec![s.clone()],
+        s_list: vec![s.clone()].into(),
         family_base,
         rank_s_list: vec![x_design.ncols() - 2],
         mp: 2,
@@ -746,7 +746,7 @@ fn negbin_multismooth_analytic_grad_matches_fd() {
         x_design: prep.x_design.clone(),
         y: y.clone(),
         prior_weights: None,
-        s_list: prep.s_list.clone(),
+        s_list: prep.s_list.clone().into(),
         family_base,
         rank_s_list: prep.rank_s_list.clone(),
         mp: prep.mp,
@@ -879,7 +879,7 @@ fn nb_hess_microbench() {
         x_design: prep.x_design.clone(),
         y: y.clone(),
         prior_weights: None,
-        s_list: prep.s_list.clone(),
+        s_list: prep.s_list.clone().into(),
         family_base,
         rank_s_list: prep.rank_s_list.clone(),
         mp: prep.mp,
@@ -957,7 +957,7 @@ fn nb_hess_microbench() {
         x_design: prep1.x_design.clone(),
         y: y1.clone(),
         prior_weights: None,
-        s_list: prep1.s_list.clone(),
+        s_list: prep1.s_list.clone().into(),
         family_base: negbin_log(3.0),
         rank_s_list: prep1.rank_s_list.clone(),
         mp: prep1.mp,
@@ -1044,7 +1044,7 @@ fn negbin_multismooth_analytic_hess_matches_fd_on_grad() {
         x_design: prep.x_design.clone(),
         y: y.clone(),
         prior_weights: None,
-        s_list: prep.s_list.clone(),
+        s_list: prep.s_list.clone().into(),
         family_base,
         rank_s_list: prep.rank_s_list.clone(),
         mp: prep.mp,
@@ -1161,7 +1161,7 @@ fn tdist_analytic_hess_matches_fd_on_grad() {
         x_design: prep.x_design.clone(),
         y: y.clone(),
         prior_weights: None,
-        s_list: prep.s_list.clone(),
+        s_list: prep.s_list.clone().into(),
         family_base,
         rank_s_list: prep.rank_s_list.clone(),
         mp: prep.mp,
@@ -1275,7 +1275,7 @@ fn tdist_multismooth_hess_matches_fd_away_from_initial_shape() {
         x_design: prep.x_design.clone(),
         y: y.clone(),
         prior_weights: None,
-        s_list: prep.s_list.clone(),
+        s_list: prep.s_list.clone().into(),
         family_base: tdist_identity(3.0 + 1.5_f64.exp(), 1.0),
         rank_s_list: prep.rank_s_list.clone(),
         mp: prep.mp,
@@ -1392,7 +1392,7 @@ fn tweedie_multismooth_rho_grad_matches_fd() {
             x_design: prep.x_design.clone(),
             y: y.clone(),
             prior_weights: None,
-            s_list: prep.s_list.clone(),
+            s_list: prep.s_list.clone().into(),
             family_base: family,
             rank_s_list: prep.rank_s_list.clone(),
             mp: prep.mp,

@@ -18,8 +18,8 @@ use crate::family::{ElfLoss, ElfVariance, Family, IdentityLink};
 use crate::traits::InnerSolver;
 
 use super::{
-    add_penalty, chol_back_solve, chol_forward_solve, cholesky_with_safety_ridge,
-    split::SplitDesign, CholeskySolver, GaussianInnerFit, LinearSolver,
+    add_penalty, chol_back_solve, chol_forward_solve, cholesky_with_safety_ridge, CholeskySolver,
+    GaussianInnerFit, LinearSolver,
 };
 
 /// `InnerSolver` for the qgam-style Quantile/ELF family.
@@ -42,7 +42,7 @@ use super::{
 ///
 /// Returns `GaussianInnerFit<S>` so it composes with `EnvelopeScore`.
 pub struct ArmijoElfInner<S: LinearSolver = CholeskySolver> {
-    pub x_design: Array2<f64>,
+    pub x_design: crate::inner::DesignMatrix,
     pub y: Array1<f64>,
     pub prior_weights: Option<Array1<f64>>,
     /// Per-term penalty blocks. Multi-smooth quantile is supported: `fit`
@@ -168,7 +168,7 @@ impl<S: LinearSolver> ArmijoElfInner<S> {
             }
 
             // X'WX + λ_pen S + ridge.
-            let mut a = SplitDesign::new(self.x_design.view()).xtwx(w.view());
+            let mut a = self.x_design.split().xtwx(w.view());
             add_penalty(&mut a, &s_total, lambda_pen);
 
             // RHS = X' (W·η + g) — well-defined at saturation.
@@ -271,7 +271,7 @@ impl<S: LinearSolver> ArmijoElfInner<S> {
             Some(a) => a,
             None => {
                 // Never-accepted path: rebuild A at converged β.
-                let mut a = SplitDesign::new(self.x_design.view()).xtwx(working_weights.view());
+                let mut a = self.x_design.split().xtwx(working_weights.view());
                 add_penalty(&mut a, &s_total, lambda_pen);
                 a
             }

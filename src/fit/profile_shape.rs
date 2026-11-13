@@ -91,7 +91,7 @@ where
             x_design: prep.x_design.clone(),
             y: y.to_owned(),
             prior_weights: prior.clone(),
-            s_list: prep.s_list.clone(),
+            s_list: prep.s_list.clone().into(),
             family_base: family_base.clone(),
             rank_s_list: prep.rank_s_list.clone(),
             mp: prep.mp,
@@ -124,10 +124,10 @@ where
     let final_inner = |eta_init: Option<Array1<f64>>| {
         score.inner_builder.build(
             family_final.clone(),
-            prep.x_design.clone(),
+            score.x_design.clone(),
             y.to_owned(),
             prior.clone(),
-            prep.s_list.clone(),
+            score.s_list.clone(),
             // edf and vcov read the Fisher pair, and this is the one fit they read
             // — so ask for it here and nowhere else.
             PirlsOpts {
