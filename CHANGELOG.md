@@ -27,6 +27,21 @@ is locked. Versions correspond to the published PyPI wheels.
   other `design=` value now raises a `ValueError` listing the accepted ones
   (`"cr"`, `"cr_stable"`) instead of being ignored.
 
+### Performance
+
+- **OpenBLAS runs on one thread by default.** Worker pools running several
+  fits at once each started OpenBLAS's own thread pool and oversubscribed the
+  cores. `OPENBLAS_NUM_THREADS`, `OMP_NUM_THREADS` and `GOTO_NUM_THREADS`
+  still set it; new `gamrs.set_blas_threads(n)` / `gamrs.get_blas_threads()`
+  change and read it at runtime. Gaussian, a random effect plus four smooths,
+  n = 20,000, 8-core i7-8565U, release-flavour wheel:
+  - one fit at a time, 4 threads is 1.1–1.2× faster than 1 (200 levels:
+    0.14 s vs 0.17 s; 1,000 levels: 1.47 s vs 1.65 s), and 8 threads is
+    slower than 1 (0.24 s, 2.40 s);
+  - four processes fitting at once finish 3.0–3.3× sooner on 1 thread each
+    (200 levels: 2.0–2.3 s vs 6.2–6.6 s; 1,000 levels: 16.0 s vs
+    49.8–53.3 s for 4 × 5 fits).
+
 ## [0.18.0] — 2026-11-20
 
 ### Added

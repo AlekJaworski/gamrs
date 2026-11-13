@@ -43,6 +43,38 @@ def test_public_exports_present():
         assert hasattr(gamrs, name), f"gamrs.{name} missing from public API"
 
 
+def blas_threads_at_import(**env):
+    import os
+    import subprocess
+    import sys
+
+    clean = {
+        k: v for k, v in os.environ.items()
+        if k not in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "GOTO_NUM_THREADS")
+    }
+    out = subprocess.run(
+        [sys.executable, "-c", "import gamrs; print(gamrs.get_blas_threads())"],
+        env={**clean, **env}, capture_output=True, text=True, check=True,
+    )
+    return out.stdout.strip()
+
+
+def test_blas_threads_default_to_one_unless_the_environment_sets_them():
+    if gamrs.get_blas_threads() is None:
+        pytest.skip("this build does not use OpenBLAS")
+    assert blas_threads_at_import() == "1"
+    # OMP_NUM_THREADS is the variable both pthread and OpenMP OpenBLAS builds read.
+    assert blas_threads_at_import(OMP_NUM_THREADS="2") == "2"
+    before = gamrs.get_blas_threads()
+    try:
+        gamrs.set_blas_threads(2)
+        assert gamrs.get_blas_threads() == 2
+    finally:
+        gamrs.set_blas_threads(before)
+    with pytest.raises(ValueError):
+        gamrs.set_blas_threads(0)
+
+
 # --------------------------------------------------------------------------- #
 # Low-level GAM facade                                                        #
 # --------------------------------------------------------------------------- #

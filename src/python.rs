@@ -2045,6 +2045,50 @@ fn fit_shash<'py>(
     Ok(PyShashGamFit { inner: fit })
 }
 
+#[cfg(any(feature = "blas-static", feature = "blas-system"))]
+mod openblas {
+    use std::os::raw::c_int;
+    extern "C" {
+        fn openblas_set_num_threads(n: c_int);
+        fn openblas_get_num_threads() -> c_int;
+    }
+    pub fn set(n: usize) -> bool {
+        unsafe { openblas_set_num_threads(n as c_int) };
+        true
+    }
+    pub fn get() -> Option<usize> {
+        Some(unsafe { openblas_get_num_threads() } as usize)
+    }
+}
+
+#[cfg(not(any(feature = "blas-static", feature = "blas-system")))]
+mod openblas {
+    pub fn set(_n: usize) -> bool {
+        false
+    }
+    pub fn get() -> Option<usize> {
+        None
+    }
+}
+
+/// Set the number of threads OpenBLAS uses for every later fit in this process.
+#[pyfunction]
+fn set_blas_threads(n: usize) -> PyResult<()> {
+    if n == 0 {
+        return Err(PyValueError::new_err("n must be at least 1"));
+    }
+    if !openblas::set(n) {
+        return Err(PyRuntimeError::new_err("this build does not use OpenBLAS"));
+    }
+    Ok(())
+}
+
+/// The number of threads OpenBLAS uses, or None when this build does not use OpenBLAS.
+#[pyfunction]
+fn get_blas_threads() -> Option<usize> {
+    openblas::get()
+}
+
 #[pymodule]
 fn _gamrs_native(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyFittedGam>()?;
@@ -2055,5 +2099,18 @@ fn _gamrs_native(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fit_shash, m)?)?;
     m.add_function(wrap_pyfunction!(set_outer_tuning_override, m)?)?;
     m.add_function(wrap_pyfunction!(set_outer_algorithm, m)?)?;
+    m.add_function(wrap_pyfunction!(set_blas_threads, m)?)?;
+    m.add_function(wrap_pyfunction!(get_blas_threads, m)?)?;
+    // Threaded OpenBLAS in several processes at once oversubscribes the cores (worker pools).
+    if [
+        "OPENBLAS_NUM_THREADS",
+        "OMP_NUM_THREADS",
+        "GOTO_NUM_THREADS",
+    ]
+    .iter()
+    .all(|v| std::env::var_os(v).is_none())
+    {
+        openblas::set(1);
+    }
     Ok(())
 }

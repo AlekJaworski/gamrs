@@ -53,6 +53,7 @@ from ._low_level import (
     fit_additive,
 )
 from ._fitter import Gam, GAMFitter
+from ._gamrs_native import get_blas_threads, set_blas_threads
 from ._predictor import GamPredictor
 from ._gaulss import GaulssFit, fit_gaulss
 from ._shash_gam import ShashGamFit, fit_shash
@@ -65,6 +66,8 @@ from ._quantile import (
 from ._stubs import GamSummary, TermContributions
 
 __all__ = [
+    "get_blas_threads",
+    "set_blas_threads",
     "Gam",
     "GAMFitter",
     "GAM",

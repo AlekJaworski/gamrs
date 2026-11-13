@@ -102,8 +102,10 @@ Seconds per fit.
 `gam`'s. `bam(discrete = TRUE)` is faster on the 50-level models, but its
 fitted values are 0.5–1.6% of a standard deviation away from `gam`'s.
 
-Fits release the GIL, so independent fits run in parallel on Python threads.
-Set `OPENBLAS_NUM_THREADS=1` when running several at once.
+Fits release the GIL, so independent fits run in parallel on Python threads
+or processes. OpenBLAS runs on one thread unless `OPENBLAS_NUM_THREADS`,
+`OMP_NUM_THREADS` or `GOTO_NUM_THREADS` is set; `gamrs.set_blas_threads(n)`
+changes it at runtime.
 
 ## Rust
 
