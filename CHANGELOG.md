@@ -65,11 +65,11 @@ is locked. Versions correspond to the published PyPI wheels.
   and Poisson 3.9 s → 1.8 s; n = 5,000 with 200 levels, t 8.5 s → 0.8 s and
   Poisson 4.3 s → 0.7 s. Same iterations; fitted values agree to 1e-11 and
   REML scores to 3e-13 (relative); only the λ of a term fitted as a straight
-  line (λ ≈ 1e9, edf ≈ 1) moves, by up to 2e-5 relative. Across the Python
-  battery, one multi-smooth quantile fit with a term at edf 1.02 now takes 11
-  outer iterations instead of 7 and stops 9e-6 lower on its criterion
-  (predictions 2e-5 relative); every other fit is within 1.1e-7 in fitted
-  values.
+  line (λ ≈ 1e9, edf ≈ 1) moves, by up to 2e-5 relative. Designs with fewer
+  than 32 sparse columns keep the dense products: across the Python battery
+  fitted values move by at most 1.4e-9 and REML scores by 1.1e-9 (relative),
+  and only flat-ridge smoothing parameters (ρ ≈ 22, edf ≈ 1) move, by up to
+  0.5%.
 
 ## [0.16.1] — 2026-11-10
 

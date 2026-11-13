@@ -92,11 +92,19 @@ impl<'a> SplitDesign<'a> {
         }
     }
 
+    /// `X' diag(w) X` and `X' diag(w) z`.
+    pub(crate) fn xtwx_xtwz(&self, w: ArrayView1<f64>, z: ArrayView1<f64>) -> (Array2<f64>, Array1<f64>) {
+        if self.split.is_none() {
+            let xtw = super::weighted_xt_view(self.x, w);
+            return (xtw.dot(&self.x), xtw.dot(&z));
+        }
+        (self.xtwx(w), self.t_dot_vec((&w * &z).view()))
+    }
+
     /// `X' diag(w) X`.
     pub(crate) fn xtwx(&self, w: ArrayView1<f64>) -> Array2<f64> {
         let Some(s) = &self.split else {
-            let wx = &self.x * &w.insert_axis(Axis(1));
-            return self.x.t().dot(&wx);
+            return super::weighted_xt_view(self.x, w).dot(&self.x);
         };
         let p = self.x.ncols();
         let mut out = Array2::<f64>::zeros((p, p));
@@ -192,7 +200,8 @@ impl<'a> SplitDesign<'a> {
             .zip(blocks)
             .map(|(s_j, b)| {
                 let xa_b = xa.slice(s![.., b.range.clone()]);
-                (&times_block(xa_b, s_j, b) * &xa_b).sum_axis(Axis(1))
+                let xa_s = times_block(xa_b, s_j, b);
+                Array1::from_shape_fn(xa.nrows(), |r| xa_s.row(r).dot(&xa_b.row(r)))
             })
             .collect()
     }

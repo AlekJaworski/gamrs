@@ -133,8 +133,7 @@ impl<S: LinearSolver> OcatInner<S> {
             // the 5.9% multi-smooth ocat parity gap, 2026-05-27).
             let (beta_trial, factor_trial) = {
                 let xs = SplitDesign::new(self.x_design.view());
-                let xtwx = xs.xtwx(working_weights.view());
-                let xtwz = xs.t_dot_vec((&working_weights * &working_response).view());
+                let (xtwx, xtwz) = xs.xtwx_xtwz(working_weights.view(), working_response.view());
                 let n_pen = self.s_list.len() as f64;
                 let ridge_scale = 1.0e-5 * (1.0 + n_pen.sqrt());
                 let max_diag = xtwx.diag().iter().map(|x| x.abs()).fold(1.0_f64, f64::max);

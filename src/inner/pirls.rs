@@ -556,8 +556,7 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver> I
 
         // One WLS solve.
         let xs = SplitDesign::new(self.x_design.view());
-        let xtwx = xs.xtwx(working_weights.view());
-        let xtwz = xs.t_dot_vec((&working_weights * &working_response).view());
+        let (xtwx, xtwz) = xs.xtwx_xtwz(working_weights.view(), working_response.view());
         let mut a = xtwx.clone();
         add_penalty(&mut a, &s_total, 1.0);
         let (factor, beta) = factor_and_solve::<S>(&a, xtwz.view()).map_err(|e| match e {
@@ -793,8 +792,7 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
             }
 
             let (beta_trial, factor_trial) = {
-                let mut a = xs.xtwx(working_weights.view());
-                let xtwz = xs.t_dot_vec((&working_weights * &working_response).view());
+                let (mut a, xtwz) = xs.xtwx_xtwz(working_weights.view(), working_response.view());
                 add_penalty(&mut a, &s_total, lambda);
                 let (factor, b) = factor_and_solve::<S>(&a, xtwz.view()).map_err(|e| match e {
                     GamrsError::SingularSystem(msg) => {
