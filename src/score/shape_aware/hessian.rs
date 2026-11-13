@@ -1016,6 +1016,8 @@ where
         // ---- Main symmetric loop: for each (i, k) with i ≤ k, fill the
         // Hessian entry. Mirrors `tdist_gdi2_native` lines 1441-1551 with
         // index ranges adjusted to gamrs's `[ρ; θ]` layout.
+        let h = xs.leverage(a_inv.view());
+        let tr_ainv_s: Vec<f64> = self.s_list.iter().map(|s_j| (&a_inv * &s_j.t()).sum()).collect();
         let mut hess = Array2::<f64>::zeros((ntot, ntot));
         for i in 0..ntot {
             for k in i..ntot {
@@ -1175,16 +1177,12 @@ where
                     let pair = shape_pair_index(ii.min(kk), ii.max(kk), n_shape);
                     w2 = w2 + lv2.dmu2_th2.column(pair);
                 }
-                // a2[i,k] = X' · diag(0.5·w2) · X  (+ λ_i·S_i if diagonal ρ).
-                let half_w2 = &w2 * 0.5;
-                let mut a2_ik = xs.xtwx(half_w2.view());
+                // a2[i,k] = X' · diag(0.5·w2) · X  (+ λ_i·S_i if diagonal ρ),
+                // so tr(A_inv · a2[i,k]) = 0.5·Σ w2·h (+ λ_i·tr(A_inv·S_i)).
+                let mut tr_term1: f64 = 0.5 * (&w2 * &h).sum();
                 if i == k && i < n_terms {
-                    let lam = lambda[i];
-                    a2_ik = a2_ik + lam * &self.s_list[i];
+                    tr_term1 += lambda[i] * tr_ainv_s[i];
                 }
-                // tr(A_inv · a2[i,k])
-                let ai_a2 = a_inv.dot(&a2_ik);
-                let tr_term1: f64 = ai_a2.diag().sum();
                 // tr((A_inv·a1[i])·(A_inv·a1[k])) — symmetric matrix prod.
                 let tr_term2: f64 = (&ai_a1[i] * &ai_a1[k].t()).sum();
                 let ldet2_ik = tr_term1 - tr_term2;
