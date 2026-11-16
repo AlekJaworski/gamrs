@@ -9,17 +9,21 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ### Added
 
-- **Monotone smooths, ported from mgcv's `scasm()` (Rust API, Gaussian,
-  1-D).** `gamrs::shape` fits `y ~ s(x, bs = "sc", xt = "m+")` /
-  `xt = "m-"` models: mgcv's `bs` B-spline basis with its derivative
-  penalty, increasing or decreasing as linear inequality constraints on the
-  coefficients, an active-set constrained least-squares solve (mgcv's
-  `pcls`) and scasm's extended Fellner-Schall REML loop. Against mgcv 1.9-4
-  on synthetic fixtures (n = 500 and 3,000, k = 10): smoothing parameter to
-  9e-13 relative, REML to 6e-16, edf to 1.2e-13, fitted values and term
-  predictions to 3e-14, `Vp` to 5e-16; every EFS iteration matches scasm's,
-  active constraint sets included. The fitted curve is monotone on a dense
-  grid by construction.
+- **Monotone smooths, ported from mgcv's `scasm()` (Rust API, Gaussian).**
+  `gamrs::shape` fits `s(x, bs = "sc", xt = "m+" / "m-")` and
+  `te(x, z, bs = "sc", xt = list(.., ..))` terms: mgcv's `bs` B-spline basis
+  with its derivative penalty, increasing or decreasing as linear inequality
+  constraints on the coefficients (any direction per tensor margin), an
+  active-set constrained least-squares solve (mgcv's `pcls`) and scasm's
+  extended Fellner-Schall REML loop. Against mgcv 1.9-4 on synthetic
+  fixtures (n = 500 and 3,000; `s` with k = 10, `te` with k = (6, 5)):
+  smoothing parameters to 5e-9 relative, REML to 5e-13, edf to 1.2e-10,
+  fitted values and term predictions to 3e-12, `Vp` to 3e-15; every EFS
+  iteration matches scasm's, active constraint sets included. Fitted
+  curves are monotone by construction; a tensor surface is monotone over
+  the rectangle spanned by the training data, but where it extrapolates
+  linearly beyond it the shape can break slightly (scasm's surfaces do the
+  same, by the same amounts).
 
 ## [0.16.3] — 2026-11-13
 

@@ -251,14 +251,14 @@ fn rel(a: f64, b: f64) -> f64 {
 
 fn check_efs_1d(n: usize) {
     use gamrs::shape::constraints::Shape;
-    use gamrs::shape::scasm::{fit_gaussian, ScSpec, ScasmDesign};
+    use gamrs::shape::scasm::{fit_gaussian, ScTermSpec, ScasmDesign};
     let c = case_1d(n);
     let src = load(&format!("scasm_mono_gaussian_n{n}_k10"));
     let y = Array1::from_vec(vec_of(&src["inputs"]["y_train"]));
     let data = c.x.clone().insert_axis(ndarray::Axis(1));
     let design = ScasmDesign::build(
         &data,
-        &[ScSpec {
+        &[ScTermSpec::Smooth {
             col: 0,
             k: 10,
             shape: Some(Shape::Decreasing),
@@ -395,4 +395,291 @@ fn scasm_efs_1d_n500() {
 #[test]
 fn scasm_efs_1d_n3000() {
     check_efs_1d(3000);
+}
+
+// ---------------------------------------------------------------------------
+// te(log_cars, distance, bs = "sc", xt = list("m-", "m+"), k = c(6, 5))
+// ---------------------------------------------------------------------------
+
+struct TeCase {
+    internals: Value,
+    data: Array2<f64>,
+    y: Array1<f64>,
+    design: gamrs::shape::scasm::ScasmDesign,
+}
+
+fn case_te(n: usize) -> TeCase {
+    use gamrs::shape::constraints::Shape;
+    use gamrs::shape::scasm::{ScTermSpec, ScasmDesign};
+    let internals = load(&format!("scasm_internals_te_n{n}_k6x5"));
+    let src = load(&format!("scasm_te_gaussian_n{n}_k6x5"));
+    let data = mat_of(&src["inputs"]["x_train"]);
+    let y = Array1::from_vec(vec_of(&src["inputs"]["y_train"]));
+    let spec = ScTermSpec::Tensor {
+        cols: [0, 1],
+        k: [6, 5],
+        shapes: [Some(Shape::Decreasing), Some(Shape::Increasing)],
+    };
+    let design = ScasmDesign::build(&data, &[spec]).unwrap();
+    TeCase {
+        internals,
+        data,
+        y,
+        design,
+    }
+}
+
+fn check_setup_te(n: usize) {
+    let c = case_te(n);
+    let setup = &c.internals["setup"];
+    let model = &c.design.model;
+    if !setup["X"].is_null() {
+        let e = max_err(&model.x, &mat_of(&setup["X"]));
+        eprintln!("te n={n}: X max error {e:.2e}");
+        assert!(e < 1e-12, "X off by {e:.3e}");
+    }
+    let cm = column_means(&model.x).insert_axis(ndarray::Axis(0));
+    let e = max_err(
+        &cm,
+        &Array2::from_shape_vec((1, model.x.ncols()), vec_of(&setup["X_colmeans"])).unwrap(),
+    );
+    assert!(e < 1e-12, "X column means off by {e:.3e}");
+    for (j, s) in model.blocks[0].penalties.iter().enumerate() {
+        let s_ref = mat_of(&setup["S"][j]);
+        let s_max = s_ref.iter().map(|v| v.abs()).fold(0.0, f64::max);
+        let e = s
+            .iter()
+            .zip(s_ref.iter())
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0, f64::max)
+            / s_max;
+        eprintln!("te n={n}: S[{j}] max error {e:.2e} (relative to max |S|)");
+        assert!(e < 1e-12, "S[{j}] off by {e:.3e}");
+    }
+    let e = max_err(&model.constraints.c, &mat_of(&setup["C"]));
+    assert!(e < 1e-12, "C off by {e:.3e}");
+    let e = max_err(&model.constraints.ain, &mat_of(&setup["Ain"]));
+    eprintln!("te n={n}: Ain max error {e:.2e}");
+    assert!(e < 1e-12, "Ain off by {e:.3e}");
+    let start = &model.beta0;
+    let slack = model.constraints.ain.dot(start);
+    assert!(
+        slack.iter().all(|&v| v > 0.0),
+        "start not strictly feasible"
+    );
+    assert!(
+        model.constraints.c.dot(start)[0].abs() < 1e-15,
+        "start not centred"
+    );
+    let new = mat_of(&c.internals["inputs"]["x_new"]);
+    let lp = mat_of(&setup["lpmatrix_new"]);
+    let mine = c.design.terms[0].design(&new);
+    let e = max_err(&mine, &lp.slice(ndarray::s![.., 1..]).to_owned());
+    eprintln!("te n={n}: prediction matrix max error {e:.2e}");
+    assert!(e < 1e-12, "prediction matrix off by {e:.3e}");
+}
+
+#[test]
+fn scasm_setup_te_n500() {
+    check_setup_te(500);
+}
+
+#[test]
+fn scasm_setup_te_n3000() {
+    check_setup_te(3000);
+}
+
+fn check_fixed_sp_te(n: usize) {
+    use gamrs::shape::scasm::{fit_fixed_sp, ScasmModel};
+    let c = case_te(n);
+    // Our own feasible start and, separately, scasm's LP start: the
+    // solution must not depend on which.
+    let mut lp_start: ScasmModel = c.design.model.clone();
+    lp_start.beta0 = Array1::from_vec(vec_of(&c.internals["setup"]["beta0"]));
+    for rung in c.internals["fixed_sp"].as_array().unwrap() {
+        let sp = Array1::from_vec(vec_of(&rung["sp"]));
+        let b_ref = vec_of(&rung["coefficients"]);
+        let act_ref = ints_of(&rung["active"]);
+        for (label, model) in [("own start", &c.design.model), ("LP start", &lp_start)] {
+            let (beta, active) = fit_fixed_sp(model, &c.y, &sp).unwrap();
+            let e = beta
+                .iter()
+                .zip(&b_ref)
+                .map(|(a, b)| (a - b).abs() / (1.0 + b.abs()))
+                .fold(0.0, f64::max);
+            let mut act: Vec<usize> = active.iter().map(|a| a + 1).collect();
+            let mut act_sorted_ref = act_ref.clone();
+            if label == "own start" {
+                act.sort();
+                act_sorted_ref.sort();
+            }
+            eprintln!(
+                "te n={n} {label} sp={:?}: coef {e:.2e}, {} active (scasm {})",
+                sp.to_vec(),
+                act.len(),
+                act_ref.len()
+            );
+            assert!(e < 2e-9, "{label}: coefficients off by {e:.3e}");
+            assert_eq!(act, act_sorted_ref, "{label}: active set differs");
+        }
+    }
+}
+
+#[test]
+fn scasm_fixed_sp_te_n500() {
+    check_fixed_sp_te(500);
+}
+
+#[test]
+fn scasm_fixed_sp_te_n3000() {
+    check_fixed_sp_te(3000);
+}
+
+fn check_efs_te(n: usize) {
+    use gamrs::shape::scasm::fit_gaussian;
+    let c = case_te(n);
+    let fit = fit_gaussian(&c.design.model, &c.y).unwrap();
+    let iters = c.internals["efs"]["iterations"].as_array().unwrap();
+    assert_eq!(fit.iterations.len(), iters.len(), "EFS iteration count");
+    let mut worst = 0.0_f64;
+    for (k, (mine, r)) in fit.iterations.iter().zip(iters).enumerate() {
+        let mut act = mine.active.iter().map(|a| a + 1).collect::<Vec<_>>();
+        let mut act_ref = ints_of(&r["active"]);
+        act.sort();
+        act_ref.sort();
+        assert_eq!(act, act_ref, "active set, iteration {k}");
+        // β'S_jβ shrinks towards 0 as λ grows, so its rounding is judged
+        // against its first-iteration size, not its own.
+        let psp_scale = vec_of(&iters[0]["pSp"]);
+        for (j, (a, b)) in mine.psp.iter().zip(vec_of(&r["pSp"])).enumerate() {
+            worst = worst.max((a - b).abs() / psp_scale[j]);
+        }
+        for (mv, key) in [
+            (&mine.lsp, "lsp"),
+            (&mine.tr_s, "trS"),
+            (&mine.sedf, "sedf"),
+        ] {
+            for (a, b) in mv.iter().zip(vec_of(&r[key])) {
+                if std::env::var("SCASM_DEBUG").is_ok() {
+                    eprintln!(
+                        "  iter {k} {key}: {a:.12e} vs {b:.12e} ({:.1e})",
+                        rel(*a, b)
+                    );
+                }
+                worst = worst.max(rel(*a, b));
+            }
+        }
+        worst = worst.max(rel(mine.edf_total, r["edf_total"].as_f64().unwrap()));
+        worst = worst.max(rel(mine.scale, r["scale"].as_f64().unwrap()));
+    }
+    eprintln!(
+        "te n={n}: {} EFS iterations, worst relative error over the trace {worst:.2e}",
+        iters.len()
+    );
+    assert!(worst < 5e-8, "EFS trace off by {worst:.3e}");
+
+    let fin = &c.internals["final"];
+    let e_sp = fit
+        .sp
+        .iter()
+        .zip(vec_of(&fin["sp"]))
+        .map(|(a, b)| rel(*a, b))
+        .fold(0.0, f64::max);
+    let e_reml = rel(fit.reml(), fin["reml"].as_f64().unwrap());
+    let e_scale = rel(fit.scale, fin["scale"].as_f64().unwrap());
+    let e_edf = fit
+        .edf
+        .iter()
+        .zip(vec_of(&fin["edf"]))
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0, f64::max);
+    let e_fit = fit
+        .fitted
+        .iter()
+        .zip(vec_of(&fin["fitted"]))
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0, f64::max);
+    let e_vp = max_err(&fit.vp, &mat_of(&fin["Vp"]));
+    let new = mat_of(&c.internals["inputs"]["x_new"]);
+    let terms = c.design.predict_terms(&fit.beta, &new);
+    let se = c.design.predict_terms_se(&fit.vp, &new);
+    let e_t = terms
+        .column(0)
+        .iter()
+        .zip(vec_of(&fin["term_new"][0]))
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0, f64::max);
+    let e_se = se
+        .column(0)
+        .iter()
+        .zip(vec_of(&fin["term_new_se"][0]))
+        .map(|(a, b)| rel(*a, b))
+        .fold(0.0, f64::max);
+    eprintln!(
+        "te n={n}: sp {e_sp:.2e} rel, REML {e_reml:.2e} rel, scale {e_scale:.2e} rel, edf {e_edf:.2e} abs, fitted {e_fit:.2e} abs, Vp {e_vp:.2e}, terms {e_t:.2e} abs, se {e_se:.2e} rel"
+    );
+    assert!(
+        e_sp < 5e-8 && e_reml < 5e-12 && e_scale < 5e-12,
+        "sp/REML/scale off"
+    );
+    assert!(
+        e_edf < 1e-9 && e_fit < 5e-11 && e_vp < 1e-13 && e_t < 5e-11 && e_se < 5e-10,
+        "edf/fitted/Vp/terms off"
+    );
+
+    // Monotone by construction on a dense grid over the data rectangle:
+    // decreasing along log_cars, increasing along distance. Outside it the
+    // margins extrapolate linearly and each margin's extrapolation mixes
+    // the other margin's coefficients with weights outside [0, 1], so the
+    // guarantee (scasm's too) holds only inside; scasm's surface breaks it
+    // there by the same amounts ours does.
+    let lo_hi = |j: usize| {
+        let col = c.data.column(j);
+        (
+            col.fold(f64::INFINITY, |a, &b| a.min(b)),
+            col.fold(f64::NEG_INFINITY, |a, &b| a.max(b)),
+        )
+    };
+    let ((a0, a1), (b0, b1)) = (lo_hi(0), lo_hi(1));
+    let g = 201;
+    let xs = Array1::linspace(a0, a1, g);
+    let zs = Array1::linspace(b0, b1, g);
+    let grid = Array2::from_shape_fn(
+        (g * g, 2),
+        |(i, j)| if j == 0 { xs[i / g] } else { zs[i % g] },
+    );
+    let f = c
+        .design
+        .predict_terms(&fit.beta, &grid)
+        .column(0)
+        .to_owned()
+        .into_shape_with_order((g, g))
+        .unwrap();
+    let mut rise_cars = f64::NEG_INFINITY;
+    let mut fall_dist = f64::NEG_INFINITY;
+    for i in 0..g {
+        for j in 0..g {
+            if i + 1 < g {
+                rise_cars = rise_cars.max(f[[i + 1, j]] - f[[i, j]]);
+            }
+            if j + 1 < g {
+                fall_dist = fall_dist.max(f[[i, j]] - f[[i, j + 1]]);
+            }
+        }
+    }
+    eprintln!("te n={n}: largest rise along cars {rise_cars:.2e}, largest fall along distance {fall_dist:.2e}");
+    assert!(
+        rise_cars <= 1e-12 && fall_dist <= 1e-12,
+        "surface not monotone on the grid"
+    );
+}
+
+#[test]
+fn scasm_efs_te_n500() {
+    check_efs_te(500);
+}
+
+#[test]
+fn scasm_efs_te_n3000() {
+    check_efs_te(3000);
 }

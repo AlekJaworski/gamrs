@@ -13,7 +13,8 @@
 #           (a copy of that loop, Gaussian branch, recording its state)
 #   final   coefficients, sp, edf, Vp, scale, REML (-laml), fitted values,
 #           terms on new data
-# Run from the repo root after gen_scam_fixtures.R.
+# Models: the 1-D decreasing smooth and the te() surface decreasing in cars,
+# increasing in distance. Run from the repo root after gen_scam_fixtures.R.
 suppressMessages({library(mgcv); library(jsonlite)})
 
 args <- commandArgs(trailingOnly = TRUE)
@@ -84,9 +85,12 @@ emit <- function(src, path, formula, cols, new) {
   fit <- scasm(formula, data = d)
   sm <- lapply(G$smooth, function(s) list(
     label = s$label, first_para = s$first.para, last_para = s$last.para,
-    bs_dim = I(s$bs.dim), m = I(s$m),
-    knots = if (is.list(s$knots)) lapply(s$knots, as.numeric) else as.numeric(s$knots),
-    S_scale = I(as.numeric(s$S.scale))))
+    bs_dim = if (is.null(s$bs.dim)) NULL else I(s$bs.dim), m = if (is.null(s$m)) NULL else I(s$m),
+    margins = if (is.null(s$margin)) NULL else lapply(s$margin, function(mg) list(
+      knots = as.numeric(mg$knots), m = I(mg$m), Ain = rows_of(mg$Ain))),
+    knots = if (is.null(s$knots)) NULL else if (is.list(s$knots)) lapply(s$knots, as.numeric) else as.numeric(s$knots),
+    S_scale = I(as.numeric(s$S.scale)),
+    XP = if (is.null(s$XP)) NULL else lapply(s$XP, rows_of)))
   setup <- list(
     p = ncol(G$X), off = I(as.integer(G$off)),
     X = if (n <= 500) rows_of(G$X) else NULL,
@@ -131,6 +135,13 @@ emit <- function(src, path, formula, cols, new) {
               length(efs$iterations), final$trace_matches_fit,
               paste(sprintf("%.6g", fit$sp), collapse = ", "), final$edf_total, final$reml))
 }
+
+new_2d <- expand.grid(log_cars = c(log(200), seq(log(300), log(60000), length.out = 6), log(90000)),
+                      distance = c(-20, seq(0, 450, length.out = 5), 480))
+for (n in c(500, 3000))
+  emit(sprintf("scasm_te_gaussian_n%d_k6x5.json", n), sprintf("scasm_internals_te_n%d_k6x5.json", n),
+       y ~ te(log_cars, distance, bs = "sc", xt = list("m-", "m+"), k = c(6, 5)),
+       c("log_cars", "distance"), new_2d)
 
 new_1d <- data.frame(log_cars = c(log(200), seq(log(300), log(60000), length.out = 23), log(90000)))
 for (n in c(500, 3000))

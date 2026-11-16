@@ -247,7 +247,7 @@ fn add_outer(s: &mut Array2<f64>, d: &[f64], w: f64) {
 
 /// R's `seq(from, to, length.out = n)`: exact endpoints, interior points
 /// `from + i * (to - from) / (n - 1)`.
-fn r_seq(from: f64, to: f64, n: usize) -> Vec<f64> {
+pub(crate) fn r_seq(from: f64, to: f64, n: usize) -> Vec<f64> {
     let by = (to - from) / (n - 1) as f64;
     let mut v: Vec<f64> = (0..n).map(|i| from + i as f64 * by).collect();
     v[n - 1] = to;

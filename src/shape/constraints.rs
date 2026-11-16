@@ -17,7 +17,7 @@ pub enum Shape {
 }
 
 impl Shape {
-    fn sign(self) -> f64 {
+    pub(crate) fn sign(self) -> f64 {
         match self {
             Shape::Increasing => 1.0,
             Shape::Decreasing => -1.0,
