@@ -18,7 +18,7 @@
 
 use std::marker::PhantomData;
 
-use ndarray::{s, Array1, Array2, ArrayView2};
+use ndarray::{s, Array1, Array2};
 
 use crate::design::PenaltyBlock;
 use crate::error::Result;
@@ -126,7 +126,7 @@ where
         debug_assert_eq!(s_list.len(), rank_s_list.len());
         debug_assert_eq!(s_list.len(), log_pseudo_det_s_list.len());
         let log_det_s = PenaltyLogDet::new(&s_list, &rank_s_list, &log_pseudo_det_s_list);
-        let s_blocks = s_list.iter().map(|s| PenaltyBlock::of(s.view())).collect();
+        let s_blocks = crate::design::penalty_blocks(&s_list);
         Self {
             inner,
             loss,
@@ -380,13 +380,7 @@ where
             // tr(A⁻¹·S_j) = Σ_{i,k} A⁻¹[i,k] · S_j[k,i]  — v0.x's iteration
             // order from `src/reml/mod.rs:914-918`, identical FP to
             // `LinearSolver::trace_a_inv` but without the per-call invert.
-            let mut tr_hinv_s_j = 0.0_f64;
-            let r = self.s_blocks[j].range.clone();
-            for ii in r.clone() {
-                for kk in r.clone() {
-                    tr_hinv_s_j += a_inv[[ii, kk]] * s_j[[kk, ii]];
-                }
-            }
+            let tr_hinv_s_j = self.s_blocks[j].trace(a_inv.view(), s_j.view());
             bsb_per_term.push(bsb_j);
             tr_hinv_s_per_term.push(tr_hinv_s_j);
             bsb_total += lambda_j[j] * bsb_j;
@@ -437,14 +431,17 @@ where
         // (PIRLS supplies `eta1_per_term[k]`). The trace contribution also
         // switches to the per-term Newton-A trace so the gradient stays
         // internally consistent (uses one A everywhere).
-        let lazy_tk_kkt = self.inner.lazy_tk_kkt_inputs(inner, theta);
+        let lazy_tk_kkt = self.inner.lazy_tk_kkt_inputs(inner, theta, &self.s_blocks);
         let has_tk_kkt = lazy_tk_kkt.is_some();
         // Fisher-weight families: `W` still depends on β through μ (Poisson:
         // W = μ), so `log|A|` has a β-chain even with a canonical link. The
         // analytic Hessian below stays the envelope one; only the gradient,
         // which decides where the optimiser stops, needs the exact term.
         if !has_tk_kkt {
-            if let Some(chain) = self.inner.fisher_log_det_beta_chain(inner, theta) {
+            if let Some(chain) = self
+                .inner
+                .fisher_log_det_beta_chain(inner, theta, &self.s_blocks)
+            {
                 for k in 0..n_terms {
                     g[k] += 0.5 * chain[k];
                 }
@@ -618,14 +615,8 @@ where
 
     /// The nonzero columns of `A⁻¹S_j`: `p × k_j` for `S_j`'s `k_j`-wide block.
     fn ainv_s_block(&self, a_inv: &Array2<f64>, j: usize) -> Array2<f64> {
-        let PenaltyBlock { range, diagonal } = &self.s_blocks[j];
-        let cols = a_inv.slice(s![.., range.clone()]);
-        let block: ArrayView2<f64> = self.s_list[j].slice(s![range.clone(), range.clone()]);
-        if *diagonal {
-            &cols * &block.diag()
-        } else {
-            cols.dot(&block)
-        }
+        let b = &self.s_blocks[j];
+        b.times_s(a_inv.slice(s![.., b.range.clone()]), self.s_list[j].view())
     }
 
     /// Analytic outer-Newton Hessian `H[i,j] = ∂g[j]/∂ρ_i`, assembled from
@@ -983,7 +974,10 @@ mod fd_match_tests {
             let envelope_grad = |t: &Array1<f64>| -> Array1<f64> {
                 let (_, mut g) = score.value_and_grad(t).unwrap();
                 let fit = score.inner.fit(t).unwrap();
-                if let Some(chain) = score.inner.fisher_log_det_beta_chain(&fit, t) {
+                if let Some(chain) = score
+                    .inner
+                    .fisher_log_det_beta_chain(&fit, t, &score.s_blocks)
+                {
                     for k in 0..chain.len() {
                         g[k] -= 0.5 * chain[k];
                     }

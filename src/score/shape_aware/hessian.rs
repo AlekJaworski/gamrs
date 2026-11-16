@@ -297,6 +297,7 @@ where
                 &prior_w,
                 &self.x_design,
                 &self.s_list,
+                self.penalty_blocks(),
                 &s_total,
                 &rho_arr,
             )
@@ -346,6 +347,7 @@ where
         };
         let ctx = HessIftCtx {
             s_list: &self.s_list,
+            s_blocks: self.penalty_blocks(),
             lambda: &lambda,
             beta: &fit.beta,
             a_inv: &a_inv_owned,
@@ -640,6 +642,7 @@ where
                 &prior_w,
                 &self.x_design,
                 &self.s_list,
+                self.penalty_blocks(),
                 &s_total,
                 &rho_arr,
             )
@@ -706,6 +709,7 @@ where
 
         let ctx = HessIftCtx {
             s_list: &self.s_list,
+            s_blocks: self.penalty_blocks(),
             lambda: &lambda,
             beta: &fit.beta,
             a_inv: &a_inv_owned,
@@ -840,6 +844,7 @@ where
                 &prior_w,
                 &self.x_design,
                 &self.s_list,
+                self.penalty_blocks(),
                 &s_total,
                 &rho_arr,
             )

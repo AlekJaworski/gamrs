@@ -824,6 +824,7 @@ pub trait InnerSolver {
         &self,
         fit: &Self::Fit,
         rho: &Array1<f64>,
+        s_blocks: &[crate::design::PenaltyBlock],
     ) -> Option<crate::inner::TkKKTInputs> {
         None
     }
@@ -833,7 +834,12 @@ pub trait InnerSolver {
     /// observed penalised Hessian. `None` where the inner solver has no such
     /// weight (or already supplies the Newton form via `lazy_tk_kkt_inputs`).
     #[allow(unused_variables)]
-    fn fisher_log_det_beta_chain(&self, fit: &Self::Fit, rho: &Array1<f64>) -> Option<Vec<f64>> {
+    fn fisher_log_det_beta_chain(
+        &self,
+        fit: &Self::Fit,
+        rho: &Array1<f64>,
+        s_blocks: &[crate::design::PenaltyBlock],
+    ) -> Option<Vec<f64>> {
         None
     }
 }

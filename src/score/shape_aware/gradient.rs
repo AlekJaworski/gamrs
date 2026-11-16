@@ -204,6 +204,7 @@ where
                 &prior,
                 &self.x_design,
                 &self.s_list,
+                self.penalty_blocks(),
                 &s_total,
                 &rho_arr,
             ) {
@@ -776,6 +777,7 @@ where
                 &prior_w,
                 &self.x_design,
                 &self.s_list,
+                self.penalty_blocks(),
                 &s_total,
                 &rho_arr,
             )
@@ -1268,6 +1270,7 @@ mod ift_ladder {
             y,
             prior_weights: None,
             s_list: vec![s].into(),
+            s_blocks: Default::default(),
             family_base: tdist_identity(5.0, 1.0),
             rank_s_list: vec![rank],
             mp: 2,

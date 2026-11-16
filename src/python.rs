@@ -296,6 +296,7 @@ impl PyFittedGam {
             y: y_arr.clone(),
             prior_weights: None,
             s_list: prep.s_list.clone().into(),
+            s_blocks: Default::default(),
             family_base: crate::family::ocat_identity(
                 Array1::zeros(n_cats.saturating_sub(2)),
                 n_cats,
@@ -641,6 +642,7 @@ impl PyFittedGam {
                 y: y_arr.clone(),
                 prior_weights: None,
                 s_list: prep.s_list.clone().into(),
+                s_blocks: Default::default(),
                 family_base: tdist_identity(5.0, 1.0),
                 rank_s_list: prep.rank_s_list.clone(),
                 mp: prep.mp,

@@ -303,6 +303,7 @@ fn scat_criterion_matches_mgcv_on_its_own_sp_ladder() {
         y: y.clone(),
         prior_weights: None,
         s_list: prep.s_list.clone().into(),
+        s_blocks: Default::default(),
         family_base: tdist_identity(nu, sigma2),
         rank_s_list: prep.rank_s_list.clone(),
         mp: prep.mp,

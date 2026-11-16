@@ -94,6 +94,8 @@ where
     /// `T = s_list.len()`. The shape-aware drivers (TDist/scat, NegBin,
     /// Tweedie, Ocat) all flow through this score type unchanged.
     pub s_list: std::sync::Arc<[Array2<f64>]>,
+    /// The nonzero block of each `s_list` entry, found on first use.
+    pub s_blocks: std::sync::OnceLock<Vec<crate::design::PenaltyBlock>>,
     /// "Base" family — cloned per probe, then shape params updated from θ.
     pub family_base: Family<L, K, V>,
     /// Per-term rank, length `T = s_list.len()`.
@@ -256,6 +258,11 @@ where
     P: Profile<L>,
     S: LinearSolver,
 {
+    pub(crate) fn penalty_blocks(&self) -> &[crate::design::PenaltyBlock] {
+        self.s_blocks
+            .get_or_init(|| crate::design::penalty_blocks(&self.s_list))
+    }
+
     /// Build a family with the shape params from θ and run the inner solve.
     /// Returns the inner fit plus the rebuilt family (so the score body
     /// can read `loss.saturated_log_lik` / `loss.fixed_dispersion`

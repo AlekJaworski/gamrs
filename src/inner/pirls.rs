@@ -2,7 +2,7 @@
 
 use std::marker::PhantomData;
 
-use ndarray::{Array1, Array2};
+use ndarray::{s, Array1, Array2};
 
 use crate::error::{GamrsError, Result};
 use crate::family::Family;
@@ -242,6 +242,7 @@ pub(crate) fn lazy_tk_kkt_inputs<L, K, V>(
     prior_w: &Array1<f64>,
     x_design: &super::DesignMatrix,
     s_list: &[Array2<f64>],
+    s_blocks: &[crate::design::PenaltyBlock],
     s_total: &Array2<f64>,
     rho: &Array1<f64>,
 ) -> Option<super::TkKKTInputs>
@@ -295,38 +296,16 @@ where
     // A_newton⁻¹ — Cholesky-first (PSD common case for NegBin α>0); eigh
     // fallback for indefinite spectra (IG + log ~43% negative-α path).
     let a_inv: Array2<f64> = if let Ok(l) = a_newton.cholesky(UPLO::Lower) {
-        // Materialise inverse via column-wise back-solve.
-        let mut a_inv = Array2::<f64>::zeros((p, p));
-        for col in 0..p {
-            let mut e_j = Array1::<f64>::zeros(p);
-            e_j[col] = 1.0;
-            let z = super::chol_forward_solve(&l, e_j.view());
-            let x_col = super::chol_back_solve(&l, z.view());
-            for i in 0..p {
-                a_inv[[i, col]] = x_col[i];
-            }
-        }
-        a_inv
+        CholeskySolver::invert(&l)
     } else {
         let (eigs, eigvecs) = match a_newton.eigh(UPLO::Lower) {
             Ok(p) => p,
             Err(_) => return None,
         };
-        let mut a_inv = Array2::<f64>::zeros((p, p));
-        for k in 0..p {
-            let lam_k = eigs[k];
-            if !lam_k.is_finite() || lam_k.abs() < 1e-300 {
-                return None;
-            }
-            let inv_lam_k = 1.0 / lam_k;
-            for i in 0..p {
-                let vi = eigvecs[[i, k]];
-                for j in 0..p {
-                    a_inv[[i, j]] += inv_lam_k * vi * eigvecs[[j, k]];
-                }
-            }
+        if eigs.iter().any(|l| !l.is_finite() || l.abs() < 1e-300) {
+            return None;
         }
-        a_inv
+        (&eigvecs / &eigs).dot(&eigvecs.t())
     };
 
     // a1[i]: v0.x `src/reml/mod.rs:2392-2415`. Newton branch uses
@@ -374,21 +353,15 @@ where
     let mut eta1_per_term: Vec<Array1<f64>> = Vec::with_capacity(m);
     let mut tr_a_newton_inv_s_per_term: Vec<f64> = Vec::with_capacity(m);
     for k in 0..m {
-        let lambda_k = rho[k].exp();
-        let s_k = &s_list[k];
+        let b = &s_blocks[k];
+        let r = b.range.clone();
         // b1_k = -λ_k · A⁻¹ · S_k · β, then eta1_k = X · b1_k.
-        let s_k_beta = s_k.dot(beta);
-        let a_inv_s_k_beta = a_inv.dot(&s_k_beta);
+        let s_k_beta = b.s_dot(s_list[k].view(), beta.view());
+        let a_inv_s_k_beta = a_inv.slice(s![.., r.clone()]).dot(&s_k_beta.slice(s![r]));
+        let lambda_k = rho[k].exp();
         let b1_k = a_inv_s_k_beta.mapv(|v| -lambda_k * v);
         eta1_per_term.push(xs.dot_vec(b1_k.view()));
-        // tr(A⁻¹ · S_k) = Σ_{i,j} A⁻¹[i,j] · S_k[j,i].
-        let mut tr_k = 0.0_f64;
-        for i in 0..p {
-            for j in 0..p {
-                tr_k += a_inv[[i, j]] * s_k[[j, i]];
-            }
-        }
-        tr_a_newton_inv_s_per_term.push(tr_k);
+        tr_a_newton_inv_s_per_term.push(b.trace(a_inv.view(), s_list[k].view()));
     }
     let _ = prior_w; // kept for signature uniformity with the score-weights helper
     let sign_w = Array1::<f64>::ones(n);
@@ -627,11 +600,21 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver> I
 
     /// Tk·KK' / IFT inputs at converged β. Lazy — see [`InnerSolver::
     /// lazy_tk_kkt_inputs`] docstring.
-    fn fisher_log_det_beta_chain(&self, fit: &Self::Fit, rho: &Array1<f64>) -> Option<Vec<f64>> {
-        self.fisher_beta_chain(fit, rho)
+    fn fisher_log_det_beta_chain(
+        &self,
+        fit: &Self::Fit,
+        rho: &Array1<f64>,
+        s_blocks: &[crate::design::PenaltyBlock],
+    ) -> Option<Vec<f64>> {
+        self.fisher_beta_chain(fit, rho, s_blocks)
     }
 
-    fn lazy_tk_kkt_inputs(&self, fit: &Self::Fit, rho: &Array1<f64>) -> Option<super::TkKKTInputs> {
+    fn lazy_tk_kkt_inputs(
+        &self,
+        fit: &Self::Fit,
+        rho: &Array1<f64>,
+        s_blocks: &[crate::design::PenaltyBlock],
+    ) -> Option<super::TkKKTInputs> {
         if !self.family.loss.use_newton_irls() {
             return None;
         }
@@ -649,6 +632,7 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver> I
             &prior_w,
             &self.x_design,
             &self.s_list,
+            s_blocks,
             &s_total,
             rho,
         )
@@ -1119,8 +1103,9 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
         &self,
         fit: &GaussianInnerFit<S>,
         rho: &Array1<f64>,
+        s_blocks: &[crate::design::PenaltyBlock],
     ) -> Option<Vec<f64>> {
-        use ndarray_linalg::{FactorizeInto, Solve};
+        use ndarray_linalg::{FactorizeC, FactorizeInto, Solve, SolveC, UPLO};
         if self.family.loss.use_newton_irls() {
             return None;
         }
@@ -1147,15 +1132,34 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
         let s_total = crate::design::combined_s(&self.s_list, rho, self.x_design.ncols());
         let xs = self.x_design.split();
         let a_obs = xs.xtwx(w_obs.view()) + &s_total;
-        let a_obs = a_obs.factorize_into().ok()?;
-        let lev = xs.leverage(fit.a_inv().view());
-        let mut out = Vec::with_capacity(self.s_list.len());
-        for (k, s_k) in self.s_list.iter().enumerate() {
-            let rhs = s_k.dot(&fit.beta).mapv(|v| -rho[k].exp() * v);
-            let db = a_obs.solve(&rhs).ok()?;
-            let eta1 = xs.dot_vec(db.view());
-            out.push((&dw_deta * &eta1 * &lev).sum());
-        }
-        Some(out)
+        let rhs: Vec<Array1<f64>> = (self.s_list.iter().zip(s_blocks).enumerate())
+            .map(|(k, (s_k, b))| {
+                b.s_dot(s_k.view(), fit.beta.view())
+                    .mapv(|v| -rho[k].exp() * v)
+            })
+            .collect();
+        // A canonical link makes `w_obs` the working weight, so `A_obs` is
+        // positive definite and Cholesky solves it at half LU's cost. Any
+        // other link can make it indefinite, which only LU solves.
+        let db: Vec<Array1<f64>> = match a_obs.factorizec(UPLO::Lower) {
+            Ok(c) => rhs
+                .iter()
+                .map(|b| c.solvec(b))
+                .collect::<std::result::Result<_, _>>()
+                .ok()?,
+            Err(_) => {
+                let lu = a_obs.factorize_into().ok()?;
+                rhs.iter()
+                    .map(|b| lu.solve(b))
+                    .collect::<std::result::Result<_, _>>()
+                    .ok()?
+            }
+        };
+        let lev = xs.leverage(fit.a_inv_ref().view());
+        Some(
+            db.iter()
+                .map(|db| (&dw_deta * &xs.dot_vec(db.view()) * &lev).sum())
+                .collect(),
+        )
     }
 }

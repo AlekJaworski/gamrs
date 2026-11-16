@@ -19,16 +19,21 @@
 //! Replaces the prior bespoke gamrs Hessian path which paid `m·n·p²` for
 //! the W-chain (`xmj = X·A⁻¹S_jA⁻¹` at envelope.rs:534) and `m·p³` for
 //! per-term `A⁻¹S_j` materialisation. This port is `O(m²·p²)`, dominated
-//! by m² A⁻¹·b2_kj solves; the trace cross uses dense `A⁻¹S_j` once per
-//! term then a single `Σ ainv_s[k]⊙ainv_s[j]ᵀ` reduction.
+//! by m² A⁻¹·b2_kj solves; the trace cross uses the nonzero columns of
+//! `A⁻¹S_j` once per term then a `Σ ainv_s[k]⊙ainv_s[j]ᵀ` reduction over
+//! the two penalty blocks.
 
-use ndarray::{Array1, Array2};
+use ndarray::{s, Array1, Array2};
+
+use crate::design::PenaltyBlock;
 
 /// Inputs to the analytic IFT Hessian helper. Built by the score-side
 /// caller from a converged inner fit + the cached score-time quantities.
 pub(crate) struct HessIftCtx<'a> {
     /// Per-term penalty matrices `S_j`, each (p, p). Length m.
     pub s_list: &'a [Array2<f64>],
+    /// The nonzero block of each `S_j`.
+    pub s_blocks: &'a [PenaltyBlock],
     /// `λ_j = exp(ρ_j)` per term, length m.
     pub lambda: &'a [f64],
     /// Converged β, length p.
@@ -57,8 +62,7 @@ pub(crate) struct HessIftCtx<'a> {
 /// 2. `s_beta_per_j` (mgcv_rust:2596-2598): `S_j β` per term.
 /// 3. `sum_lambda_s_beta` (mgcv_rust:2600-2606): `Σ_j λ_j S_j β`.
 /// 4. `tr_a_s_per_j` + sparse `ainvs_per_j` (mgcv_rust:2608-2638): per-term
-///    `tr(A⁻¹ S_k)` plus the columns of `A⁻¹ S_k`. gamrs uses dense `A⁻¹·S_j`
-///    (full p×p) because `s_list` stores full p×p matrices.
+///    `tr(A⁻¹ S_k)` plus the nonzero columns of `A⁻¹ S_k`.
 /// 5. `d2dev_b1` (mgcv_rust:2641-2651): `(∂²D/∂β² · b1)[:,k] = 2 X'WX b1[:,k]`.
 /// 6. `assemble_b2` (mgcv_rust:2657-2674): one A⁻¹ multiply per (k,j) pair.
 /// 7. Hessian assembly loop (mgcv_rust:2676-2779): seven additive `term_*`
@@ -83,6 +87,7 @@ pub(crate) fn hess_ift_rho(ctx: &HessIftCtx<'_>) -> Array2<f64> {
     let xtwx = ctx.xtwx;
     let lambdas = ctx.lambda;
     let s_list = ctx.s_list;
+    let blocks = ctx.s_blocks;
     let sigma2 = ctx.sigma2;
     let dev_grad_beta = ctx.dev_grad_beta;
 
@@ -90,8 +95,9 @@ pub(crate) fn hess_ift_rho(ctx: &HessIftCtx<'_>) -> Array2<f64> {
     let mut b1 = Array2::<f64>::zeros((p, m));
     let mut s_beta_per_j: Vec<Array1<f64>> = Vec::with_capacity(m);
     for k in 0..m {
-        let s_k_beta: Array1<f64> = s_list[k].dot(beta);
-        let ainv_sk_beta = a_inv.dot(&s_k_beta);
+        let s_k_beta = blocks[k].s_dot(s_list[k].view(), beta.view());
+        let r = blocks[k].range.clone();
+        let ainv_sk_beta = a_inv.slice(s![.., r.clone()]).dot(&s_k_beta.slice(s![r]));
         let lam_k = lambdas[k];
         for r in 0..p {
             b1[[r, k]] = -lam_k * ainv_sk_beta[r];
@@ -108,20 +114,19 @@ pub(crate) fn hess_ift_rho(ctx: &HessIftCtx<'_>) -> Array2<f64> {
         }
     }
 
-    // --- Per-term tr(A⁻¹ S_k) and A⁻¹ S_k (full p×p) for cross terms ---
-    // mgcv_rust uses sparse (p, k_block) ainvs_per_j because penalties carry
-    // explicit block offsets; gamrs's `s_list` stores full p×p matrices,
-    // so we form dense A⁻¹·S_j once per term. Cost: m × O(p³); still cheap
-    // relative to PIRLS solves and consistent with mgcv_rust's logic.
+    // --- Per-term tr(A⁻¹ S_k) and the nonzero columns of A⁻¹ S_k ---
+    // `ainv_s_per_j[j]` is `A⁻¹[:, B_j]·S_j[B_j, B_j]`, p × |B_j|: a
+    // random-effect block makes the dense p×p product a p³ waste.
     let mut tr_a_s_per_j: Vec<f64> = Vec::with_capacity(m);
     let mut ainv_s_per_j: Vec<Array2<f64>> = Vec::with_capacity(m);
     for j in 0..m {
-        let ainv_sj: Array2<f64> = a_inv.dot(&s_list[j]);
-        // tr(A⁻¹ S_j) = trace of (p×p) product.
-        let mut tr_as = 0.0_f64;
-        for r in 0..p {
-            tr_as += ainv_sj[[r, r]];
-        }
+        let b = &blocks[j];
+        let ainv_sj = b.times_s(a_inv.slice(s![.., b.range.clone()]), s_list[j].view());
+        let tr_as: f64 = b
+            .range
+            .clone()
+            .map(|r| ainv_sj[[r, r - b.range.start]])
+            .sum();
         tr_a_s_per_j.push(tr_as);
         ainv_s_per_j.push(ainv_sj);
     }
@@ -143,8 +148,8 @@ pub(crate) fn hess_ift_rho(ctx: &HessIftCtx<'_>) -> Array2<f64> {
         let lam_k = lambdas[k];
         let b1_k = b1.column(k).to_owned();
         let b1_j = b1.column(j).to_owned();
-        let s_j_b1k = s_list[j].dot(&b1_k);
-        let s_k_b1j = s_list[k].dot(&b1_j);
+        let s_j_b1k = blocks[j].s_dot(s_list[j].view(), b1_k.view());
+        let s_k_b1j = blocks[k].s_dot(s_list[k].view(), b1_j.view());
         let mut rhs = Array1::<f64>::zeros(p);
         for r in 0..p {
             rhs[r] = -(lam_j * s_j_b1k[r] + lam_k * s_k_b1j[r]);
@@ -209,12 +214,8 @@ pub(crate) fn hess_ift_rho(ctx: &HessIftCtx<'_>) -> Array2<f64> {
             for r in 0..p {
                 b1j_a_b1k += b1[[r, j_out]] * (-lam_k * s_beta_per_j[k_out][r]);
             }
-            let b1_k_col = b1.column(k_out).to_owned();
-            let xtwx_b1k = xtwx.dot(&b1_k_col);
-            let mut b1j_xtwx_b1k = 0.0_f64;
-            for r in 0..p {
-                b1j_xtwx_b1k += b1[[r, j_out]] * xtwx_b1k[r];
-            }
+            // `term_d2dev` is this sum with every term doubled: halving it is exact.
+            let b1j_xtwx_b1k = 0.5 * term_d2dev;
             let term_b1_sls_b1 = 2.0 * (b1j_a_b1k - b1j_xtwx_b1k);
 
             // term_sls_b2 = 2·(ΣλSβ)' b2[k,j] (mgcv_rust:2740-2744).
@@ -234,14 +235,15 @@ pub(crate) fn hess_ift_rho(ctx: &HessIftCtx<'_>) -> Array2<f64> {
 
             // det2_kj (mgcv_rust:2754-2771):
             //   = δ_kj·λ_k·tr(A⁻¹S_k) − λ_k·λ_j·tr(A⁻¹S_k·A⁻¹S_j)
-            // tr(A⁻¹S_k·A⁻¹S_j) via the dense `ainv_s_per_j` product:
-            //   = Σ_{r,c} (A⁻¹S_k)[r,c] · (A⁻¹S_j)[c,r]
+            // tr(A⁻¹S_k·A⁻¹S_j) = Σ_{r,c} (A⁻¹S_k)[r,c] · (A⁻¹S_j)[c,r], where
+            // only c ∈ B_k and r ∈ B_j are nonzero.
+            let (bk, bj) = (&blocks[k_out].range, &blocks[j_out].range);
             let ai_k = &ainv_s_per_j[k_out];
             let ai_j = &ainv_s_per_j[j_out];
             let mut tr_cross = 0.0_f64;
-            for r in 0..p {
-                for c in 0..p {
-                    tr_cross += ai_k[[r, c]] * ai_j[[c, r]];
+            for r in bj.clone() {
+                for c in bk.clone() {
+                    tr_cross += ai_k[[r, c - bk.start]] * ai_j[[c, r - bj.start]];
                 }
             }
             let det2_kj = if k_out == j_out {

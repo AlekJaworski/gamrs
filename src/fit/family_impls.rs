@@ -661,6 +661,7 @@ impl<S: LinearSolver> FamilyFitWithSolver<IdentityLink, OcatVariance, S> for Oca
             y: y.to_owned(),
             prior_weights: prior.clone(),
             s_list: prep.s_list.clone().into(),
+            s_blocks: Default::default(),
             family_base,
             rank_s_list: prep.rank_s_list.clone(),
             mp: prep.mp,
