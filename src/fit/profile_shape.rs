@@ -138,14 +138,9 @@ where
             },
         )
     };
-    let cold: GaussianInnerFit<S> = final_inner(None).fit(&rho_hat)?;
-    // An unconverged cold solve is redone from the search's last η, as in driver.rs.
-    let final_fit = if cold.converged {
-        cold
-    } else {
-        let warm = score.last_eta.borrow().clone().unwrap_or(cold.eta);
-        final_inner(Some(warm)).fit(&rho_hat)?
-    };
+    // Started from the search's last η, as in driver.rs.
+    let final_fit: GaussianInnerFit<S> =
+        final_inner(score.last_eta.borrow().clone()).fit(&rho_hat)?;
 
     let edf = compute_edf(&prep.x_design, &final_fit.a_weights, &final_fit);
     let scale = scale_fn(&family_final, &final_fit, &outer.theta);
