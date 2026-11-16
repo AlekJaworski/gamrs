@@ -1128,32 +1128,45 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
             w_obs[i] = wf * (1.0 + (self.y[i] - mu) * (v1n + g2n));
         }
         let xs = self.x_design.split();
-        let mut a_obs = xs.xtwx(w_obs.view());
-        crate::design::add_penalties(&mut a_obs, &self.s_list, s_blocks, rho);
+        let a_inv = fit.a_inv_ref();
+        // `-λ_k·S_k·β`, nonzero only on S_k's block.
         let rhs: Vec<Array1<f64>> = (self.s_list.iter().zip(s_blocks).enumerate())
             .map(|(k, (s_k, b))| {
                 b.s_dot(s_k.view(), fit.beta.view())
                     .mapv(|v| -rho[k].exp() * v)
             })
             .collect();
-        // A canonical link makes `w_obs` the working weight, so `A_obs` is
-        // positive definite and Cholesky solves it at half LU's cost. Any
-        // other link can make it indefinite, which only LU solves.
-        let db: Vec<Array1<f64>> = match a_obs.factorizec(UPLO::Lower) {
-            Ok(c) => rhs
-                .iter()
-                .map(|b| c.solvec(b))
-                .collect::<std::result::Result<_, _>>()
-                .ok()?,
-            Err(_) => {
-                let lu = a_obs.factorize_into().ok()?;
-                rhs.iter()
-                    .map(|b| lu.solve(b))
-                    .collect::<std::result::Result<_, _>>()
-                    .ok()?
-            }
-        };
-        let lev = xs.leverage(fit.a_inv_ref().view());
+        // A canonical link makes α ≡ 1, so `w_obs` is the working weight the
+        // fit's own A was built from, and its inverse is already formed.
+        // Otherwise A_obs is a matrix of its own, and only LU solves it when
+        // negative α make it indefinite.
+        let db: Vec<Array1<f64>> =
+            if self.family.link.is_canonical() && !self.family.loss.has_observed_curvature() {
+                (rhs.iter().zip(s_blocks))
+                    .map(|(v, b)| {
+                        let r = b.range.clone();
+                        a_inv.slice(s![.., r.clone()]).dot(&v.slice(s![r]))
+                    })
+                    .collect()
+            } else {
+                let mut a_obs = xs.xtwx(w_obs.view());
+                crate::design::add_penalties(&mut a_obs, &self.s_list, s_blocks, rho);
+                match a_obs.factorizec(UPLO::Lower) {
+                    Ok(c) => rhs
+                        .iter()
+                        .map(|b| c.solvec(b))
+                        .collect::<std::result::Result<_, _>>()
+                        .ok()?,
+                    Err(_) => {
+                        let lu = a_obs.factorize_into().ok()?;
+                        rhs.iter()
+                            .map(|b| lu.solve(b))
+                            .collect::<std::result::Result<_, _>>()
+                            .ok()?
+                    }
+                }
+            };
+        let lev = xs.leverage(a_inv.view());
         Some(
             db.iter()
                 .map(|db| (&dw_deta * &xs.dot_vec(db.view()) * &lev).sum())
