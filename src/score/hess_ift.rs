@@ -286,16 +286,17 @@ pub(crate) fn build_xtwx(x_design: &crate::inner::DesignMatrix, w: &Array1<f64>)
 ///
 /// Returns the p-vector.
 pub(crate) fn compute_dev_grad_beta_working_rss(
-    x_design: &Array2<f64>,
+    x_design: &crate::inner::DesignMatrix,
     working_weights: &Array1<f64>,
     working_response: &Array1<f64>,
     beta: &Array1<f64>,
 ) -> Array1<f64> {
+    let xs = x_design.split();
     let n = x_design.nrows();
-    let fitted = x_design.dot(beta);
+    let fitted = xs.dot_vec(beta.view());
     let mut v1 = Array1::<f64>::zeros(n);
     for i in 0..n {
         v1[i] = -2.0 * working_weights[i] * (working_response[i] - fitted[i]);
     }
-    x_design.t().dot(&v1)
+    xs.t_dot_vec(v1.view())
 }

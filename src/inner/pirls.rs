@@ -126,7 +126,9 @@ pub(crate) fn score_log_det_h<L, K, V, S>(
     mu: &Array1<f64>,
     prior_w: &Array1<f64>,
     x_design: &super::DesignMatrix,
-    s_total: &Array2<f64>,
+    s_list: &[Array2<f64>],
+    s_blocks: &[crate::design::PenaltyBlock],
+    rho: &Array1<f64>,
     fit: &crate::inner::GaussianInnerFit<S>,
 ) -> f64
 where
@@ -137,7 +139,7 @@ where
 {
     let _ = eta;
     if family.loss.use_newton_irls() {
-        lazy_newton_log_det_h(family, y, mu, prior_w, x_design, s_total)
+        lazy_newton_log_det_h(family, y, mu, prior_w, x_design, s_list, s_blocks, rho)
             .unwrap_or_else(|| fit.log_det_a())
     } else {
         fit.log_det_a()
@@ -145,7 +147,7 @@ where
 }
 
 /// Cheap precondition for [`score_log_det_h`]: when this is false the caller
-/// must skip it entirely rather than pay to build `s_total` for nothing.
+/// must skip it entirely rather than pay for nothing.
 ///
 /// A family with `observed_curvature_weights` needs the observed `log|H|`; a
 /// `use_newton_irls` family needs the Newton one. Everything else keeps the
@@ -166,7 +168,9 @@ pub(crate) fn lazy_newton_log_det_h<L, K, V>(
     mu: &Array1<f64>,
     prior_w: &Array1<f64>,
     x_design: &super::DesignMatrix,
-    s_total: &Array2<f64>,
+    s_list: &[Array2<f64>],
+    s_blocks: &[crate::design::PenaltyBlock],
+    rho: &Array1<f64>,
 ) -> Option<f64>
 where
     L: Loss + Clone,
@@ -184,11 +188,7 @@ where
     }
 
     let mut a_score = x_design.split().xtwx(w_newton.view());
-    for j in 0..p {
-        for l in 0..p {
-            a_score[[j, l]] += s_total[[j, l]];
-        }
-    }
+    crate::design::add_penalties(&mut a_score, s_list, s_blocks, rho);
     // Symmetrise defensively before factor.
     for j in 0..p {
         for l in (j + 1)..p {
@@ -243,7 +243,6 @@ pub(crate) fn lazy_tk_kkt_inputs<L, K, V>(
     x_design: &super::DesignMatrix,
     s_list: &[Array2<f64>],
     s_blocks: &[crate::design::PenaltyBlock],
-    s_total: &Array2<f64>,
     rho: &Array1<f64>,
 ) -> Option<super::TkKKTInputs>
 where
@@ -279,11 +278,7 @@ where
 
     let xs = x_design.split();
     let mut a_newton = xs.xtwx(w_newton.view());
-    for j in 0..p {
-        for l in 0..p {
-            a_newton[[j, l]] += s_total[[j, l]];
-        }
-    }
+    crate::design::add_penalties(&mut a_newton, s_list, s_blocks, rho);
     // Symmetrise.
     for j in 0..p {
         for l in (j + 1)..p {
@@ -337,7 +332,6 @@ where
         a1[i] = wf * (alpha * (-v1n - 2.0 * g2n) + dalpha_dmu) * g_prime_mu.recip();
     }
 
-    // lev_uw[i] = x_iᵀ A_newton⁻¹ x_i.
     let lev_uw = xs.leverage(a_inv.view());
 
     // Per-term b1_k = -λ_k · A_newton⁻¹ · S_k · β; eta1_k = X · b1_k;
@@ -578,7 +572,12 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver> I
     /// itself doesn't pay the O(p³) cost per inner fit (mgcv_rust pattern
     /// — `fit_pirls_cached` returns no Newton pieces, the score evaluator
     /// at `src/reml/mod.rs:460-483` builds them when needed).
-    fn lazy_newton_log_det_h(&self, fit: &Self::Fit, rho: &Array1<f64>) -> Option<f64> {
+    fn lazy_newton_log_det_h(
+        &self,
+        fit: &Self::Fit,
+        rho: &Array1<f64>,
+        s_blocks: &[crate::design::PenaltyBlock],
+    ) -> Option<f64> {
         if !self.family.loss.use_newton_irls() {
             return None;
         }
@@ -587,14 +586,15 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver> I
             .prior_weights
             .clone()
             .unwrap_or_else(|| Array1::ones(n));
-        let s_total = crate::design::combined_s(&self.s_list, rho, self.x_design.ncols());
         lazy_newton_log_det_h(
             &self.family,
             &self.y,
             &fit.mu,
             &prior_w,
             &self.x_design,
-            &s_total,
+            &self.s_list,
+            s_blocks,
+            rho,
         )
     }
 
@@ -623,7 +623,6 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver> I
             .prior_weights
             .clone()
             .unwrap_or_else(|| Array1::ones(n));
-        let s_total = crate::design::combined_s(&self.s_list, rho, self.x_design.ncols());
         lazy_tk_kkt_inputs(
             &self.family,
             &self.y,
@@ -633,7 +632,6 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver> I
             &self.x_design,
             &self.s_list,
             s_blocks,
-            &s_total,
             rho,
         )
     }
@@ -1129,9 +1127,9 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
             dw_deta[i] = wf * (-v1n - 2.0 * g2n) / g1;
             w_obs[i] = wf * (1.0 + (self.y[i] - mu) * (v1n + g2n));
         }
-        let s_total = crate::design::combined_s(&self.s_list, rho, self.x_design.ncols());
         let xs = self.x_design.split();
-        let a_obs = xs.xtwx(w_obs.view()) + &s_total;
+        let mut a_obs = xs.xtwx(w_obs.view());
+        crate::design::add_penalties(&mut a_obs, &self.s_list, s_blocks, rho);
         let rhs: Vec<Array1<f64>> = (self.s_list.iter().zip(s_blocks).enumerate())
             .map(|(k, (s_k, b))| {
                 b.s_dot(s_k.view(), fit.beta.view())

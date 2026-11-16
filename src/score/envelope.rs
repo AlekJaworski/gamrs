@@ -555,7 +555,7 @@ where
         let log_det_h_fisher = inner.log_det_a();
         let log_det_h = self
             .inner
-            .lazy_newton_log_det_h(inner, theta)
+            .lazy_newton_log_det_h(inner, theta, &self.s_blocks)
             .unwrap_or(log_det_h_fisher);
         let log_det_s = self.log_det_s.eval(theta)?;
         let log_det_lambda_s = log_det_s.value;

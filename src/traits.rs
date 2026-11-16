@@ -806,7 +806,12 @@ pub trait InnerSolver {
     /// of mgcv_rust `src/reml/mod.rs:460-483` (the Newton-A log|H| block
     /// in the REML score evaluator, NOT inside `fit_pirls_cached`).
     #[allow(unused_variables)]
-    fn lazy_newton_log_det_h(&self, fit: &Self::Fit, rho: &Array1<f64>) -> Option<f64> {
+    fn lazy_newton_log_det_h(
+        &self,
+        fit: &Self::Fit,
+        rho: &Array1<f64>,
+        s_blocks: &[crate::design::PenaltyBlock],
+    ) -> Option<f64> {
         None
     }
 

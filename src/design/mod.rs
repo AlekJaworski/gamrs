@@ -290,6 +290,24 @@ pub fn penalty_blocks(s_list: &[Array2<f64>]) -> Vec<PenaltyBlock> {
     s_list.iter().map(|s| PenaltyBlock::of(s.view())).collect()
 }
 
+/// `A += Σ_j exp(ρ_j)·S_j`, touching only each penalty's block. Equal to
+/// adding [`combined_s`] wherever the blocks do not overlap.
+pub fn add_penalties(
+    a: &mut Array2<f64>,
+    s_list: &[Array2<f64>],
+    blocks: &[PenaltyBlock],
+    rho: &Array1<f64>,
+) {
+    for ((s, b), &r) in s_list.iter().zip(blocks).zip(rho) {
+        let lambda = r.exp();
+        for i in b.range.clone() {
+            for k in b.range.clone() {
+                a[[i, k]] += lambda * s[[i, k]];
+            }
+        }
+    }
+}
+
 /// Rank + `log|S|+` of a symmetric PSD penalty matrix. The pseudo-det is
 /// the product of strictly positive eigenvalues; the rank counts them
 /// against a relative tolerance.
