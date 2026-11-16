@@ -67,7 +67,7 @@ pub(crate) fn pcls(
         })?;
         let pk = z.dot(&pz);
 
-        match step_to_constraint(ain, &in_set, &beta, &pk) {
+        match step_to_constraint(ain, &in_set, &beta, &pk, &z) {
             (next, Some(row)) => {
                 beta = next;
                 working.push(row);
@@ -76,7 +76,7 @@ pub(crate) fn pcls(
             }
             (next, None) => {
                 beta = next;
-                match most_negative_multiplier(h, xty, ain, &working, &pinned, &beta) {
+                match most_negative_multiplier(h, xty, ain, &working, &pinned, &beta)? {
                     Some(pos) => {
                         let row = working.remove(pos);
                         pinned.remove(pos);
@@ -101,11 +101,23 @@ pub(crate) fn pcls(
 
 /// `LSQPstep`: step from `beta` along `pk`, stopping at the first inequality
 /// outside the working set that the full step would violate.
+///
+/// A row in the span of the working rows cannot block: it is a combination
+/// of rows held at zero, so it is zero now and stays zero along `pk`, which
+/// lies in their null space `z`. In exact arithmetic `a·pk` is then exactly
+/// zero and QPCLS's `|a·pk| > 0` test skips it; in floating point it is
+/// rounding noise, and stepping to it would add a dependent row to the
+/// working set and wreck the null-space basis. So such rows — those whose
+/// component in the null space, `‖zᵀa‖`, is at rounding level relative to
+/// `‖a‖` — are skipped explicitly. The shape rows of a tensor are linearly
+/// dependent (differences along both margins around a cell sum to zero), so
+/// this happens whenever a whole patch of the surface is flat.
 fn step_to_constraint(
     ain: &Array2<f64>,
     in_set: &[bool],
     beta: &Array1<f64>,
     pk: &Array1<f64>,
+    z: &Array2<f64>,
 ) -> (Array1<f64>, Option<usize>) {
     let full = beta + pk;
     let mut next = full.clone();
@@ -116,7 +128,7 @@ fn step_to_constraint(
             continue;
         }
         let a = ain.row(i);
-        if -a.dot(&full) > 0.0 {
+        if -a.dot(&full) > 0.0 && !in_span(a, z) {
             let apk = a.dot(pk);
             if apk.abs() > 0.0 {
                 let alpha = -a.dot(beta) / apk;
@@ -141,14 +153,16 @@ fn most_negative_multiplier(
     working: &[usize],
     pinned: &[bool],
     beta: &Array1<f64>,
-) -> Option<usize> {
+) -> Result<Option<usize>> {
     if working.is_empty() {
-        return None;
+        return Ok(None);
     }
     let m = working_rows(ain, working);
     let g = h.dot(beta) - xty;
     let mmt = m.dot(&m.t());
-    let l = mmt.solvec(&m.dot(&g)).ok()?;
+    let l = mmt.solvec(&m.dot(&g)).map_err(|e| {
+        GamrsError::SingularSystem(format!("pcls: dependent working constraints ({e})"))
+    })?;
     let mut best = None;
     let mut most = 0.0;
     for (pos, &pin) in pinned.iter().enumerate() {
@@ -157,8 +171,19 @@ fn most_negative_multiplier(
             best = Some(pos);
         }
     }
-    best
+    Ok(best)
 }
+
+/// Whether row `a` lies (to rounding) in the span of the working rows,
+/// i.e. has no component in their null space `z`.
+fn in_span(a: ndarray::ArrayView1<f64>, z: &Array2<f64>) -> bool {
+    let along = z.t().dot(&a);
+    along.dot(&along).sqrt() <= SPAN_TOL * a.dot(&a).sqrt()
+}
+
+/// Relative size of a row's null-space component below which it counts as
+/// a combination of the working rows: a few hundred ulps.
+const SPAN_TOL: f64 = 1e-12;
 
 fn working_rows(ain: &Array2<f64>, working: &[usize]) -> Array2<f64> {
     ain.select(Axis(0), working)

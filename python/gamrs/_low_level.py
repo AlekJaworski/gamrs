@@ -374,12 +374,16 @@ class TeScTerm:
     margin is a cubic B-spline with ``k`` coefficients (defaults to
     ``(5, 5)``).
 
-    **Monotone only within the data range.** The surface is monotone along
-    a constrained margin everywhere inside the rectangle spanned by the
-    training data. Outside it each margin extrapolates linearly from its
-    end, and the interaction with the other margin can reverse the slope —
-    mgcv's ``scasm`` behaves identically. Clip inputs to the training range
-    if predictions there must stay monotone.
+    **Monotone within the data range, to a small tolerance.** As in mgcv's
+    ``scasm``, the constraints make the surface monotone along each
+    constrained margin at every one of the other margin's ``k`` evenly
+    spaced nodes; between those nodes the other margin's basis can dip
+    slightly, so the surface can go the wrong way by a tiny amount (up to
+    ~1e-4 of the response scale on synthetic traffic data; scasm's own
+    surfaces do the same). Outside the rectangle spanned by the training
+    data each margin extrapolates linearly from its end and the interaction
+    can reverse the slope outright — again as in scasm. Clip inputs to the
+    training range if predictions there must stay monotone.
 
     Gaussian family with identity link only. ``cols`` entries accept int
     indices or string column names.

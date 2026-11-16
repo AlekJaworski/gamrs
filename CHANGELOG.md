@@ -19,19 +19,27 @@ is locked. Versions correspond to the published PyPI wheels.
   `MarginKind::Sc`). The basis is mgcv's `bs` B-spline with its derivative
   penalty, centred like a CR term; monotonicity is a set of linear
   inequality constraints on the coefficients, solved by a port of mgcv's
-  `pcls`. Smoothing parameters come from the usual REML Newton search on
-  the model restricted to the constraints that bind. Against mgcv 1.9-4 on
+  `pcls`. Smoothing parameters come from the usual REML Newton search,
+  on the REML of the model evaluated at the constrained fit (the
+  profiled-scale form of the LAML scasm reports). That criterion is smooth in
+  λ, unlike the one scasm iterates on (the REML of the model reduced to the
+  binding constraints), which jumps where a constraint starts or stops
+  binding and on many tensor fits has no stationary point — scasm then
+  cycles and stops wherever its 1% tolerance fires. Against mgcv 1.9-4 on
   synthetic fixtures (n = 500 and 3,000; sc alone, te-sc alone, and next to
   cr, re with 50 levels, te(cr) and a `by=` cr term): at scasm's smoothing
-  parameters every reported quantity (coefficients, binding constraints,
-  edf, scale, REML, `Vp`, term predictions and standard errors) matches to
-  ~1e-12. gamrs's REML optimum is always at least as good as scasm's, which
-  stops its Fellner–Schall iteration once penalties move by under 1%; the
-  fitted values differ by at most 2% of sd(y), and by under 0.1% at
-  n = 3,000 apart from one tensor fixture (0.7%). A 1-D sc curve is monotone everywhere; a tensor surface
-  is monotone only inside the rectangle spanned by the training data, as in
-  scasm. Other families raise an error. Models without sc terms are
-  unchanged (recorder battery bit-identical).
+  parameters every quantity scasm reports (coefficients, binding
+  constraints, edf, scale, LAML, `Vp`, term predictions and standard
+  errors) matches to ~1e-12. At the optimum gamrs's criterion is never
+  above its value at scasm's λ; on 270 synthetic traffic markets (te-sc +
+  cr, n = 150–3,000, several k and shape pairs, one with a 50-level random
+  effect) every fit converged, and fitted values differ from scasm's by a
+  median 0.002 and at most 0.033 in log price. A 1-D sc curve is monotone
+  everywhere. A tensor surface is monotone along each constrained margin at
+  the other margin's nodes; between them it can step the wrong way by
+  ~1e-4 inside the data range, and beyond the data the slope can reverse —
+  both exactly as in scasm. Other families raise an error. Models without
+  sc terms are unchanged (recorder battery bit-identical).
 
 ## [0.16.3] — 2026-11-13
 

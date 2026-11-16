@@ -1,81 +1,141 @@
 //! Gaussian REML with shape-constrained (`sc`) terms — mgcv's `scasm()`.
 //!
 //! The coefficients must satisfy `A β ≥ 0` (the prepared design's
-//! [`ShapeConstraints`]). At fixed λ the penalised least-squares problem is
-//! solved under those rows by [`pcls`]; its binding rows (the active set)
-//! hold as equalities there, so near that λ the fit is the ordinary
-//! penalised fit on the coefficients `β = Z γ` with `Z` an orthonormal basis
-//! of the active rows' null space. That reduced model is an ordinary
-//! Gaussian GAM (design `X Z`, penalties `Zᵀ S_j Z`), so its REML optimum
-//! over ρ is found by the ordinary closed-form score and outer Newton. This
-//! is the projection scasm applies (`getZ`, per smooth), with gamrs's
-//! Newton in place of scasm's Fellner–Schall updates.
+//! [`ShapeConstraints`]). At fixed λ the penalised least-squares fit under
+//! those rows comes from [`pcls`]; the rows binding there hold as
+//! equalities.
 //!
-//! The active set can change as λ moves, so the search alternates: fit the
-//! constraints at the current ρ, optimise ρ on the model reduced to that
-//! fit's active set, refit, and stop once the active set at the new optimum
-//! is the one it was optimised for. A bounded number of rounds; a set that
-//! never settles is an error, not a silent answer.
+//! **Which REML.** scasm chooses λ by the REML of the model *reduced* to the
+//! binding rows (their directions removed from the coefficients). That
+//! criterion jumps wherever a row starts or stops binding, because the two
+//! sides count a different number of free coefficients; on a sizeable share
+//! of tensor fits its optimum sits on such a seam and it has no stationary
+//! point at all. scasm's own iteration then cycles across the seam for good
+//! and stops only because its 1% tolerance fires somewhere on the cycle.
 //!
-//! Reported quantities follow scasm: β is the constrained fit; edf comes
-//! from the reduced model (the active rows fix those directions); the scale
-//! is `rss / (n − edf)`, which equals the REML profile scale at the optimum;
-//! the covariance and the REML value are projected on the centring only
-//! (here: the absorbed basis), not on the active rows.
+//! gamrs instead minimises the REML of the centred (unreduced) model
+//! evaluated at the constrained fit — the profiled-scale form of the LAML
+//! scasm reports for its fit. It is continuous in ρ with a continuous
+//! gradient: the penalised deviance at the constrained minimum has
+//! derivative `λ_j βᵀS_jβ` (Danskin's theorem), exactly as unconstrained,
+//! and the log-determinants do not depend on β. So the ordinary closed-form
+//! score and outer Newton apply as they stand; the only change is an inner
+//! solver that returns the constrained coefficients ([`ConstrainedInner`]).
+//! Its Hessian uses the unconstrained `dβ/dρ`, which is exact where no row
+//! binds and an approximation otherwise; the Newton line search on the exact
+//! value and the gradient test keep the search correct either way.
+//!
+//! Reported quantities: β is the constrained fit; edf comes from the model
+//! reduced to its binding rows (those directions are fixed); the scale is
+//! `rss / (n − edf)` and the covariance is the centred model's, both as
+//! scasm reports them; the REML value is the criterion minimised.
 
 use ndarray::{Array1, Array2, ArrayView1};
 
 use crate::design::{rank_and_log_pseudo_det, PreparedDesign, ShapeConstraints};
 use crate::error::{GamrsError, Result};
+use crate::family::Gaussian;
 use crate::inner::pcls::{null_space, pcls};
 use crate::inner::{xtwx_xtwy, DesignMatrix, GaussianClosedFormInner, LinearSolver};
-use crate::traits::InnerSolver;
+use crate::outer::NewtonWithHalving;
+use crate::score::{EnvelopeScore, MgcvTwoSigmaProfile};
+use crate::traits::{InnerSolver, OuterSolver, ScoreDerivatives};
 
-use super::gaussian::{gaussian_reml, gaussian_score};
+use super::gaussian::gaussian_score;
 use super::{compute_edf, compute_edf_per_term, compute_vcov, FittedGam, LinkKind};
-
-/// Rounds of "fit the constraints, optimise ρ on the active set" before
-/// giving up. Each round after the first starts from the previous optimum,
-/// so a settled set is usually confirmed in two or three.
-const MAX_ROUNDS: usize = 20;
 
 pub(crate) fn fit_gaussian_constrained<S: LinearSolver>(
     prep: PreparedDesign,
     y: ArrayView1<f64>,
     weights: Option<ArrayView1<f64>>,
 ) -> Result<FittedGam> {
-    let cons = constraints_of(&prep)?;
-    let solver = Pcls::new(&prep, cons, y, weights);
-    let mut rho = Array1::<f64>::zeros(prep.s_list.len());
-    let mut active = solver.solve(&rho)?.1;
-    let mut iterations = 0;
-    for _ in 0..MAX_ROUNDS {
-        let reduced = Reduced::new(&prep, cons, &active)?;
-        let (_, outer) = gaussian_reml::<S>(
-            &reduced.x_design,
-            &reduced.s_list,
-            &reduced.rank_s_list,
-            reduced.mp,
-            &reduced.log_pseudo_det_s_list,
-            y,
-            weights,
-            rho.clone(),
-        )?;
-        rho = outer.theta;
-        iterations += outer.iterations;
-        let next = solver.solve(&rho)?.1;
-        if next == active {
-            let (mut fit, _) = finish::<S>(prep, y, weights, &rho)?;
-            fit.n_iters = iterations;
-            fit.converged = outer.converged;
-            return Ok(fit);
-        }
-        active = next;
+    crate::outer::reject_unsupported_algorithm("gaussian closed-form")?;
+    let outer = {
+        let score = constrained_score::<S>(&prep, y, weights)?;
+        let newton =
+            NewtonWithHalving::new(crate::outer::resolve_tuning(&Gaussian).to_newton_opts());
+        newton.minimize(&score, Array1::zeros(prep.s_list.len()))?
+    };
+    let (mut fit, _) = finish::<S>(prep, y, weights, &outer.theta)?;
+    fit.n_iters = outer.iterations;
+    fit.converged = outer.converged;
+    Ok(fit)
+}
+
+type ConstrainedScore<'a, S> =
+    EnvelopeScore<Gaussian, ConstrainedInner<'a, S>, MgcvTwoSigmaProfile, S>;
+
+/// The Gaussian closed-form REML score of the centred model with the
+/// constrained coefficients plugged in.
+fn constrained_score<'a, S: LinearSolver>(
+    prep: &'a PreparedDesign,
+    y: ArrayView1<f64>,
+    weights: Option<ArrayView1<f64>>,
+) -> Result<ConstrainedScore<'a, S>> {
+    let cons = constraints_of(prep)?;
+    let inner = ConstrainedInner::<S> {
+        plain: GaussianClosedFormInner::<S>::new(
+            prep.x_design.clone(),
+            y.to_owned(),
+            weights.map(|w| w.to_owned()),
+            prep.s_list.clone(),
+        ),
+        solver: Pcls::new(prep, cons, y, weights),
+        y: y.to_owned(),
+        weights: weights.map(|w| w.to_owned()),
+    };
+    Ok(ConstrainedScore::<S>::with_inner(
+        inner,
+        Gaussian,
+        MgcvTwoSigmaProfile,
+        y.to_owned(),
+        prep.s_list.clone(),
+        prep.rank_s_list.clone(),
+        prep.mp,
+        prep.log_pseudo_det_s_list.clone(),
+    ))
+}
+
+/// The REML criterion the λ search minimises, at `lambda`.
+pub fn reml_at_lambda(
+    prep: &PreparedDesign,
+    y: ArrayView1<f64>,
+    weights: Option<ArrayView1<f64>>,
+    lambda: ArrayView1<f64>,
+) -> Result<f64> {
+    constrained_score::<crate::inner::CholeskySolver>(prep, y, weights)?
+        .value(&lambda.mapv(f64::ln))
+}
+
+/// The closed-form Gaussian inner solve with the coefficients replaced by
+/// the constrained fit; `A = XᵀWX + S_λ` (its factor, log-determinant and
+/// inverse) is the unconstrained one.
+pub(crate) struct ConstrainedInner<'a, S: LinearSolver> {
+    plain: GaussianClosedFormInner<S>,
+    solver: Pcls<'a>,
+    y: Array1<f64>,
+    weights: Option<Array1<f64>>,
+}
+
+impl<S: LinearSolver> InnerSolver for ConstrainedInner<'_, S> {
+    type Fit = crate::inner::GaussianInnerFit<S>;
+
+    fn fit(&self, rho: &Array1<f64>) -> Result<Self::Fit> {
+        let mut f = self.plain.fit(rho)?;
+        let (beta, _) = self.solver.solve(rho)?;
+        let mu = self.plain.x_design.dot(&beta);
+        let r = &self.y - &mu;
+        let rss = match &self.weights {
+            Some(w) => r.iter().zip(w).map(|(r, w)| w * r * r).sum(),
+            None => r.dot(&r),
+        };
+        f.beta = beta;
+        f.eta = mu.clone();
+        f.mu = mu;
+        f.rss = rss;
+        f.deviance = rss;
+        Ok(f)
     }
-    Err(GamrsError::InvalidParameter(format!(
-        "shape-constrained fit: the set of binding constraints did not settle in \
-         {MAX_ROUNDS} rounds"
-    )))
 }
 
 /// The shape-constrained fit at fixed smoothing parameters `lambda` (one
@@ -97,9 +157,7 @@ pub fn fit_at_lambda(
     finish::<crate::inner::CholeskySolver>(prep, y, weights, &lambda.mapv(f64::ln))
 }
 
-/// Everything reported for the fit at `rho`: β from the constrained solve,
-/// edf from the model reduced to its binding rows, `scale = rss/(n − edf)`,
-/// and the covariance and REML value of the centred (unreduced) model.
+/// Everything reported for the fit at `rho` (see the module notes).
 fn finish<S: LinearSolver>(
     prep: PreparedDesign,
     y: ArrayView1<f64>,
@@ -108,7 +166,6 @@ fn finish<S: LinearSolver>(
 ) -> Result<(FittedGam, Vec<usize>)> {
     let cons = constraints_of(&prep)?;
     let n = y.len();
-    let p = prep.x_design.ncols();
     let (beta, active) = Pcls::new(&prep, cons, y, weights).solve(rho)?;
     let reduced = Reduced::new(&prep, cons, &active)?;
     let score = gaussian_score::<S>(
@@ -141,15 +198,7 @@ fn finish<S: LinearSolver>(
     .fit(rho)?;
     let vcov = compute_vcov(&full, scale);
 
-    // scasm's REML (LAML) at the fit, on the centred basis:
-    // (−Dp/φ + log|S_λ|₊ − log|XᵀWX + S_λ|)/2 + M log(2π)/2 − n log(2πφ)/2.
-    let s_lambda = crate::design::combined_s(&prep.s_list, rho, p);
-    let (rank_s, log_det_s) = rank_and_log_pseudo_det(s_lambda.view())?;
-    let dp = rss + beta.dot(&s_lambda.dot(&beta));
-    let two_pi = 2.0 * std::f64::consts::PI;
-    let laml = (-dp / scale + log_det_s - full.log_det_a()) / 2.0
-        + (p - rank_s) as f64 * two_pi.ln() / 2.0
-        - n as f64 * (two_pi * scale).ln() / 2.0;
+    let reml = constrained_score::<S>(&prep, y, weights)?.value(rho)?;
 
     let fit = FittedGam {
         beta,
@@ -161,7 +210,7 @@ fn finish<S: LinearSolver>(
         n,
         n_iters: 0,
         converged: true,
-        reml_value: -laml,
+        reml_value: reml,
         predictor: prep.predictor,
         vcov,
         link_kind: LinkKind::Identity,
@@ -211,33 +260,6 @@ impl<'a> Pcls<'a> {
         active.sort_unstable();
         Ok((fit.beta, active))
     }
-}
-
-/// The REML criterion the λ search minimises, at `lambda`: the ordinary
-/// Gaussian REML score of the model reduced to the binding rows of the
-/// constrained fit there, and those rows. Comparable across λ only where
-/// the binding rows agree.
-pub fn search_reml_at_lambda(
-    prep: &PreparedDesign,
-    y: ArrayView1<f64>,
-    weights: Option<ArrayView1<f64>>,
-    lambda: ArrayView1<f64>,
-) -> Result<(f64, Vec<usize>)> {
-    use crate::traits::ScoreDerivatives;
-    let cons = constraints_of(prep)?;
-    let rho = lambda.mapv(f64::ln);
-    let (_, active) = Pcls::new(prep, cons, y, weights).solve(&rho)?;
-    let r = Reduced::new(prep, cons, &active)?;
-    let score = gaussian_score::<crate::inner::CholeskySolver>(
-        &r.x_design,
-        &r.s_list,
-        &r.rank_s_list,
-        r.mp,
-        &r.log_pseudo_det_s_list,
-        y,
-        weights,
-    );
-    Ok((score.value(&rho)?, active))
 }
 
 /// The model on `β = Z γ`, `Z` block-diagonal: an orthonormal null-space

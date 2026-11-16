@@ -25,7 +25,7 @@ use serde_json::Value;
 
 use gamrs::design::{Additive, DesignStrategy, MarginKind, Predictor, Shape, TermSpec};
 use gamrs::family::gaussian_identity;
-use gamrs::fit::shape_constrained::{fit_at_lambda, search_reml_at_lambda};
+use gamrs::fit::shape_constrained::{fit_at_lambda, reml_at_lambda};
 use gamrs::fit_with_design;
 
 fn load(name: &str) -> Value {
@@ -278,7 +278,21 @@ fn check(name: &str, model: &str) {
     let fin = &fx["final"];
     let sp_ref = to_gamrs(&vec_of(&fin["sp"]));
     let (at_ref, _) = fit_at_lambda(prepare(), y.view(), None, sp_ref.view()).unwrap();
-    let e = reported(&at_ref, fin, &x, &x_new, &z);
+    let mut e = reported(&at_ref, fin, &x, &x_new, &z);
+    // scasm reports the LAML with its scale `rss/(n − edf)`; gamrs's REML
+    // value is the profiled criterion it minimises. Check scasm's number
+    // from gamrs's pieces.
+    e[0] = rel(
+        scasm_reml(&prep, &y, &at_ref, &sp_ref),
+        fin["reml"].as_f64().unwrap(),
+    );
+    assert!(
+        rel(
+            at_ref.reml_value,
+            reml_at_lambda(&prep, y.view(), None, sp_ref.view()).unwrap()
+        ) < 1e-12,
+        "{tag}: reported REML is not the criterion"
+    );
     eprintln!(
         "{tag}: at scasm's λ: REML {:.1e}, edf {:.1e}, scale {:.1e}, fitted {:.1e}, Vp {:.1e}, \
          terms {:.1e}, se {:.1e}",
@@ -294,10 +308,11 @@ fn check(name: &str, model: &str) {
     );
 
     // ── The REML optimum ─────────────────────────────────────────────────
-    // scasm stops its Fellner–Schall iteration once the penalty sizes move
-    // by under 1%, so its λ can sit short of the optimum along flat
-    // directions. gamrs's optimum must be at least as good on the criterion
-    // both minimise, with the same binding rows.
+    // gamrs minimises the REML of the centred model at the constrained fit
+    // (the profiled-scale form of the LAML scasm reports); scasm stops its
+    // Fellner–Schall iteration on its own reduced criterion once penalties
+    // move by under 1%. On gamrs's criterion its optimum must be at least
+    // as good as scasm's λ.
     let fit = fit_with_design(
         gaussian_identity(),
         Additive {
@@ -309,33 +324,62 @@ fn check(name: &str, model: &str) {
     )
     .unwrap();
     assert!(fit.converged, "{tag}: not converged");
-    let (crit_mine, rows_mine) =
-        search_reml_at_lambda(&prep, y.view(), None, fit.lambda.view()).unwrap();
-    let (crit_ref, rows_ref) = search_reml_at_lambda(&prep, y.view(), None, sp_ref.view()).unwrap();
+    let crit_ref = reml_at_lambda(&prep, y.view(), None, sp_ref.view()).unwrap();
     let e = reported(&fit, fin, &x, &x_new, &z);
     let d_log_sp = max_abs(fit.lambda.iter().zip(&sp_ref).map(|(a, b)| a.ln() - b.ln()));
     let sd_y = y.std(0.0);
     eprintln!(
-        "{tag}: optimum ({} Newton iterations, {} binding rows): criterion gamrs − scasm \
-         {:.2e}; vs scasm log λ {d_log_sp:.1e}, edf {:.1e}, fitted {:.1e} ({:.1e} of sd y), \
-         terms {:.1e}, se {:.1e}",
+        "{tag}: optimum ({} Newton iterations): criterion gamrs − scasm {:.2e}; vs scasm \
+         log λ {d_log_sp:.1e}, edf {:.1e}, fitted {:.1e} ({:.1e} of sd y), terms {:.1e}, \
+         se {:.1e}",
         fit.n_iters,
-        rows_mine.len(),
-        crit_mine - crit_ref,
+        fit.reml_value - crit_ref,
         e[1],
         e[3],
         e[3] / sd_y,
         e[5],
         e[6],
     );
-    assert_eq!(rows_mine, rows_ref, "{tag}: binding rows at the optimum");
     assert!(
-        crit_mine <= crit_ref + 1e-9 * crit_ref.abs(),
+        fit.reml_value <= crit_ref + 1e-9 * crit_ref.abs(),
         "{tag}: gamrs optimum worse than scasm's"
     );
     assert!(e[3] / sd_y < 5e-2, "{tag}: fitted values far from scasm's");
 
     monotone_on_grid(&fit, &x, &monotone_directions(model), tag);
+}
+
+/// scasm's LAML at `fit`: `(−Dp/φ + log|S_λ|₊ − log|XᵀX + S_λ|)/2 +
+/// M log(2π)/2 − n log(2πφ)/2` with φ the reported scale, returned as
+/// −LAML.
+fn scasm_reml(
+    prep: &gamrs::design::PreparedDesign,
+    y: &Array1<f64>,
+    fit: &gamrs::FittedGam,
+    lambda: &Array1<f64>,
+) -> f64 {
+    use ndarray_linalg::{Cholesky, Eigh, UPLO};
+    let x: Array2<f64> = prep.x_design.view().to_owned();
+    let p = x.ncols();
+    let mut s = Array2::<f64>::zeros((p, p));
+    for (j, sj) in prep.s_list.iter().enumerate() {
+        s.scaled_add(lambda[j], sj);
+    }
+    let (ev, _) = s.eigh(UPLO::Lower).unwrap();
+    let tol = ev.iter().fold(0.0_f64, |m, v| m.max(*v)) * 1e-10;
+    let pos: Vec<f64> = ev.iter().copied().filter(|v| *v > tol).collect();
+    let log_det_s: f64 = pos.iter().map(|v| v.ln()).sum();
+    let a = x.t().dot(&x) + &s;
+    let l = a.cholesky(UPLO::Lower).unwrap();
+    let log_det_a: f64 = 2.0 * l.diag().iter().map(|v| v.ln()).sum::<f64>();
+    let r = y - &x.dot(&fit.beta);
+    let dp = r.dot(&r) + fit.beta.dot(&s.dot(&fit.beta));
+    let (n, phi) = (y.len() as f64, fit.scale);
+    let two_pi = 2.0 * std::f64::consts::PI;
+    let laml = (-dp / phi + log_det_s - log_det_a) / 2.0
+        + (p - pos.len()) as f64 * two_pi.ln() / 2.0
+        - n * (two_pi * phi).ln() / 2.0;
+    -laml
 }
 
 /// Relative REML, absolute edf, relative scale, absolute fitted,

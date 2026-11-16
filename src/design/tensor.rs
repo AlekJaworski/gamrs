@@ -284,9 +284,13 @@ impl TensorTermFit {
     /// margin's rows `A_j XP_j` act along every coefficient line of the
     /// other margin. The whole tensor is then centred as for CR margins.
     ///
-    /// Monotonicity holds inside the data rectangle only: outside it each
-    /// margin extrapolates linearly from its end, and the interaction can
-    /// reverse the slope there (scasm behaves the same way).
+    /// The rows hold the surface monotone along a constrained margin on
+    /// every coefficient line of the other margin, i.e. at the other
+    /// margin's nodes; between nodes its interpolating basis can dip
+    /// slightly, so small wrong-way steps (~1e-4 of the response) can occur
+    /// inside the data rectangle, and outside it each margin extrapolates
+    /// linearly and the slope can reverse. scasm builds the same rows and
+    /// behaves the same way.
     fn build_sc(
         x: ArrayView2<f64>,
         cols: [usize; 2],
