@@ -19,13 +19,14 @@
 
 use ndarray::{Array2, ArrayView2};
 
-use crate::basis::{CrSpline, TensorProductBasis};
+use crate::basis::{BsBasis, CrSpline, TensorProductBasis};
 use crate::error::{GamrsError, Result};
 use crate::traits::{Basis, BasisTransform};
 use crate::transform::SumToZero;
 
 use super::additive::MarginKind;
 use super::by::{scale_rows, varies};
+use super::sc::{shape_rows, tensor_margin_rows, unique_rows, Shape, TermConstraints};
 use super::{prepend_intercept, prepend_zero_column};
 
 /// Predict-time tensor product rebuilder. Carries the marginal knot
@@ -89,24 +90,25 @@ impl TensorPredictor {
     /// derivative is used (and the other margin's design is unchanged);
     /// if `axis` matches neither column, the result is a zero matrix.
     fn tensor_design(&self, x_new: ArrayView2<f64>, deriv_axis: Option<usize>) -> Array2<f64> {
-        let (MarginKind::Cr, MarginKind::Cr) = (self.bs_a, self.bs_b);
-        let cr_a = CrSpline::new(self.knots_a.clone()).expect("invalid stored knots_a");
-        let cr_b = CrSpline::new(self.knots_b.clone()).expect("invalid stored knots_b");
         let x_a = x_new.slice(ndarray::s![.., self.col_a..self.col_a + 1]);
         let x_b = x_new.slice(ndarray::s![.., self.col_b..self.col_b + 1]);
 
         // Margin A: apply XP_a to raw design (or to raw d1 if differentiating wrt col_a).
-        let raw_a = match deriv_axis {
-            Some(ax) if ax == self.col_a => cr_a.d1(x_a, 0),
-            _ => cr_a.evaluate(x_a),
-        };
+        let raw_a = margin_raw(
+            self.bs_a,
+            &self.knots_a,
+            x_a,
+            deriv_axis == Some(self.col_a),
+        );
         let mut design_a = raw_a.dot(&self.xp_a);
 
         // Margin B: same logic, differentiating wrt col_b.
-        let raw_b = match deriv_axis {
-            Some(ax) if ax == self.col_b => cr_b.d1(x_b, 0),
-            _ => cr_b.evaluate(x_b),
-        };
+        let raw_b = margin_raw(
+            self.bs_b,
+            &self.knots_b,
+            x_b,
+            deriv_axis == Some(self.col_b),
+        );
         let design_b = raw_b.dot(&self.xp_b);
 
         // If deriv_axis is Some but matches neither column, the result
@@ -121,17 +123,46 @@ impl TensorPredictor {
     }
 }
 
+/// One margin's raw design (or its derivative) from the stored knots.
+fn margin_raw(
+    kind: MarginKind,
+    knots: &ndarray::Array1<f64>,
+    x: ArrayView2<f64>,
+    deriv: bool,
+) -> Array2<f64> {
+    match kind {
+        MarginKind::Cr => {
+            let cr = CrSpline::new(knots.clone()).expect("invalid stored knots");
+            if deriv {
+                cr.d1(x, 0)
+            } else {
+                cr.evaluate(x)
+            }
+        }
+        MarginKind::Sc(_) => {
+            let bs = BsBasis::from_knots(knots.to_vec(), (3, 2));
+            if deriv {
+                bs.d1(x, 0)
+            } else {
+                bs.evaluate(x)
+            }
+        }
+    }
+}
+
 /// Fit-time helper: build a tensor-product term's centred design,
 /// per-margin penalties (already in the centred coefficient frame),
 /// and predict-time rebuilder. Mirrors mgcv's
 /// `smooth.construct.tensor.smooth.spec` for a 2-margin plain `te()`.
-pub(crate) struct TensorTermFit {
+pub(super) struct TensorTermFit {
     /// `(n, k_a*k_b - 1)` design in the centred frame.
     pub(super) design: Array2<f64>,
     /// Per-margin penalties in the centred frame. Length 2:
     /// `[C' (S_a ⊗ I_{k_b}) C, C' (I_{k_a} ⊗ S_b) C]`.
     pub(super) s_list_term: Vec<Array2<f64>>,
     pub(super) predictor: TensorPredictor,
+    /// Shape rows and feasible start, for a tensor with `sc` margins.
+    pub(super) constraints: Option<TermConstraints>,
 }
 
 impl TensorTermFit {
@@ -150,18 +181,58 @@ impl TensorTermFit {
                 "Tensor term must have distinct margin columns (got col_a == col_b == {col_a})"
             )));
         }
-        let RawTensorFit {
-            cr_a,
-            cr_b,
-            raw_design,
-            s_te_a_raw,
-            s_te_b_raw,
-        } = Self::fit_raw(x, col_a, col_b, k_a, k_b, bs_a, bs_b)?;
+        match (bs_a, bs_b) {
+            (MarginKind::Cr, MarginKind::Cr) => {}
+            (MarginKind::Sc(sa), MarginKind::Sc(sb)) => {
+                return Self::build_sc(x, [col_a, col_b], [k_a, k_b], [sa, sb], by)
+            }
+            _ => return Err(super::sc::unsupported("a tensor mixing sc and cr margins")),
+        }
+        // Uncentred marginal bases (matches mgcv's `mc[i] = FALSE` for
+        // every margin of a plain `te`).
+        let x_a_col = x.column(col_a);
+        let x_b_col = x.column(col_b);
+        let cr_a = CrSpline::with_quantile_knots(x_a_col, k_a)?;
+        let cr_b = CrSpline::with_quantile_knots(x_b_col, k_b)?;
         let knots_a = cr_a.knots().to_owned();
         let knots_b = cr_b.knots().to_owned();
+
+        // CR margins set `noterp = TRUE` (smooth.r:1512), which causes
+        // smooth.construct.tensor.smooth.spec to SKIP the SVD repara
+        // (smooth.r:799 — `if (is.null(object$margin[[i]]$noterp))`).
+        // For CR + CR `te` we therefore use identity reparams; if we
+        // ever add B-spline marginals here we'd switch back to the SVD
+        // path conditional on the margin kind.
         let xp_a = Array2::<f64>::eye(k_a);
         let xp_b = Array2::<f64>::eye(k_b);
+
+        // Marginal penalties in the reparameterised frame (identity
+        // here since CR margins are noterp). mgcv smooth.r:825 rescales
+        // each marginal penalty by its leading eigenvalue.
+        let s_a_raw = cr_a.penalties().pop().unwrap();
+        let s_b_raw = cr_b.penalties().pop().unwrap();
+        let s_a = rescale_by_leading_eig(s_a_raw)?;
+        let s_b = rescale_by_leading_eig(s_b_raw)?;
+
+        // Evaluate the marginal designs on x (no XP rotation for CR
+        // since xp = I). Row-wise Kronecker → tensor product design.
+        let n = x.nrows();
+        let x_a_view = x.slice(ndarray::s![.., col_a..col_a + 1]);
+        let x_b_view = x.slice(ndarray::s![.., col_b..col_b + 1]);
+        let design_a = cr_a.evaluate(x_a_view);
+        let design_b = cr_b.evaluate(x_b_view);
+        debug_assert_eq!(design_a.shape(), &[n, k_a]);
+        debug_assert_eq!(design_b.shape(), &[n, k_b]);
+
+        let raw_design = row_kron(design_a.view(), design_b.view());
+
+        // Tensor product penalties on the reparameterised + rescaled
+        // marginal frame: S_te_a = S_a ⊗ I_{k_b}, S_te_b = I_{k_a} ⊗ S_b.
         let pk = k_a * k_b;
+        let s_te_a_raw = kron_with_identity_right(s_a.view(), k_b);
+        let s_te_b_raw = kron_with_identity_left(k_a, s_b.view());
+        debug_assert_eq!(s_te_a_raw.shape(), &[pk, pk]);
+        debug_assert_eq!(s_te_b_raw.shape(), &[pk, pk]);
 
         // Single sum-to-zero constraint on the WHOLE tensor product
         // (mgcv's `smoothCon` with `absorb.cons = TRUE`). The
@@ -201,81 +272,133 @@ impl TensorTermFit {
             design,
             s_list_term: vec![s_te_a, s_te_b],
             predictor,
+            constraints: None,
         })
     }
-    /// The `te` basis before its sum-to-zero constraint and any by-scaling:
-    /// both CR margins, the row-wise Kronecker design and the two marginal
-    /// penalties (each rescaled by its leading eigenvalue) as `S_a ⊗ I` and
-    /// `I ⊗ S_b`.
-    pub(crate) fn fit_raw(
+
+    /// `te()` with `sc` margins, as mgcv's `scasm` builds it. Each margin
+    /// is a `bs` B-spline reparameterised so its coefficients are the
+    /// margin function's values at `k` evenly spaced points over the data
+    /// (`XP` = inverse of the basis there; mgcv smooth.r:817), its penalty
+    /// rotated by `XP` and divided by its largest eigenvalue. A monotone
+    /// margin's rows `A_j XP_j` act along every coefficient line of the
+    /// other margin. The whole tensor is then centred as for CR margins.
+    ///
+    /// Monotonicity holds inside the data rectangle only: outside it each
+    /// margin extrapolates linearly from its end, and the interaction can
+    /// reverse the slope there (scasm behaves the same way).
+    fn build_sc(
         x: ArrayView2<f64>,
-        col_a: usize,
-        col_b: usize,
-        k_a: usize,
-        k_b: usize,
-        bs_a: MarginKind,
-        bs_b: MarginKind,
-    ) -> Result<RawTensorFit> {
-        let (MarginKind::Cr, MarginKind::Cr) = (bs_a, bs_b);
-        // Uncentred marginal bases (matches mgcv's `mc[i] = FALSE` for
-        // every margin of a plain `te`).
-        let x_a_col = x.column(col_a);
-        let x_b_col = x.column(col_b);
-        let cr_a = CrSpline::with_quantile_knots(x_a_col, k_a)?;
-        let cr_b = CrSpline::with_quantile_knots(x_b_col, k_b)?;
+        cols: [usize; 2],
+        k: [usize; 2],
+        shapes: [Option<Shape>; 2],
+        by: Option<usize>,
+    ) -> Result<Self> {
+        if by.is_some() {
+            return Err(super::sc::unsupported("by= on a tensor"));
+        }
+        let mut bases = Vec::with_capacity(2);
+        let mut xps = Vec::with_capacity(2);
+        let mut designs = Vec::with_capacity(2);
+        let mut penalties = Vec::with_capacity(2);
+        let mut nodes_designs = Vec::with_capacity(2);
+        for j in 0..2 {
+            let xc = x.column(cols[j]);
+            let basis = BsBasis::from_data(xc, k[j], (3, 2))?;
+            let lo = xc.iter().cloned().fold(f64::INFINITY, f64::min);
+            let hi = xc.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            let nodes = ndarray::Array1::from(crate::basis::bspline::r_seq(lo, hi, k[j]));
+            let bn = basis.design(nodes.view());
+            let xp = invert(&bn)?;
+            designs.push(basis.design(xc).dot(&xp));
+            penalties.push(rescale_by_leading_eig(
+                xp.t().dot(&basis.penalty()).dot(&xp),
+            )?);
+            bases.push(basis);
+            xps.push(xp);
+            nodes_designs.push(bn);
+        }
+        let raw_design = row_kron(designs[0].view(), designs[1].view());
+        let s_te_a_raw = kron_with_identity_right(penalties[0].view(), k[1]);
+        let s_te_b_raw = kron_with_identity_left(k[0], penalties[1].view());
 
-        // CR margins set `noterp = TRUE` (smooth.r:1512), which causes
-        // smooth.construct.tensor.smooth.spec to SKIP the SVD repara
-        // (smooth.r:799 — `if (is.null(object$margin[[i]]$noterp))`).
-        // For CR + CR `te` we therefore use identity reparams; if we
-        // ever add B-spline marginals here we'd switch back to the SVD
-        // path conditional on the margin kind.
+        let te = TensorProductBasis::new(bases[0].clone(), bases[1].clone(), cols[0], cols[1]);
+        let centring = SumToZero::from_fit_design(te, raw_design.view())
+            .matrix()
+            .to_owned();
+        let design = raw_design.dot(&centring);
+        let s_te_a = centring.t().dot(&s_te_a_raw).dot(&centring);
+        let s_te_b = centring.t().dot(&s_te_b_raw).dot(&centring);
 
-        // Marginal penalties in the reparameterised frame (identity
-        // here since CR margins are noterp). mgcv smooth.r:825 rescales
-        // each marginal penalty by its leading eigenvalue.
-        let s_a_raw = cr_a.penalties().pop().unwrap();
-        let s_b_raw = cr_b.penalties().pop().unwrap();
-        let s_a = rescale_by_leading_eig(s_a_raw)?;
-        let s_b = rescale_by_leading_eig(s_b_raw)?;
+        let mut blocks = Vec::new();
+        for j in 0..2 {
+            if let Some(sh) = shapes[j] {
+                let a = shape_rows(sh, k[j]).dot(&xps[j]);
+                blocks.push(tensor_margin_rows(&a, j, k));
+            }
+        }
+        let views: Vec<_> = blocks.iter().map(|b| b.view()).collect();
+        let rows = if views.is_empty() {
+            Array2::zeros((0, k[0] * k[1]))
+        } else {
+            ndarray::concatenate(ndarray::Axis(0), &views)
+                .map_err(|e| GamrsError::Linalg(e.to_string()))?
+        };
+        // Strictly feasible start: a ramp of `ε^{1/4}` per step along each
+        // constrained margin in B-spline coordinates, mapped to the `XP`
+        // coefficients (values at the nodes), then shifted onto the
+        // sum-to-zero row (a constant shift of the values shifts the
+        // function by the same constant).
+        let step = f64::EPSILON.powf(0.25);
+        let ramp = |j: usize, i: usize| shapes[j].map_or(0.0, |sh| sh.sign() * step * i as f64);
+        let ramp_b =
+            ndarray::Array1::from_shape_fn(k[0] * k[1], |c| ramp(0, c / k[1]) + ramp(1, c % k[1]));
+        let start = kron(&nodes_designs[0], &nodes_designs[1]).dot(&ramp_b);
+        let centre = raw_design.sum_axis(ndarray::Axis(0));
+        let start = &start - centre.dot(&start) / centre.sum();
+        let constraints = TermConstraints {
+            rows: unique_rows(rows).dot(&centring),
+            start: centring.t().dot(&start),
+        };
 
-        // Evaluate the marginal designs on x (no XP rotation for CR
-        // since xp = I). Row-wise Kronecker → tensor product design.
-        let n = x.nrows();
-        let x_a_view = x.slice(ndarray::s![.., col_a..col_a + 1]);
-        let x_b_view = x.slice(ndarray::s![.., col_b..col_b + 1]);
-        let design_a = cr_a.evaluate(x_a_view);
-        let design_b = cr_b.evaluate(x_b_view);
-        debug_assert_eq!(design_a.shape(), &[n, k_a]);
-        debug_assert_eq!(design_b.shape(), &[n, k_b]);
-
-        let raw_design = row_kron(design_a.view(), design_b.view());
-
-        // Tensor product penalties on the reparameterised + rescaled
-        // marginal frame: S_te_a = S_a ⊗ I_{k_b}, S_te_b = I_{k_a} ⊗ S_b.
-        let pk = k_a * k_b;
-        let s_te_a_raw = kron_with_identity_right(s_a.view(), k_b);
-        let s_te_b_raw = kron_with_identity_left(k_a, s_b.view());
-        debug_assert_eq!(s_te_a_raw.shape(), &[pk, pk]);
-        debug_assert_eq!(s_te_b_raw.shape(), &[pk, pk]);
-
-        Ok(RawTensorFit {
-            cr_a,
-            cr_b,
-            raw_design,
-            s_te_a_raw,
-            s_te_b_raw,
+        let predictor = TensorPredictor {
+            col_a: cols[0],
+            col_b: cols[1],
+            bs_a: MarginKind::Sc(shapes[0]),
+            bs_b: MarginKind::Sc(shapes[1]),
+            knots_a: ndarray::Array1::from(bases[0].knots.clone()),
+            knots_b: ndarray::Array1::from(bases[1].knots.clone()),
+            xp_a: xps.remove(0),
+            xp_b: xps.remove(0),
+            centring,
+        };
+        Ok(Self {
+            design,
+            s_list_term: vec![s_te_a, s_te_b],
+            predictor,
+            constraints: Some(constraints),
         })
     }
 }
 
-/// A `te` basis before constraints: see [`TensorTermFit::fit_raw`].
-pub(crate) struct RawTensorFit {
-    pub cr_a: CrSpline,
-    pub cr_b: CrSpline,
-    pub raw_design: Array2<f64>,
-    pub s_te_a_raw: Array2<f64>,
-    pub s_te_b_raw: Array2<f64>,
+fn invert(a: &Array2<f64>) -> Result<Array2<f64>> {
+    use ndarray_linalg::Inverse;
+    a.inv()
+        .map_err(|e| GamrsError::Linalg(format!("sc tensor margin reparameterisation: {e}")))
+}
+
+/// Kronecker product `a ⊗ b`.
+fn kron(a: &Array2<f64>, b: &Array2<f64>) -> Array2<f64> {
+    let (ar, ac) = a.dim();
+    let (br, bc) = b.dim();
+    let mut out = Array2::<f64>::zeros((ar * br, ac * bc));
+    for i in 0..ar {
+        for j in 0..ac {
+            out.slice_mut(ndarray::s![i * br..(i + 1) * br, j * bc..(j + 1) * bc])
+                .assign(&(b * a[[i, j]]));
+        }
+    }
+    out
 }
 
 // =============================================================================
@@ -438,8 +561,10 @@ impl TensorMultiTermFit {
                 }
             }
         }
-        for &b in bs {
-            let MarginKind::Cr = b;
+        if bs.iter().any(|b| matches!(b, MarginKind::Sc(_))) {
+            return Err(super::sc::unsupported(
+                "an sc margin in a te/ti of more than two margins",
+            ));
         }
 
         // Per-margin: build CR basis, evaluate raw design, optionally apply

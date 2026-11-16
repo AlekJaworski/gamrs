@@ -22,7 +22,9 @@ from ._low_level import (
     CrStableTerm,
     ParametricTerm,
     ReTerm,
+    ScTerm,
     TeMultiTerm,
+    TeScTerm,
     TeTerm,
     Term,
     TiTerm,
@@ -247,9 +249,20 @@ def _resolve_term_cols(term: Term, col_names: Sequence[str]) -> Term:
             cols=tuple(_resolve_col(c, col_names, "TpsTerm") for c in term.cols),
             k=term.k,
         )
+    if isinstance(term, ScTerm):
+        return dataclasses.replace(term, col=_resolve_col(term.col, col_names, "ScTerm"))
+    if isinstance(term, TeScTerm):
+        return dataclasses.replace(
+            term,
+            cols=(
+                _resolve_col(term.cols[0], col_names, "TeScTerm"),
+                _resolve_col(term.cols[1], col_names, "TeScTerm"),
+            ),
+        )
     raise TypeError(
         f"unknown term type {type(term).__name__}; expected one of "
-        "CrTerm / CrStableTerm / ReTerm / TeTerm / TeMultiTerm / TiTerm / TpsTerm"
+        "CrTerm / CrStableTerm / ReTerm / TeTerm / TeMultiTerm / TiTerm / TpsTerm / "
+        "ScTerm / TeScTerm"
     )
 
 
@@ -824,8 +837,8 @@ class Gam:
         and `_k_used`; doesn't mutate `_auto_k_*`."""
         family_kw = self._family_kwargs_for_native()
         self._k_used = [
-            t.k if isinstance(t, (CrTerm, CrStableTerm)) else
-            (t.k[0] * t.k[1] if isinstance(t, TeTerm) else 0)
+            t.k if isinstance(t, (CrTerm, CrStableTerm, ScTerm)) else
+            (t.k[0] * t.k[1] if isinstance(t, (TeTerm, TeScTerm)) else 0)
             for t in term_objs
         ]
         # Single-smooth → fast path (preserves byte-equivalence with
@@ -1658,6 +1671,8 @@ class Gam:
             return np.array(
                 [
                     "te" if isinstance(t, TeTerm) else
+                    "te_sc" if isinstance(t, TeScTerm) else
+                    "sc" if isinstance(t, ScTerm) else
                     "re" if isinstance(t, ReTerm) else
                     "cr_stable" if isinstance(t, CrStableTerm) else "cr"
                     for t in self.terms

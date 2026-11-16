@@ -21,6 +21,7 @@ use crate::error::{GamrsError, Result};
 use super::by::ByPredictor;
 use super::cr::{CrPredictor, CrStablePredictor};
 use super::re::RePredictor;
+use super::sc::{ConstraintBlock, ScPredictor, Shape, ShapeConstraints, TermConstraints};
 use super::tensor::TensorTermFit;
 use super::{
     prepend_intercept, prepend_zero_column, rank_and_log_pseudo_det, DesignStrategy, Predictor,
@@ -37,6 +38,11 @@ use super::{
 pub enum MarginKind {
     /// CR spline + sum-to-zero centring on this margin's column.
     Cr,
+    /// mgcv's `bs = "sc"` margin: a B-spline, monotone in the given
+    /// direction or unconstrained with `None`. Both margins of the tensor
+    /// must be `Sc`; the model is then fitted with shape constraints
+    /// (Gaussian only).
+    Sc(Option<Shape>),
 }
 
 /// One term in an additive model. Each variant carries the column index
@@ -102,6 +108,10 @@ pub enum TermSpec {
     /// 2-D (or higher) isotropic thin-plate regression spline. Single
     /// smoothing parameter.
     Tps { cols: Vec<usize>, k: usize },
+    /// Shape-constrained (monotone) smooth `s(x_col, bs = "sc", k = k)`,
+    /// mgcv `scasm`'s `xt = "m+"` / `"m-"`: a centred B-spline whose fit
+    /// is constrained to be increasing or decreasing. Gaussian only.
+    Sc { col: usize, k: usize, shape: Shape },
     /// Parametric (linear, unsmoothed) term `+ x_col` — one raw column,
     /// no spline expansion, no penalty. The coefficient retains its full
     /// degree of freedom. mgcv R's "pterms" block; equivalent to
@@ -110,6 +120,21 @@ pub enum TermSpec {
 }
 
 impl TermSpec {
+    /// Whether the term carries shape constraints (an `sc` smooth or a
+    /// tensor with `sc` margins), which only the Gaussian driver enforces.
+    pub fn is_shape_constrained(&self) -> bool {
+        match self {
+            Self::Sc { .. } => true,
+            Self::Tensor { bs_a, bs_b, .. } => {
+                matches!(bs_a, MarginKind::Sc(_)) || matches!(bs_b, MarginKind::Sc(_))
+            }
+            Self::TeMulti { bs, .. } | Self::Ti { bs, .. } => {
+                bs.iter().any(|b| matches!(b, MarginKind::Sc(_)))
+            }
+            _ => false,
+        }
+    }
+
     /// First column index this term reads from `x` (for diagnostics /
     /// duplicate-column checks). Tensor terms also read `col_b`; use
     /// [`Self::cols`] for the full list.
@@ -118,6 +143,7 @@ impl TermSpec {
             Self::Cr { col, .. } => *col,
             Self::CrStable { col, .. } => *col,
             Self::Re { col, .. } => *col,
+            Self::Sc { col, .. } => *col,
             Self::Parametric { col } => *col,
             Self::Tensor { col_a, .. } => *col_a,
             Self::TeMulti { cols, .. } | Self::Ti { cols, .. } | Self::Tps { cols, .. } => cols[0],
@@ -133,7 +159,7 @@ impl TermSpec {
                 std::iter::once(*col).chain(*by).collect()
             }
             Self::Re { col, by } => std::iter::once(*col).chain(*by).collect(),
-            Self::Parametric { col } => vec![*col],
+            Self::Parametric { col } | Self::Sc { col, .. } => vec![*col],
             Self::Tensor {
                 col_a, col_b, by, ..
             } => [*col_a, *col_b].into_iter().chain(*by).collect(),
@@ -322,8 +348,12 @@ impl DesignStrategy for Additive {
         let mut per_term_predictor: Vec<Predictor> = Vec::with_capacity(self.terms.len());
         let mut per_term_dim: Vec<usize> = Vec::with_capacity(self.terms.len());
         let mut cols_used: Vec<Vec<usize>> = Vec::with_capacity(self.terms.len());
+        // Shape rows of each term, in its own coefficients (sc terms only).
+        let mut per_term_constraints: Vec<Option<TermConstraints>> =
+            Vec::with_capacity(self.terms.len());
 
         for t in &self.terms {
+            let mut term_constraints = None;
             match *t {
                 TermSpec::Cr { col, k, pc, by } => {
                     let fit = CrPredictor::fit_centred(x, col, k, pc, by)?;
@@ -375,6 +405,7 @@ impl DesignStrategy for Additive {
                     by,
                 } => {
                     let fit = TensorTermFit::build(x, col_a, col_b, k_a, k_b, bs_a, bs_b, by)?;
+                    term_constraints = fit.constraints;
                     per_term_dim.push(fit.design.ncols());
                     per_term_centred.push(fit.design);
                     per_term_s_smooth.push(fit.s_list_term);
@@ -413,6 +444,15 @@ impl DesignStrategy for Additive {
                     per_term_predictor.push(Predictor::Tps(fit.predictor));
                     cols_used.push(tcols);
                 }
+                TermSpec::Sc { col, k, shape } => {
+                    let fit = ScPredictor::fit_centred(x, col, k, shape)?;
+                    per_term_dim.push(fit.centred.ncols());
+                    per_term_centred.push(fit.centred);
+                    per_term_s_smooth.push(vec![fit.s_smooth]);
+                    per_term_predictor.push(Predictor::Sc(fit.predictor));
+                    cols_used.push(vec![col]);
+                    term_constraints = Some(fit.constraints);
+                }
                 TermSpec::Parametric { col } => {
                     // Raw single column; no centring (would absorb effect
                     // into intercept and destroy the slope interpretation).
@@ -432,6 +472,7 @@ impl DesignStrategy for Additive {
                     cols_used.push(vec![col]);
                 }
             }
+            per_term_constraints.push(term_constraints);
         }
 
         // Second pass: assemble combined design `[1 | C_1 | C_2 | …]`.
@@ -480,6 +521,7 @@ impl DesignStrategy for Additive {
         }
 
         let mp = super::penalty_null_space_dim(p, &s_list, &rank_s_list);
+        let constraints = embed_constraints(&per_term_constraints, &term_col_ranges, p);
 
         Ok(PreparedDesign {
             x_design: x_design.into(),
@@ -492,8 +534,45 @@ impl DesignStrategy for Additive {
                 cols_used,
                 term_col_ranges,
             }),
+            constraints,
         })
     }
+}
+
+/// Stack every term's shape rows into `(m, p)` rows over the full
+/// coefficient vector, with the terms' feasible starts placed in their
+/// column ranges (zero elsewhere). `None` when no term carries rows.
+fn embed_constraints(
+    per_term: &[Option<TermConstraints>],
+    ranges: &[(usize, usize)],
+    p: usize,
+) -> Option<ShapeConstraints> {
+    let m: usize = per_term.iter().flatten().map(|c| c.rows.nrows()).sum();
+    if per_term.iter().all(Option::is_none) {
+        return None;
+    }
+    let mut rows = Array2::<f64>::zeros((m, p));
+    let mut start = ndarray::Array1::<f64>::zeros(p);
+    let mut blocks = Vec::new();
+    let mut r0 = 0;
+    for (c, &(a, b)) in per_term.iter().zip(ranges) {
+        if let Some(c) = c {
+            let m_j = c.rows.nrows();
+            rows.slice_mut(ndarray::s![r0..r0 + m_j, a..b])
+                .assign(&c.rows);
+            start.slice_mut(ndarray::s![a..b]).assign(&c.start);
+            blocks.push(ConstraintBlock {
+                rows: (r0, r0 + m_j),
+                cols: (a, b),
+            });
+            r0 += m_j;
+        }
+    }
+    Some(ShapeConstraints {
+        rows,
+        start,
+        blocks,
+    })
 }
 
 // Silence the unused-import warning on `prepend_intercept`; the

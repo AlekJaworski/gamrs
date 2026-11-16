@@ -324,6 +324,77 @@ class TpsTerm:
     k: Optional[int] = None
 
 
+_SHAPES = ("increasing", "decreasing")
+
+
+def _check_shape(shape: Optional[str], term_name: str, allow_none: bool) -> None:
+    if shape is None and allow_none:
+        return
+    if shape not in _SHAPES:
+        raise ValueError(
+            f"{term_name}: shape must be 'increasing' or 'decreasing'"
+            + (" (or None for an unconstrained margin)" if allow_none else "")
+            + f"; got {shape!r}"
+        )
+
+
+@dataclass(frozen=True)
+class ScTerm:
+    """Shape-constrained (monotone) smooth `s(x_col, bs='sc', k=k)` — mgcv's
+    ``scasm()`` with ``xt='m+'`` (``shape='increasing'``) or ``'m-'``
+    (``shape='decreasing'``).
+
+    A centred B-spline (mgcv's ``bs`` basis, cubic, second-derivative
+    penalty) whose fitted curve is guaranteed monotone in the given
+    direction: everywhere for this 1-D term, including beyond the data,
+    where it continues linearly. One smoothing parameter, chosen by REML
+    together with the other terms'.
+
+    Any other terms may sit alongside (``CrTerm``, ``ReTerm``, ``TeTerm``,
+    ``by=`` variants, …). Gaussian family with identity link only; another
+    family raises ``ValueError``. ``col`` accepts an int index or a string
+    column name.
+    """
+    col: Col
+    shape: str
+    k: int = 10
+
+    def __post_init__(self) -> None:
+        _check_shape(self.shape, "ScTerm", allow_none=False)
+
+
+@dataclass(frozen=True)
+class TeScTerm:
+    """Tensor product with shape-constrained margins
+    `te(x_a, x_b, bs='sc', xt=list(...))` — mgcv's ``scasm()``. Two
+    smoothing parameters (one per margin).
+
+    ``shape`` gives each margin's direction, ``'increasing'``,
+    ``'decreasing'`` or ``None`` (unconstrained along that margin). Each
+    margin is a cubic B-spline with ``k`` coefficients (defaults to
+    ``(5, 5)``).
+
+    **Monotone only within the data range.** The surface is monotone along
+    a constrained margin everywhere inside the rectangle spanned by the
+    training data. Outside it each margin extrapolates linearly from its
+    end, and the interaction with the other margin can reverse the slope —
+    mgcv's ``scasm`` behaves identically. Clip inputs to the training range
+    if predictions there must stay monotone.
+
+    Gaussian family with identity link only. ``cols`` entries accept int
+    indices or string column names.
+    """
+    cols: Tuple[Col, Col]
+    shape: Tuple[Optional[str], Optional[str]]
+    k: Tuple[int, int] = (5, 5)
+
+    def __post_init__(self) -> None:
+        if len(self.shape) != 2:
+            raise ValueError(f"TeScTerm: shape needs one entry per margin; got {self.shape!r}")
+        for sh in self.shape:
+            _check_shape(sh, "TeScTerm", allow_none=True)
+
+
 # Sum type at the Python boundary. Type-checked closed set — adding a
 # new term kind extends this union (a library-controlled change).
 Term = Union[
@@ -335,6 +406,8 @@ Term = Union[
     TeMultiTerm,
     TiTerm,
     TpsTerm,
+    ScTerm,
+    TeScTerm,
 ]
 
 
@@ -395,10 +468,19 @@ def _term_to_tuple(term: Term) -> tuple:
         cols_tup = tuple(int(c) for c in term.cols)
         k_val = int(term.k) if term.k is not None else 10 * len(cols_tup)
         return (cols_tup, "tp", k_val)
+    if isinstance(term, ScTerm):
+        return (int(term.col), "sc", int(term.k), term.shape)
+    if isinstance(term, TeScTerm):
+        return (
+            (int(term.cols[0]), int(term.cols[1])),
+            "te_sc",
+            (int(term.k[0]), int(term.k[1])),
+            (term.shape[0], term.shape[1]),
+        )
     raise TypeError(
         f"unknown term type {type(term).__name__}; expected one of "
         "CrTerm / CrStableTerm / ReTerm / ParametricTerm / TeTerm / "
-        "TeMultiTerm / TiTerm / TpsTerm"
+        "TeMultiTerm / TiTerm / TpsTerm / ScTerm / TeScTerm"
     )
 
 

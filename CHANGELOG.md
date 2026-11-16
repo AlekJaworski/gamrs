@@ -9,21 +9,29 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ### Added
 
-- **Monotone smooths, ported from mgcv's `scasm()` (Rust API, Gaussian).**
-  `gamrs::shape` fits `s(x, bs = "sc", xt = "m+" / "m-")` and
-  `te(x, z, bs = "sc", xt = list(.., ..))` terms: mgcv's `bs` B-spline basis
-  with its derivative penalty, increasing or decreasing as linear inequality
-  constraints on the coefficients (any direction per tensor margin), an
-  active-set constrained least-squares solve (mgcv's `pcls`) and scasm's
-  extended Fellner-Schall REML loop. Against mgcv 1.9-4 on synthetic
-  fixtures (n = 500 and 3,000; `s` with k = 10, `te` with k = (6, 5)):
-  smoothing parameters to 5e-9 relative, REML to 5e-13, edf to 1.2e-10,
-  fitted values and term predictions to 3e-12, `Vp` to 3e-15; every EFS
-  iteration matches scasm's, active constraint sets included. Fitted
-  curves are monotone by construction; a tensor surface is monotone over
-  the rectangle spanned by the training data, but where it extrapolates
-  linearly beyond it the shape can break slightly (scasm's surfaces do the
-  same, by the same amounts).
+- **Monotone smooths, as mgcv's `scasm()` fits them (Gaussian).** Two new
+  terms, usable next to any other term in the same model:
+  `ScTerm(col, "increasing" | "decreasing", k=10)` is
+  `s(x, bs = "sc", xt = "m+" / "m-")`, and
+  `TeScTerm((a, b), (shape_a, shape_b), k=(5, 5))` is
+  `te(a, b, bs = "sc", xt = list(.., ..))` with a direction (or `None`) per
+  margin (Rust: `TermSpec::Sc`, and `TermSpec::Tensor` with
+  `MarginKind::Sc`). The basis is mgcv's `bs` B-spline with its derivative
+  penalty, centred like a CR term; monotonicity is a set of linear
+  inequality constraints on the coefficients, solved by a port of mgcv's
+  `pcls`. Smoothing parameters come from the usual REML Newton search on
+  the model restricted to the constraints that bind. Against mgcv 1.9-4 on
+  synthetic fixtures (n = 500 and 3,000; sc alone, te-sc alone, and next to
+  cr, re with 50 levels, te(cr) and a `by=` cr term): at scasm's smoothing
+  parameters every reported quantity (coefficients, binding constraints,
+  edf, scale, REML, `Vp`, term predictions and standard errors) matches to
+  ~1e-12. gamrs's REML optimum is always at least as good as scasm's, which
+  stops its Fellner–Schall iteration once penalties move by under 1%; the
+  fitted values differ by at most 2% of sd(y), and by under 0.1% at
+  n = 3,000 apart from one tensor fixture (0.7%). A 1-D sc curve is monotone everywhere; a tensor surface
+  is monotone only inside the rectangle spanned by the training data, as in
+  scasm. Other families raise an error. Models without sc terms are
+  unchanged (recorder battery bit-identical).
 
 ## [0.16.3] — 2026-11-13
 

@@ -91,12 +91,21 @@ impl CrPredictor {
         pc: Option<f64>,
         by: Option<usize>,
     ) -> Result<CenteredCrFit> {
-        let RawCrFit {
-            cr,
-            raw_design,
-            s_raw_rescaled,
-        } = Self::fit_raw(x, x_col_idx, k)?;
+        let x_col = x.column(x_col_idx);
+        let cr = CrSpline::with_quantile_knots(x_col, k)?;
         let knots = cr.knots().to_owned();
+        let x_view = x.slice(ndarray::s![.., x_col_idx..x_col_idx + 1]);
+        let raw_design = cr.evaluate(x_view);
+        let s_raw = cr.penalties().pop().unwrap();
+
+        let x_inf = matrix_inf_norm(raw_design.view());
+        let s_inf = matrix_inf_norm(s_raw.view());
+        let rescale = if s_inf > 0.0 {
+            (x_inf * x_inf) / s_inf
+        } else {
+            1.0
+        };
+        let s_raw_rescaled = &s_raw * rescale;
 
         let w = by.map(|b| x.column(b));
         let centring = constraint_map(cr, raw_design.view(), pc, w)?;
@@ -112,39 +121,6 @@ impl CrPredictor {
             s_smooth,
         })
     }
-}
-
-impl CrPredictor {
-    /// The CR basis on `x[, x_col_idx]` before any identifiability
-    /// constraint or by-scaling: knots, raw design and the penalty after
-    /// mgcv's rescaling (`smoothCon(scale.penalty = TRUE)`).
-    pub(crate) fn fit_raw(x: ArrayView2<f64>, x_col_idx: usize, k: usize) -> Result<RawCrFit> {
-        let cr = CrSpline::with_quantile_knots(x.column(x_col_idx), k)?;
-        let x_view = x.slice(ndarray::s![.., x_col_idx..x_col_idx + 1]);
-        let raw_design = cr.evaluate(x_view);
-        let s_raw = cr.penalties().pop().unwrap();
-
-        let x_inf = matrix_inf_norm(raw_design.view());
-        let s_inf = matrix_inf_norm(s_raw.view());
-        let rescale = if s_inf > 0.0 {
-            (x_inf * x_inf) / s_inf
-        } else {
-            1.0
-        };
-        let s_raw_rescaled = &s_raw * rescale;
-        Ok(RawCrFit {
-            cr,
-            raw_design,
-            s_raw_rescaled,
-        })
-    }
-}
-
-/// A CR basis before constraints: see [`CrPredictor::fit_raw`].
-pub(crate) struct RawCrFit {
-    pub cr: CrSpline,
-    pub raw_design: Array2<f64>,
-    pub s_raw_rescaled: Array2<f64>,
 }
 
 /// Internal helper carrying the pieces of a centred CR fit. Used by the
@@ -189,6 +165,7 @@ impl DesignStrategy for Cr {
                 knots: fit.knots,
                 centring: fit.centring,
             }),
+            constraints: None,
         })
     }
 }
@@ -231,12 +208,21 @@ impl CrStablePredictor {
         pc: Option<f64>,
         by: Option<usize>,
     ) -> Result<RotatedCrFit> {
-        let RawCrFit {
-            cr,
-            raw_design,
-            s_raw_rescaled,
-        } = CrPredictor::fit_raw(x, x_col_idx, k)?;
+        let x_col = x.column(x_col_idx);
+        let cr = CrSpline::with_quantile_knots(x_col, k)?;
         let knots = cr.knots().to_owned();
+        let x_view = x.slice(ndarray::s![.., x_col_idx..x_col_idx + 1]);
+        let raw_design = cr.evaluate(x_view);
+        let s_raw = cr.penalties().pop().unwrap();
+
+        let x_inf = matrix_inf_norm(raw_design.view());
+        let s_inf = matrix_inf_norm(s_raw.view());
+        let rescale = if s_inf > 0.0 {
+            (x_inf * x_inf) / s_inf
+        } else {
+            1.0
+        };
+        let s_raw_rescaled = &s_raw * rescale;
 
         let w = by.map(|b| x.column(b));
         let centring = constraint_map(cr, raw_design.view(), pc, w)?;
@@ -302,6 +288,7 @@ impl DesignStrategy for CrStable {
                 centring: fit.centring,
                 reparam_v: fit.reparam_v,
             }),
+            constraints: None,
         })
     }
 }

@@ -47,6 +47,8 @@ use super::{
 
 // --- Gaussian: identity link + constant variance, closed-form inner ---
 impl<S: LinearSolver> FamilyFitWithSolver<IdentityLink, ConstantVariance, S> for Gaussian {
+    const SHAPE_CONSTRAINTS: bool = true;
+
     fn fit_from_prep_canonical(
         _family: Family<Self, IdentityLink, ConstantVariance>,
         prep: PreparedDesign,

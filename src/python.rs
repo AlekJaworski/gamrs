@@ -1308,6 +1308,16 @@ fn tensor_by_column(tup: &Bound<'_, pyo3::types::PyTuple>) -> PyResult<Option<us
     tup.get_item(3)?.extract()
 }
 
+fn parse_shape(s: &str) -> PyResult<crate::design::Shape> {
+    match s {
+        "increasing" => Ok(crate::design::Shape::Increasing),
+        "decreasing" => Ok(crate::design::Shape::Decreasing),
+        other => Err(PyValueError::new_err(format!(
+            "shape must be 'increasing' or 'decreasing'; got {other:?}"
+        ))),
+    }
+}
+
 fn build_term_specs(terms: &Bound<'_, pyo3::types::PyList>) -> PyResult<Vec<TermSpec>> {
     let mut out: Vec<TermSpec> = Vec::with_capacity(terms.len());
     for (j, item) in terms.iter().enumerate() {
@@ -1400,6 +1410,21 @@ fn build_term_specs(terms: &Bound<'_, pyo3::types::PyList>) -> PyResult<Vec<Term
             } else {
                 TermSpec::TeMulti { cols, k, bs }
             }
+        } else if basis == "te_sc" {
+            // ((col_a, col_b), "te_sc", (k_a, k_b), (shape_a, shape_b)), each
+            // shape "increasing" / "decreasing" / None.
+            let (cols, k): ((usize, usize), (usize, usize)) =
+                (first.extract()?, tup.get_item(2)?.extract()?);
+            let (sa, sb): (Option<String>, Option<String>) = tup.get_item(3)?.extract()?;
+            TermSpec::Tensor {
+                col_a: cols.0,
+                col_b: cols.1,
+                k_a: k.0,
+                k_b: k.1,
+                bs_a: MarginKind::Sc(sa.as_deref().map(parse_shape).transpose()?),
+                bs_b: MarginKind::Sc(sb.as_deref().map(parse_shape).transpose()?),
+                by: None,
+            }
         } else if basis == "te" {
             let cols_tup: &Bound<'_, pyo3::types::PyTuple> =
                 first.cast::<pyo3::types::PyTuple>().map_err(|_| {
@@ -1478,11 +1503,17 @@ fn build_term_specs(terms: &Bound<'_, pyo3::types::PyList>) -> PyResult<Vec<Term
                     by: by_column(tup)?,
                 },
                 "parametric" | "linear" => TermSpec::Parametric { col },
+                // (col, "sc", k, shape)
+                "sc" => TermSpec::Sc {
+                    col,
+                    k: tup.get_item(2)?.extract()?,
+                    shape: parse_shape(&tup.get_item(3)?.extract::<String>()?)?,
+                },
                 other => {
                     return Err(PyValueError::new_err(format!(
                         "fit_additive: term {j} basis must be 'cr', 'cr_stable', 're', \
-                         'parametric' (alias 'linear'), 'te', 'te_multi', 'ti', or 'tp'; \
-                         got {other:?}"
+                         'parametric' (alias 'linear'), 'sc', 'te', 'te_sc', 'te_multi', \
+                         'ti', or 'tp'; got {other:?}"
                     )))
                 }
             }

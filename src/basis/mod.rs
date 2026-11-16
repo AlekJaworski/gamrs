@@ -4,10 +4,12 @@
 //! the old `crate::basis::CrSpline` path working for callers that pre-date
 //! the split.
 
+pub mod bspline;
 pub mod cr;
 pub mod re;
 pub mod tensor;
 
+pub use bspline::BsBasis;
 pub use cr::CrSpline;
 pub use re::RandomEffectsBasis;
 pub use tensor::TensorProductBasis;

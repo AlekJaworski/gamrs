@@ -186,6 +186,34 @@ pub(crate) fn without_columns(prep: PreparedDesign, dropped: &[usize]) -> Result
         log_pseudo_det_s_list,
         mp,
         predictor: prep.predictor,
+        constraints: match prep.constraints {
+            None => None,
+            Some(c) => {
+                if dropped
+                    .iter()
+                    .any(|&i| c.rows.column(i).iter().any(|&v| v != 0.0))
+                {
+                    return Err(GamrsError::InvalidParameter(
+                        "a shape-constrained (sc) term's coefficients are not identifiable \
+                         from the data"
+                            .into(),
+                    ));
+                }
+                let shift = |i: usize| i - dropped.iter().filter(|&&d| d < i).count();
+                Some(super::ShapeConstraints {
+                    rows: c.rows.select(Axis(1), &keep),
+                    start: c.start.select(Axis(0), &keep),
+                    blocks: c
+                        .blocks
+                        .iter()
+                        .map(|b| super::sc::ConstraintBlock {
+                            rows: b.rows,
+                            cols: (shift(b.cols.0), shift(b.cols.1)),
+                        })
+                        .collect(),
+                })
+            }
+        },
     })
 }
 

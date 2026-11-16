@@ -33,12 +33,13 @@ use ndarray_linalg::Eigh;
 use crate::error::{GamrsError, Result};
 
 mod additive;
-pub(crate) mod by;
-pub(crate) mod cr;
+mod by;
+mod cr;
 pub(crate) mod identifiability;
 mod parametric;
-pub(crate) mod re;
-pub(crate) mod tensor;
+mod re;
+mod sc;
+mod tensor;
 mod tps;
 
 pub use additive::{Additive, AdditivePredictor, MarginKind, TermSpec};
@@ -46,6 +47,7 @@ pub use by::ByPredictor;
 pub use cr::{Cr, CrPredictor, CrStable, CrStablePredictor};
 pub use parametric::ParametricPredictor;
 pub use re::{Re, RePredictor};
+pub use sc::{ConstraintBlock, ScPredictor, Shape, ShapeConstraints};
 pub use tensor::{TensorMultiPredictor, TensorPredictor};
 pub use tps::TpsPredictor;
 
@@ -94,6 +96,10 @@ pub enum Predictor {
     /// a sub-Predictor of `Additive`. Last, so the bincode variant indices
     /// of every earlier variant (and models persisted with them) stand.
     By(ByPredictor),
+    /// Shape-constrained (monotone) B-spline smooth. Only used as a
+    /// sub-Predictor of `Additive`. Appended last for the same reason as
+    /// `By`.
+    Sc(ScPredictor),
 }
 
 impl Predictor {
@@ -112,6 +118,7 @@ impl Predictor {
             Self::Tps(p) => p.design(x_new),
             Self::Parametric(p) => p.design(x_new),
             Self::By(p) => p.design(x_new),
+            Self::Sc(p) => p.design(x_new),
         }
     }
 
@@ -129,6 +136,7 @@ impl Predictor {
             Self::Tps(p) => p.design_deriv(x_new, axis),
             Self::Parametric(p) => p.design_deriv(x_new, axis),
             Self::By(p) => p.design_deriv(x_new, axis),
+            Self::Sc(p) => p.design_deriv(x_new, axis),
         }
     }
 }
@@ -169,6 +177,9 @@ pub struct PreparedDesign {
     pub mp: usize,
     /// Predict-time rebuilder. Closed-set `enum`; **no `Box<dyn>`**.
     pub predictor: Predictor,
+    /// Linear inequality rows `rows · β ≥ 0` from shape-constrained (`sc`)
+    /// terms; `None` for every design without them.
+    pub constraints: Option<ShapeConstraints>,
 }
 
 // =============================================================================

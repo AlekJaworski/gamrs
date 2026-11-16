@@ -8,12 +8,12 @@
 //! outer Newton's θ has length `prep.s_list.len()`; the σ̂² closed form
 //! aggregates `Σ_j λ_j β'S_j β` for `Dp = D + Σ_j λ_j β'S_j β`.
 
-use ndarray::{Array1, ArrayView1, ArrayView2};
+use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 
 use crate::design::PreparedDesign;
 use crate::error::Result;
 use crate::family::Gaussian;
-use crate::inner::{GaussianClosedFormInner, LinearSolver};
+use crate::inner::{DesignMatrix, GaussianClosedFormInner, LinearSolver};
 use crate::outer::NewtonWithHalving;
 use crate::score::{EnvelopeScore, MgcvTwoSigmaProfile};
 use crate::traits::{InnerSolver, OuterFit, OuterSolver, ScoreDerivatives};
@@ -29,45 +29,22 @@ pub(crate) fn fit_gaussian_from_prep<S: LinearSolver>(
     y: ArrayView1<f64>,
     weights: Option<ArrayView1<f64>>,
 ) -> Result<FittedGam> {
+    if prep.constraints.is_some() {
+        return super::shape_constrained::fit_gaussian_constrained::<S>(prep, y, weights);
+    }
     let n = x.nrows();
     let n_terms = prep.s_list.len();
 
-    let inner = GaussianClosedFormInner::<S>::new(
-        prep.x_design.clone(),
-        y.to_owned(),
-        weights.map(|w| w.to_owned()),
-        prep.s_list.clone(),
-    );
-    let score =
-        EnvelopeScore::<Gaussian, GaussianClosedFormInner<S>, MgcvTwoSigmaProfile, S>::with_inner(
-            inner,
-            Gaussian,
-            MgcvTwoSigmaProfile,
-            y.to_owned(),
-            prep.s_list.clone(),
-            prep.rank_s_list.clone(),
-            prep.mp,
-            prep.log_pseudo_det_s_list.clone(),
-        );
-    // An all-parametric design has no smoothing parameters, so there is nothing for the outer
-    // Newton to optimise — its search space is zero-dimensional. Skip it and take the single
-    // unpenalised inner fit, which is exactly weighted least squares: with `s_list` empty the
-    // penalty sum is zero, so `inner.fit(&[])` already IS the right answer. Reported as converged
-    // in 0 iterations because it is closed-form, not a search that happened to stop.
-    let outer = if n_terms == 0 {
-        OuterFit {
-            theta: Array1::zeros(0),
-            value: score.value(&Array1::zeros(0))?,
-            grad_norm: 0.0, // no parameters, so the gradient is empty and its norm is exactly 0
-            iterations: 0,
-            converged: true,
-        }
-    } else {
-        crate::outer::reject_unsupported_algorithm("gaussian closed-form")?;
-        let outer_solver =
-            NewtonWithHalving::new(crate::outer::resolve_tuning(&score.loss).to_newton_opts());
-        outer_solver.minimize(&score, Array1::zeros(n_terms))?
-    };
+    let (score, outer) = gaussian_reml::<S>(
+        &prep.x_design,
+        &prep.s_list,
+        &prep.rank_s_list,
+        prep.mp,
+        &prep.log_pseudo_det_s_list,
+        y,
+        weights,
+        Array1::zeros(n_terms),
+    )?;
 
     let rho_hat = outer.theta.clone();
     let lambda_hat: Array1<f64> = rho_hat.iter().map(|&r| r.exp()).collect();
@@ -116,3 +93,81 @@ pub(crate) fn fit_gaussian_from_prep<S: LinearSolver>(
         stats: score.stats.snapshot(),
     })
 }
+
+/// The Gaussian REML score for one penalised design and its optimum over
+/// ρ, searched from `rho0` by the outer Newton. Shared by the plain driver
+/// and the shape-constrained one, which runs it on the design reduced to
+/// the null space of the binding constraint rows.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn gaussian_reml<S: LinearSolver>(
+    x_design: &DesignMatrix,
+    s_list: &[Array2<f64>],
+    rank_s_list: &[usize],
+    mp: usize,
+    log_pseudo_det_s_list: &[f64],
+    y: ArrayView1<f64>,
+    weights: Option<ArrayView1<f64>>,
+    rho0: Array1<f64>,
+) -> Result<(GaussianScore<S>, OuterFit)> {
+    let n_terms = s_list.len();
+    let score = gaussian_score::<S>(
+        x_design,
+        s_list,
+        rank_s_list,
+        mp,
+        log_pseudo_det_s_list,
+        y,
+        weights,
+    );
+    // An all-parametric design has no smoothing parameters, so there is nothing for the outer
+    // Newton to optimise — its search space is zero-dimensional. Skip it and take the single
+    // unpenalised inner fit, which is exactly weighted least squares: with `s_list` empty the
+    // penalty sum is zero, so `inner.fit(&[])` already IS the right answer. Reported as converged
+    // in 0 iterations because it is closed-form, not a search that happened to stop.
+    let outer = if n_terms == 0 {
+        OuterFit {
+            theta: Array1::zeros(0),
+            value: score.value(&Array1::zeros(0))?,
+            grad_norm: 0.0, // no parameters, so the gradient is empty and its norm is exactly 0
+            iterations: 0,
+            converged: true,
+        }
+    } else {
+        crate::outer::reject_unsupported_algorithm("gaussian closed-form")?;
+        let outer_solver =
+            NewtonWithHalving::new(crate::outer::resolve_tuning(&score.loss).to_newton_opts());
+        outer_solver.minimize(&score, rho0)?
+    };
+    Ok((score, outer))
+}
+
+/// The Gaussian closed-form REML score of one penalised design.
+pub(super) fn gaussian_score<S: LinearSolver>(
+    x_design: &DesignMatrix,
+    s_list: &[Array2<f64>],
+    rank_s_list: &[usize],
+    mp: usize,
+    log_pseudo_det_s_list: &[f64],
+    y: ArrayView1<f64>,
+    weights: Option<ArrayView1<f64>>,
+) -> GaussianScore<S> {
+    let inner = GaussianClosedFormInner::<S>::new(
+        x_design.clone(),
+        y.to_owned(),
+        weights.map(|w| w.to_owned()),
+        s_list.to_vec(),
+    );
+    EnvelopeScore::<Gaussian, GaussianClosedFormInner<S>, MgcvTwoSigmaProfile, S>::with_inner(
+        inner,
+        Gaussian,
+        MgcvTwoSigmaProfile,
+        y.to_owned(),
+        s_list.to_vec(),
+        rank_s_list.to_vec(),
+        mp,
+        log_pseudo_det_s_list.to_vec(),
+    )
+}
+
+pub(super) type GaussianScore<S> =
+    EnvelopeScore<Gaussian, GaussianClosedFormInner<S>, MgcvTwoSigmaProfile, S>;

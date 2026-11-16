@@ -291,6 +291,12 @@ pub fn fit_shash(
             "fit_shash: empty response".into(),
         ));
     }
+    if [&mu_terms, &tau_terms, &eps_terms, &phi_terms]
+        .iter()
+        .any(|t| t.iter().any(TermSpec::is_shape_constrained))
+    {
+        return Err(super::canonical::shape_constraints_unsupported("shash"));
+    }
     if x.nrows() != n {
         return Err(GamrsError::InvalidParameter(format!(
             "fit_shash: x has {} rows but y has {} entries",

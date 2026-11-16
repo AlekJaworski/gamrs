@@ -1,8 +1,8 @@
 //! Penalised constrained least squares: a port of mgcv's `pcls` (`PCLS` /
 //! `QPCLS` in `qp.c`).
 //!
-//! Solves `min ‖W^{1/2}(y − Xβ)‖² + βᵀ B β` subject to `A β ≥ b` and
-//! `C β = C β₀`, from a feasible `β₀`, by the primal active-set method of
+//! Solves `min ‖W^{1/2}(y − Xβ)‖² + βᵀ B β` subject to `A β ≥ 0`, from a
+//! feasible `β₀`, by the primal active-set method of
 //! Gill, Murray & Wright (1981, §5.3.3) exactly as `QPCLS` runs it: minimise
 //! in the null space of the working set, step to the nearest blocking
 //! constraint (lowest row index on ties) and add it, or at a working-set
@@ -18,7 +18,7 @@
 //! which is immaterial at the basis sizes smooths have.
 
 use ndarray::{Array1, Array2, Axis};
-use ndarray_linalg::{Cholesky, SolveC, UPLO};
+use ndarray_linalg::SolveC;
 
 use crate::error::{GamrsError, Result};
 
@@ -35,13 +35,12 @@ const MAX_DELETIONS: usize = 100;
 const MAX_STEPS: usize = 10_000;
 
 /// Solve with Hessian `h = XᵀWX + B` and `xty = XᵀWy`, inequality rows
-/// `ain β ≥ bin`, equality rows `c`, from feasible `beta0`.
-pub fn pcls(
+/// `ain β ≥ 0`, from feasible `beta0`. Identifiability constraints are
+/// absorbed into the basis before this point, so there are no equality rows.
+pub(crate) fn pcls(
     h: &Array2<f64>,
     xty: &Array1<f64>,
     ain: &Array2<f64>,
-    bin: &Array1<f64>,
-    c: &Array2<f64>,
     beta0: &Array1<f64>,
 ) -> Result<PclsFit> {
     let p = beta0.len();
@@ -52,7 +51,7 @@ pub fn pcls(
     let mut deletions = vec![0usize; ain.nrows()];
 
     for _ in 0..MAX_STEPS {
-        let m = working_rows(c, ain, &working);
+        let m = working_rows(ain, &working);
         let z = null_space(&m, p)?;
         if z.ncols() == 0 {
             return Err(GamrsError::SingularSystem(
@@ -68,7 +67,7 @@ pub fn pcls(
         })?;
         let pk = z.dot(&pz);
 
-        match step_to_constraint(ain, bin, &in_set, &beta, &pk) {
+        match step_to_constraint(ain, &in_set, &beta, &pk) {
             (next, Some(row)) => {
                 beta = next;
                 working.push(row);
@@ -77,7 +76,7 @@ pub fn pcls(
             }
             (next, None) => {
                 beta = next;
-                match most_negative_multiplier(h, xty, c, ain, &working, &pinned, &beta) {
+                match most_negative_multiplier(h, xty, ain, &working, &pinned, &beta) {
                     Some(pos) => {
                         let row = working.remove(pos);
                         pinned.remove(pos);
@@ -104,7 +103,6 @@ pub fn pcls(
 /// outside the working set that the full step would violate.
 fn step_to_constraint(
     ain: &Array2<f64>,
-    bin: &Array1<f64>,
     in_set: &[bool],
     beta: &Array1<f64>,
     pk: &Array1<f64>,
@@ -118,10 +116,10 @@ fn step_to_constraint(
             continue;
         }
         let a = ain.row(i);
-        if bin[i] - a.dot(&full) > 0.0 {
+        if -a.dot(&full) > 0.0 {
             let apk = a.dot(pk);
             if apk.abs() > 0.0 {
-                let alpha = (bin[i] - a.dot(beta)) / apk;
+                let alpha = -a.dot(beta) / apk;
                 if alpha < alpha_min {
                     alpha_min = alpha.max(0.0);
                     hit = Some(i);
@@ -139,7 +137,6 @@ fn step_to_constraint(
 fn most_negative_multiplier(
     h: &Array2<f64>,
     xty: &Array1<f64>,
-    c: &Array2<f64>,
     ain: &Array2<f64>,
     working: &[usize],
     pinned: &[bool],
@@ -148,35 +145,28 @@ fn most_negative_multiplier(
     if working.is_empty() {
         return None;
     }
-    let m = working_rows(c, ain, working);
+    let m = working_rows(ain, working);
     let g = h.dot(beta) - xty;
     let mmt = m.dot(&m.t());
     let l = mmt.solvec(&m.dot(&g)).ok()?;
-    let nf = c.nrows();
     let mut best = None;
     let mut most = 0.0;
     for (pos, &pin) in pinned.iter().enumerate() {
-        if !pin && l[nf + pos] < most {
-            most = l[nf + pos];
+        if !pin && l[pos] < most {
+            most = l[pos];
             best = Some(pos);
         }
     }
     best
 }
 
-fn working_rows(c: &Array2<f64>, ain: &Array2<f64>, working: &[usize]) -> Array2<f64> {
-    let p = c.ncols();
-    let mut m = Array2::<f64>::zeros((c.nrows() + working.len(), p));
-    m.slice_mut(ndarray::s![..c.nrows(), ..]).assign(c);
-    for (i, &r) in working.iter().enumerate() {
-        m.row_mut(c.nrows() + i).assign(&ain.row(r));
-    }
-    m
+fn working_rows(ain: &Array2<f64>, working: &[usize]) -> Array2<f64> {
+    ain.select(Axis(0), working)
 }
 
 /// Orthonormal basis (p × (p − r)) of the null space of the r × p matrix
 /// `m` (full row rank), from a complete Householder QR of `mᵀ`.
-pub fn null_space(m: &Array2<f64>, p: usize) -> Result<Array2<f64>> {
+pub(crate) fn null_space(m: &Array2<f64>, p: usize) -> Result<Array2<f64>> {
     let r = m.nrows();
     if r == 0 {
         return Ok(Array2::eye(p));
@@ -218,40 +208,4 @@ fn householder_q(a: &Array2<f64>) -> Result<Array2<f64>> {
         }
     }
     Ok(q)
-}
-
-/// `XᵀWX + Σ λ_j S_j` and `XᵀWy` for [`pcls`]; `penalties` are
-/// `(first column, S_j, λ_j)`.
-pub fn normal_equations(
-    x: &Array2<f64>,
-    w: &Array1<f64>,
-    y: &Array1<f64>,
-    penalties: &[(usize, &Array2<f64>, f64)],
-) -> (Array2<f64>, Array1<f64>) {
-    let wx = x * &w.view().insert_axis(Axis(1));
-    let mut h = x.t().dot(&wx);
-    for (first, s, lambda) in penalties {
-        let k = s.nrows();
-        let mut blk = h.slice_mut(ndarray::s![*first..first + k, *first..first + k]);
-        blk.scaled_add(*lambda, s);
-    }
-    let xty = wx.t().dot(y);
-    (h, xty)
-}
-
-/// Inverse of a symmetric positive definite matrix by Cholesky.
-pub fn spd_inverse(a: &Array2<f64>) -> Result<Array2<f64>> {
-    let l = a
-        .cholesky(UPLO::Lower)
-        .map_err(|e| GamrsError::SingularSystem(format!("not positive definite: {e}")))?;
-    let n = a.nrows();
-    let mut inv = Array2::<f64>::zeros((n, n));
-    for j in 0..n {
-        let mut e = Array1::<f64>::zeros(n);
-        e[j] = 1.0;
-        let z = crate::inner::linalg::chol_forward_solve(&l, e.view());
-        let col = crate::inner::linalg::chol_back_solve(&l, z.view());
-        inv.column_mut(j).assign(&col);
-    }
-    Ok(inv)
 }

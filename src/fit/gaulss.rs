@@ -112,6 +112,13 @@ pub fn fit_gaulss(
             "gaulss: empty response".into(),
         ));
     }
+    if mu_terms
+        .iter()
+        .chain(&sigma_terms)
+        .any(TermSpec::is_shape_constrained)
+    {
+        return Err(super::canonical::shape_constraints_unsupported("gaulss"));
+    }
     let y_owned = y.to_owned();
 
     // Response scale for the log-σ init floor (guard log(0) on exact-fit rows).

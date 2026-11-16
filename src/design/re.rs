@@ -99,6 +99,7 @@ impl DesignStrategy for Re {
             log_pseudo_det_s_list: vec![log_pseudo_det_s],
             mp,
             predictor: Predictor::Re(RePredictor { levels: fit.levels }),
+            constraints: None,
         })
     }
 }

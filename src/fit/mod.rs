@@ -55,6 +55,7 @@ pub mod gaussian;
 mod persistence;
 pub(crate) mod profile_shape;
 pub mod quantile;
+pub mod shape_constrained;
 pub mod shash;
 
 pub use canonical::{

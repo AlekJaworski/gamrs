@@ -1,6 +1,6 @@
 //! mgcv's `bs` B-spline basis with a derivative-based penalty
-//! (`smooth.construct.bs.smooth.spec`, Wood 2017), the basis `scasm` builds
-//! its shape-constrained `sc` smooths on.
+//! (`smooth.construct.bs.smooth.spec`, Wood 2017), the basis mgcv's `scasm`
+//! builds its shape-constrained `sc` smooths on.
 //!
 //! `m = (m1, m2)`: `m1` is the spline order (3 = cubic, so B-splines of
 //! order `m1 + 1`), `m2` the derivative order in the penalty
@@ -9,13 +9,14 @@
 //! past the data on each side. Prediction outside the interior range is
 //! linear in the value and slope at the nearer end, as mgcv does.
 
-use ndarray::{Array1, Array2, ArrayView1, Axis};
+use ndarray::{Array2, ArrayView1, ArrayView2};
 
 use crate::error::{GamrsError, Result};
+use crate::traits::Basis;
 
-/// A fitted `bs` basis: knots and orders. The penalty is computed once and
-/// stored already divided by mgcv's penalty scale factor.
+/// A fitted `bs` basis: knots and orders.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "persistence", derive(serde::Serialize, serde::Deserialize))]
 pub struct BsBasis {
     pub knots: Vec<f64>,
     /// `(m1, m2)` as in mgcv's `m = c(m1, m2)`.
@@ -52,6 +53,12 @@ impl BsBasis {
         let dx = (xu - xl) / (nk - 1) as f64;
         let knots = r_seq(xl - dx * m1 as f64, xu + dx * m1 as f64, nk + 2 * m1);
         Ok(Self { knots, m, k })
+    }
+
+    /// Rebuild from stored knots (`k + m1 + 1` of them).
+    pub fn from_knots(knots: Vec<f64>, m: (usize, usize)) -> Self {
+        let k = knots.len() - m.0 - 1;
+        Self { knots, m, k }
     }
 
     fn order(&self) -> usize {
@@ -164,22 +171,6 @@ impl BsBasis {
         }
         s
     }
-}
-
-/// mgcv's penalty rescaling (`smoothCon(scale.penalty = TRUE)`): divide `S`
-/// by `‖S‖₁ / ‖X‖∞²`. Returns the scaled penalty and the factor divided out.
-pub fn scale_penalty(s: &Array2<f64>, x: &Array2<f64>) -> (Array2<f64>, f64) {
-    let ma_xx = x
-        .axis_iter(Axis(0))
-        .map(|r| r.iter().map(|v| v.abs()).sum::<f64>())
-        .fold(0.0, f64::max)
-        .powi(2);
-    let norm_s = s
-        .axis_iter(Axis(1))
-        .map(|c| c.iter().map(|v| v.abs()).sum::<f64>())
-        .fold(0.0, f64::max);
-    let ma_s = norm_s / ma_xx;
-    (s / ma_s, ma_s)
 }
 
 /// `W1 = Pᵀ H P` for exact integration over [-1, 1] of a degree-`pord`
@@ -312,7 +303,25 @@ pub(crate) fn basis_row(knots: &[f64], x: f64, ord: usize, deriv: usize) -> Vec<
     b
 }
 
-/// Column means of a design block: mgcv's sum-to-zero constraint row `C`.
-pub fn column_means(x: &Array2<f64>) -> Array1<f64> {
-    x.mean_axis(Axis(0)).expect("non-empty design")
+impl Basis for BsBasis {
+    fn dim(&self) -> usize {
+        self.k
+    }
+
+    fn input_dim(&self) -> usize {
+        1
+    }
+
+    fn evaluate(&self, x: ArrayView2<f64>) -> Array2<f64> {
+        self.design(x.column(0))
+    }
+
+    fn d1(&self, x: ArrayView2<f64>, axis: usize) -> Array2<f64> {
+        debug_assert_eq!(axis, 0, "BsBasis is univariate");
+        self.design_deriv(x.column(0), 1)
+    }
+
+    fn penalties(&self) -> Vec<Array2<f64>> {
+        vec![self.penalty()]
+    }
 }

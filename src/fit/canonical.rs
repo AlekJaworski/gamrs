@@ -75,6 +75,11 @@ where
         y: ArrayView1<f64>,
         prior_weights: Option<ArrayView1<f64>>,
     ) -> Result<FittedGam>;
+
+    /// Whether the driver enforces shape-constraint rows
+    /// ([`PreparedDesign::constraints`]). Only the Gaussian closed-form
+    /// driver does; a design with `sc` terms is refused elsewhere.
+    const SHAPE_CONSTRAINTS: bool = false;
 }
 
 // =============================================================================
@@ -114,6 +119,16 @@ where
         y: ArrayView1<f64>,
         prior_weights: Option<ArrayView1<f64>>,
     ) -> Result<FittedGam> {
+        if prep.constraints.is_some()
+            && !<L as FamilyFitWithSolver<K, V, CholeskySolver>>::SHAPE_CONSTRAINTS
+        {
+            return Err(shape_constraints_unsupported(
+                std::any::type_name::<L>()
+                    .rsplit("::")
+                    .next()
+                    .unwrap_or("this family"),
+            ));
+        }
         super::fit_identifiable(prep, prior_weights, |prep| {
             <L as FamilyFitWithSolver<K, V, CholeskySolver>>::fit_from_prep_canonical(
                 family,
@@ -124,6 +139,15 @@ where
             )
         })
     }
+}
+
+/// The error for a shape-constrained (`sc`) term under a family whose
+/// driver does not enforce the constraints.
+pub(crate) fn shape_constraints_unsupported(family: &str) -> crate::error::GamrsError {
+    crate::error::GamrsError::InvalidParameter(format!(
+        "shape-constrained (sc) terms are fitted for the Gaussian family with identity link \
+         only; got {family}"
+    ))
 }
 
 // =============================================================================

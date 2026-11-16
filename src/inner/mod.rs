@@ -25,6 +25,7 @@ pub mod armijo;
 pub mod closed_form;
 pub mod gam_fit5;
 pub mod linalg;
+pub(crate) mod pcls;
 pub mod pirls;
 pub(crate) mod split;
 pub use split::DesignMatrix;
