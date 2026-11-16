@@ -74,6 +74,9 @@ pub struct EnvelopeScore<
     /// successful `value_grad_hess`; consumed by `ift_propagated_beta`.
     /// Only meaningful for families that opt in via `Loss::allows_no_refresh`.
     pub accepted_state: std::cell::RefCell<Option<EnvelopeAcceptedState>>,
+    /// β of the last `value_grad_hess` inner fit, for every family. The outer
+    /// search ends on such an evaluation, so the final fit starts from it.
+    pub last_beta: std::cell::RefCell<Option<Array1<f64>>>,
     pub log_det_s: PenaltyLogDet,
     /// Where each `S_j` is nonzero, so traces and `A⁻¹S_j` skip the zeros.
     pub s_blocks: Vec<PenaltyBlock>,
@@ -140,6 +143,7 @@ where
             _solver: PhantomData,
             stats: crate::stats::FitStats::new(),
             accepted_state: std::cell::RefCell::new(None),
+            last_beta: std::cell::RefCell::new(None),
             log_det_s,
             s_blocks,
         }
@@ -243,6 +247,7 @@ where
             None => self.inner.fit(theta)?,
         };
         self.stats.record_pirls_call(inner.iterations);
+        *self.last_beta.borrow_mut() = Some(inner.beta.clone());
         let (v, g, hin) = self.compute_value_grad_from_fit(theta, &inner)?;
         let hess = match self.hess_analytic(&inner, &hin) {
             Some(h) => h,

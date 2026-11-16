@@ -722,6 +722,7 @@ impl<S: LinearSolver> FamilyFitWithSolver<IdentityLink, OcatVariance, S> for Oca
             // read — so ask for it here and nowhere else.
             PirlsOpts {
                 want_fisher: true,
+                eta_init: score.last_eta.borrow().clone(),
                 ..PirlsOpts::default()
             },
         );
