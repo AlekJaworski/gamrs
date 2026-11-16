@@ -178,6 +178,35 @@ impl LambdaInit for MgcvInit {
     }
 }
 
+impl MgcvInit {
+    /// `initial.spg`'s weights for a GLM, `w = prior·μ'(η)²/V(μ)`, taken at the
+    /// μ the inner fit starts from.
+    pub fn glm<L, K, V>(
+        family: &Family<L, K, V>,
+        y: ArrayView1<f64>,
+        prior_weights: Option<ArrayView1<f64>>,
+    ) -> Self
+    where
+        L: Loss + Clone,
+        K: Link + Clone,
+        V: VarianceFn + Clone,
+    {
+        let mu = family.loss.initial_mu(y);
+        let weights = mu
+            .iter()
+            .enumerate()
+            .map(|(i, &m)| {
+                let g = family.link.d_link_dmu(m);
+                let prior = prior_weights.map_or(1.0, |w| w[i]);
+                prior / (family.variance.variance(m).max(1e-300) * g * g)
+            })
+            .collect();
+        Self {
+            weights: Some(weights),
+        }
+    }
+}
+
 /// Caller-supplied ρ vector (e.g. from a pickled warm-restart or a
 /// hand-tuned starting point). The vector's length must equal the
 /// `s_list.len()` of the surrounding fit (debug-asserted).
@@ -271,7 +300,7 @@ where
 {
     let prior = prior_weights.map(|w| w.to_owned());
     let n = x.nrows();
-    let n_terms = prep.s_list.len();
+    let rho0 = MgcvInit::glm(&family, y, prior_weights).init(y, &prep.x_design, &prep.s_list);
     let pirls: PirlsInner<L, K, V, S> = PirlsInner {
         x_design: prep.x_design.clone(),
         y: y.to_owned(),
@@ -295,14 +324,14 @@ where
         crate::outer::OuterAlgorithm::Newton => {
             let solver =
                 NewtonWithHalving::new(crate::outer::resolve_tuning(&score.loss).to_newton_opts());
-            solver.minimize(&score, Array1::zeros(n_terms))?
+            solver.minimize(&score, rho0)?
         }
         crate::outer::OuterAlgorithm::FellnerSchall => {
             crate::outer::fellner_schall_minimize(
                 &score.inner,
                 &score.s_list,
                 &score.rank_s_list,
-                Array1::zeros(n_terms),
+                rho0,
                 // FS dispersion: 1.0 for fixed-φ families (Bernoulli,
                 // Poisson, NegBin), Pearson φ̂ for profiled families.
                 // mgcv R defaults φ=1 for fREML on GLMs (matches mgcv_rust
