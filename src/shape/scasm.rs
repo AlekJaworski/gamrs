@@ -16,7 +16,15 @@ use ndarray_linalg::{Eigh, UPLO};
 use super::bspline::{column_means, scale_penalty, BsBasis};
 use super::constraints::{monotone_start, shape_rows, Constraints, Shape};
 use super::pcls::{normal_equations, null_space, pcls, spd_inverse};
+use crate::basis::cr::CrSpline;
+use crate::basis::re::RandomEffectsBasis;
+use crate::design::by::varies;
+use crate::design::cr::CrPredictor;
+use crate::design::re::RePredictor;
+use crate::design::tensor::TensorTermFit;
+use crate::design::TermSpec;
 use crate::error::{GamrsError, Result};
+use crate::traits::Basis;
 
 /// One smooth's block of the coefficient vector and its penalties.
 #[derive(Debug, Clone)]
@@ -61,8 +69,9 @@ impl ScasmModel {
     }
 }
 
-/// A term of a scasm model, as the caller specifies it. Shapes are
-/// `None` for an unconstrained (still centred) direction.
+/// A term of a scasm model, as the caller specifies it: a shape-constrained
+/// `sc` smooth or tensor (shapes `None` = unconstrained direction), or one
+/// of gamrs's ordinary terms, fitted unabsorbed as scasm fits them.
 #[derive(Debug, Clone)]
 pub enum ScTermSpec {
     /// `s(x, bs = "sc", xt = shape, k = k)`.
@@ -77,9 +86,12 @@ pub enum ScTermSpec {
         k: [usize; 2],
         shapes: [Option<Shape>; 2],
     },
+    /// An ordinary term: `Cr`/`CrStable` (no `pc`), `Re`, `Tensor` with CR
+    /// margins, `by=` on any of them, and `Parametric`.
+    Plain(TermSpec),
 }
 
-/// A built term: its bases, and for tensors the margin reparameterisations.
+/// A built term: what is needed to evaluate its columns at new data.
 #[derive(Debug, Clone)]
 pub enum ScTerm {
     Smooth {
@@ -91,26 +103,61 @@ pub enum ScTerm {
         bases: [BsBasis; 2],
         xp: [Array2<f64>; 2],
     },
+    Cr {
+        col: usize,
+        by: Option<usize>,
+        knots: Array1<f64>,
+    },
+    Re {
+        col: usize,
+        by: Option<usize>,
+        levels: Vec<f64>,
+    },
+    TeCr {
+        cols: [usize; 2],
+        by: Option<usize>,
+        knots: [Array1<f64>; 2],
+    },
+    Parametric {
+        col: usize,
+    },
 }
 
 impl ScTerm {
     /// The term's columns of the model matrix at `data`.
-    pub fn design(&self, data: &Array2<f64>) -> Array2<f64> {
-        match self {
+    pub fn design(&self, data: &Array2<f64>) -> Result<Array2<f64>> {
+        let cr_at = |knots: &Array1<f64>, col: usize| -> Result<Array2<f64>> {
+            Ok(CrSpline::new(knots.clone())?.evaluate(data.slice(ndarray::s![.., col..col + 1])))
+        };
+        let by_scaled = |mut m: Array2<f64>, by: &Option<usize>| {
+            if let Some(b) = by {
+                m *= &data.column(*b).insert_axis(Axis(1));
+            }
+            m
+        };
+        Ok(match self {
             ScTerm::Smooth { col, basis } => basis.design(data.column(*col)),
             ScTerm::Tensor { cols, bases, xp } => {
                 let a = bases[0].design(data.column(cols[0])).dot(&xp[0]);
                 let b = bases[1].design(data.column(cols[1])).dot(&xp[1]);
                 row_kron(&a, &b)
             }
-        }
-    }
-
-    fn ncols(&self) -> usize {
-        match self {
-            ScTerm::Smooth { basis, .. } => basis.k,
-            ScTerm::Tensor { bases, .. } => bases[0].k * bases[1].k,
-        }
+            ScTerm::Cr { col, by, knots } => by_scaled(cr_at(knots, *col)?, by),
+            ScTerm::Re { col, by, levels } => {
+                let basis = RandomEffectsBasis {
+                    levels: levels.clone(),
+                };
+                by_scaled(
+                    basis.evaluate(data.slice(ndarray::s![.., *col..*col + 1])),
+                    by,
+                )
+            }
+            ScTerm::TeCr { cols, by, knots } => by_scaled(
+                row_kron(&cr_at(&knots[0], cols[0])?, &cr_at(&knots[1], cols[1])?),
+                by,
+            ),
+            ScTerm::Parametric { col } => data.slice(ndarray::s![.., *col..*col + 1]).to_owned(),
+        })
     }
 }
 
@@ -143,51 +190,67 @@ fn top_eigenvalue(a: &Array2<f64>) -> Result<f64> {
 pub struct ScasmDesign {
     pub model: ScasmModel,
     pub terms: Vec<ScTerm>,
+    /// `(first coefficient, number of coefficients)` of each term.
+    pub term_cols: Vec<(usize, usize)>,
+}
+
+/// One term, built: its design at the training data, final penalties,
+/// shape rows, feasible start, penalty null-space dimension and whether it
+/// carries a sum-to-zero row.
+struct Built {
+    term: ScTerm,
+    design: Array2<f64>,
+    penalties: Vec<Array2<f64>>,
+    rows: Array2<f64>,
+    start: Array1<f64>,
+    null_space_dim: usize,
+    centred: bool,
 }
 
 impl ScasmDesign {
-    /// An intercept plus the given terms, built as `scasm()` builds them
-    /// with mgcv's defaults (`bs` margins with `m = c(3, 2)`, centred,
-    /// penalties rescaled).
+    /// An intercept, then parametric columns, then the smooth terms in
+    /// order, built as `scasm()` builds them: ordinary smooths unabsorbed
+    /// with their sum-to-zero row kept as an equality constraint (none for
+    /// `re` or a varying `by=`), mgcv's penalty rescaling, `sc` terms with
+    /// mgcv's defaults (`bs` margins, `m = c(3, 2)`).
     pub fn build(data: &Array2<f64>, specs: &[ScTermSpec]) -> Result<Self> {
         let n = data.nrows();
-        let mut parts: Vec<(
-            ScTerm,
-            Array2<f64>,
-            Vec<Array2<f64>>,
-            Array2<f64>,
-            Array1<f64>,
-            usize,
-        )> = Vec::new();
-        for spec in specs {
-            parts.push(match spec {
-                ScTermSpec::Smooth { col, k, shape } => build_smooth(data, *col, *k, *shape)?,
-                ScTermSpec::Tensor { cols, k, shapes } => build_tensor(data, *cols, *k, *shapes)?,
-            });
+        let is_param = |s: &ScTermSpec| matches!(s, ScTermSpec::Plain(TermSpec::Parametric { .. }));
+        let mut order: Vec<usize> = (0..specs.len()).filter(|&i| is_param(&specs[i])).collect();
+        order.extend((0..specs.len()).filter(|&i| !is_param(&specs[i])));
+        let mut parts: Vec<(usize, Built)> = Vec::new();
+        for &i in &order {
+            parts.push((i, build_term(data, &specs[i])?));
         }
-        let p = 1 + parts.iter().map(|t| t.1.ncols()).sum::<usize>();
+        let p = 1 + parts.iter().map(|t| t.1.design.ncols()).sum::<usize>();
         let mut x = Array2::<f64>::zeros((n, p));
         x.column_mut(0).fill(1.0);
         let mut constraints = Constraints::empty(p);
         let mut beta0 = Array1::<f64>::zeros(p);
         let mut blocks = Vec::new();
-        let mut terms = Vec::new();
+        let mut terms: Vec<Option<ScTerm>> = vec![None; specs.len()];
+        let mut term_cols = vec![(0, 0); specs.len()];
         let mut first = 1;
-        for (term, xt, penalties, rows, start, nsd) in parts {
-            let k = xt.ncols();
-            let cm = column_means(&xt);
-            x.slice_mut(ndarray::s![.., first..first + k]).assign(&xt);
-            constraints.add_smooth(first, &rows, Some(&cm));
+        for (i, b) in parts {
+            let k = b.design.ncols();
+            x.slice_mut(ndarray::s![.., first..first + k])
+                .assign(&b.design);
+            let cm = column_means(&b.design);
+            if b.centred || b.rows.nrows() > 0 {
+                constraints.add_smooth(first, &b.rows, b.centred.then_some(&cm));
+            }
             beta0
                 .slice_mut(ndarray::s![first..first + k])
-                .assign(&start);
-            let penalties = penalties.iter().map(|s| scale_penalty(s, &xt).0).collect();
-            blocks.push(Block {
-                first,
-                penalties,
-                null_space_dim: nsd,
-            });
-            terms.push(term);
+                .assign(&b.start);
+            if !b.penalties.is_empty() {
+                blocks.push(Block {
+                    first,
+                    penalties: b.penalties,
+                    null_space_dim: b.null_space_dim,
+                });
+            }
+            terms[i] = Some(b.term);
+            term_cols[i] = (first, k);
             first += k;
         }
         Ok(Self {
@@ -197,49 +260,164 @@ impl ScasmDesign {
                 constraints,
                 beta0,
             },
-            terms,
+            terms: terms.into_iter().map(|t| t.unwrap()).collect(),
+            term_cols,
         })
     }
 
-    /// Per-term contributions at new data (`predict(type = "terms")`).
-    pub fn predict_terms(&self, beta: &Array1<f64>, data: &Array2<f64>) -> Array2<f64> {
+    /// Per-term contributions at new data (`predict(type = "terms")`),
+    /// one column per term in the order given to [`Self::build`].
+    pub fn predict_terms(&self, beta: &Array1<f64>, data: &Array2<f64>) -> Result<Array2<f64>> {
         let mut out = Array2::<f64>::zeros((data.nrows(), self.terms.len()));
-        for (t, (term, block)) in self.terms.iter().zip(&self.model.blocks).enumerate() {
-            let b = beta.slice(ndarray::s![block.first..block.first + term.ncols()]);
-            out.column_mut(t).assign(&term.design(data).dot(&b));
+        for (t, (term, &(first, k))) in self.terms.iter().zip(&self.term_cols).enumerate() {
+            let b = beta.slice(ndarray::s![first..first + k]);
+            out.column_mut(t).assign(&term.design(data)?.dot(&b));
         }
-        out
+        Ok(out)
     }
 
     /// Standard errors of the term contributions from `vp`.
-    pub fn predict_terms_se(&self, vp: &Array2<f64>, data: &Array2<f64>) -> Array2<f64> {
+    pub fn predict_terms_se(&self, vp: &Array2<f64>, data: &Array2<f64>) -> Result<Array2<f64>> {
         let mut out = Array2::<f64>::zeros((data.nrows(), self.terms.len()));
-        for (t, (term, block)) in self.terms.iter().zip(&self.model.blocks).enumerate() {
-            let xb = term.design(data);
-            let r = block.first..block.first + term.ncols();
+        for (t, (term, &(first, k))) in self.terms.iter().zip(&self.term_cols).enumerate() {
+            let xb = term.design(data)?;
+            let r = first..first + k;
             let xv = xb.dot(&vp.slice(ndarray::s![r.clone(), r]));
             out.column_mut(t)
                 .assign(&(&xv * &xb).sum_axis(Axis(1)).mapv(|s| s.max(0.0).sqrt()));
         }
-        out
+        Ok(out)
+    }
+
+    /// The full model matrix (intercept first) at new data.
+    pub fn model_matrix(&self, data: &Array2<f64>) -> Result<Array2<f64>> {
+        let p = self.model.x.ncols();
+        let mut x = Array2::<f64>::zeros((data.nrows(), p));
+        x.column_mut(0).fill(1.0);
+        for (term, &(first, k)) in self.terms.iter().zip(&self.term_cols) {
+            x.slice_mut(ndarray::s![.., first..first + k])
+                .assign(&term.design(data)?);
+        }
+        Ok(x)
     }
 }
 
-type BuiltTerm = (
-    ScTerm,
-    Array2<f64>,
-    Vec<Array2<f64>>,
-    Array2<f64>,
-    Array1<f64>,
-    usize,
-);
+fn build_term(data: &Array2<f64>, spec: &ScTermSpec) -> Result<Built> {
+    match spec {
+        ScTermSpec::Smooth { col, k, shape } => build_smooth(data, *col, *k, *shape),
+        ScTermSpec::Tensor { cols, k, shapes } => build_tensor(data, *cols, *k, *shapes),
+        ScTermSpec::Plain(t) => build_plain(data, t),
+    }
+}
 
-fn build_smooth(
-    data: &Array2<f64>,
-    col: usize,
-    k: usize,
-    shape: Option<Shape>,
-) -> Result<BuiltTerm> {
+/// gamrs's own CR, RE and CR-tensor bases, before their identifiability
+/// constraint is absorbed.
+fn build_plain(data: &Array2<f64>, spec: &TermSpec) -> Result<Built> {
+    let x = data.view();
+    let unsupported = |what: &str| {
+        GamrsError::InvalidParameter(format!(
+            "{what} is not supported next to shape-constrained terms"
+        ))
+    };
+    // A constant by= keeps mgcv's centring and a varying one drops it;
+    // only the varying case is wired here.
+    let by_centred = |by: Option<usize>| -> Result<bool> {
+        match by {
+            None => Ok(true),
+            Some(b) if varies(data.column(b)) => Ok(false),
+            Some(_) => Err(unsupported("a constant by= variable")),
+        }
+    };
+    let scale_by = |mut m: Array2<f64>, by: Option<usize>| {
+        if let Some(b) = by {
+            m *= &data.column(b).insert_axis(Axis(1));
+        }
+        m
+    };
+    match *spec {
+        TermSpec::Cr { pc: Some(_), .. } | TermSpec::CrStable { pc: Some(_), .. } => {
+            Err(unsupported("a point constraint (pc)"))
+        }
+        TermSpec::Cr { col, k, by, .. } | TermSpec::CrStable { col, k, by, .. } => {
+            let raw = CrPredictor::fit_raw(x, col, k)?;
+            let centred = by_centred(by)?;
+            Ok(Built {
+                term: ScTerm::Cr {
+                    col,
+                    by,
+                    knots: raw.cr.knots().to_owned(),
+                },
+                design: scale_by(raw.raw_design, by),
+                penalties: vec![raw.s_raw_rescaled],
+                rows: Array2::zeros((0, k)),
+                start: Array1::zeros(k),
+                null_space_dim: 2,
+                centred,
+            })
+        }
+        TermSpec::Re { col, by } => {
+            let raw = RePredictor::fit_raw(x, col, by)?;
+            let k = raw.levels.len();
+            Ok(Built {
+                term: ScTerm::Re {
+                    col,
+                    by,
+                    levels: raw.levels,
+                },
+                design: raw.raw,
+                penalties: vec![Array2::eye(k)],
+                rows: Array2::zeros((0, k)),
+                start: Array1::zeros(k),
+                null_space_dim: 0,
+                centred: false,
+            })
+        }
+        TermSpec::Tensor {
+            col_a,
+            col_b,
+            k_a,
+            k_b,
+            bs_a,
+            bs_b,
+            by,
+        } => {
+            let raw = TensorTermFit::fit_raw(x, col_a, col_b, k_a, k_b, bs_a, bs_b)?;
+            let centred = by_centred(by)?;
+            let penalties = vec![
+                scale_penalty(&raw.s_te_a_raw, &raw.raw_design).0,
+                scale_penalty(&raw.s_te_b_raw, &raw.raw_design).0,
+            ];
+            let k = k_a * k_b;
+            Ok(Built {
+                term: ScTerm::TeCr {
+                    cols: [col_a, col_b],
+                    by,
+                    knots: [raw.cr_a.knots().to_owned(), raw.cr_b.knots().to_owned()],
+                },
+                design: scale_by(raw.raw_design, by),
+                penalties,
+                rows: Array2::zeros((0, k)),
+                start: Array1::zeros(k),
+                null_space_dim: 4,
+                centred,
+            })
+        }
+        TermSpec::Parametric { col } => Ok(Built {
+            term: ScTerm::Parametric { col },
+            design: data.slice(ndarray::s![.., col..col + 1]).to_owned(),
+            penalties: vec![],
+            rows: Array2::zeros((0, 1)),
+            start: Array1::zeros(1),
+            null_space_dim: 0,
+            centred: false,
+        }),
+        TermSpec::TeMulti { .. } => Err(unsupported("a tensor with more than two margins")),
+        TermSpec::Ti { .. } => Err(unsupported("a ti() term")),
+        TermSpec::Tps { .. } => Err(unsupported("a thin-plate term")),
+    }
+}
+
+fn build_smooth(data: &Array2<f64>, col: usize, k: usize, shape: Option<Shape>) -> Result<Built> {
     let basis = BsBasis::from_data(data.column(col), k, (3, 2))?;
     let xb = basis.design(data.column(col));
     let cm = column_means(&xb);
@@ -247,16 +425,17 @@ fn build_smooth(
         Some(sh) => (shape_rows(sh, k), monotone_start(sh, &cm)),
         None => (Array2::zeros((0, k)), Array1::zeros(k)),
     };
-    let penalty = basis.penalty();
-    let nsd = basis.m.1;
-    Ok((
-        ScTerm::Smooth { col, basis },
-        xb,
-        vec![penalty],
+    let penalty = scale_penalty(&basis.penalty(), &xb).0;
+    let null_space_dim = basis.m.1;
+    Ok(Built {
+        term: ScTerm::Smooth { col, basis },
+        design: xb,
+        penalties: vec![penalty],
         rows,
         start,
-        nsd,
-    ))
+        null_space_dim,
+        centred: true,
+    })
 }
 
 /// `te()` with `sc` margins: each margin reparameterised so its
@@ -268,7 +447,7 @@ fn build_tensor(
     cols: [usize; 2],
     k: [usize; 2],
     shapes: [Option<Shape>; 2],
-) -> Result<BuiltTerm> {
+) -> Result<Built> {
     let mut bases = Vec::new();
     let mut xps = Vec::new();
     let mut xms = Vec::new();
@@ -293,7 +472,7 @@ fn build_tensor(
     }
     let x = row_kron(&xms[0], &xms[1]);
     let (k0, k1) = (k[0], k[1]);
-    let penalties = vec![
+    let penalties = [
         kron(&sms[0], &Array2::eye(k1)),
         kron(&Array2::eye(k0), &sms[1]),
     ];
@@ -330,7 +509,16 @@ fn build_tensor(
         bases: [bases.remove(0), bases.remove(0)],
         xp: [xps.remove(0), xps.remove(0)],
     };
-    Ok((term, x, penalties, rows, start, 4))
+    let penalties = penalties.iter().map(|s| scale_penalty(s, &x).0).collect();
+    Ok(Built {
+        term,
+        design: x,
+        penalties,
+        rows,
+        start,
+        null_space_dim: 4,
+        centred: true,
+    })
 }
 
 fn invert(a: &Array2<f64>) -> Result<Array2<f64>> {

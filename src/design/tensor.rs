@@ -125,7 +125,7 @@ impl TensorPredictor {
 /// per-margin penalties (already in the centred coefficient frame),
 /// and predict-time rebuilder. Mirrors mgcv's
 /// `smooth.construct.tensor.smooth.spec` for a 2-margin plain `te()`.
-pub(super) struct TensorTermFit {
+pub(crate) struct TensorTermFit {
     /// `(n, k_a*k_b - 1)` design in the centred frame.
     pub(super) design: Array2<f64>,
     /// Per-margin penalties in the centred frame. Length 2:
@@ -150,52 +150,18 @@ impl TensorTermFit {
                 "Tensor term must have distinct margin columns (got col_a == col_b == {col_a})"
             )));
         }
-        let (MarginKind::Cr, MarginKind::Cr) = (bs_a, bs_b);
-        // Uncentred marginal bases (matches mgcv's `mc[i] = FALSE` for
-        // every margin of a plain `te`).
-        let x_a_col = x.column(col_a);
-        let x_b_col = x.column(col_b);
-        let cr_a = CrSpline::with_quantile_knots(x_a_col, k_a)?;
-        let cr_b = CrSpline::with_quantile_knots(x_b_col, k_b)?;
+        let RawTensorFit {
+            cr_a,
+            cr_b,
+            raw_design,
+            s_te_a_raw,
+            s_te_b_raw,
+        } = Self::fit_raw(x, col_a, col_b, k_a, k_b, bs_a, bs_b)?;
         let knots_a = cr_a.knots().to_owned();
         let knots_b = cr_b.knots().to_owned();
-
-        // CR margins set `noterp = TRUE` (smooth.r:1512), which causes
-        // smooth.construct.tensor.smooth.spec to SKIP the SVD repara
-        // (smooth.r:799 — `if (is.null(object$margin[[i]]$noterp))`).
-        // For CR + CR `te` we therefore use identity reparams; if we
-        // ever add B-spline marginals here we'd switch back to the SVD
-        // path conditional on the margin kind.
         let xp_a = Array2::<f64>::eye(k_a);
         let xp_b = Array2::<f64>::eye(k_b);
-
-        // Marginal penalties in the reparameterised frame (identity
-        // here since CR margins are noterp). mgcv smooth.r:825 rescales
-        // each marginal penalty by its leading eigenvalue.
-        let s_a_raw = cr_a.penalties().pop().unwrap();
-        let s_b_raw = cr_b.penalties().pop().unwrap();
-        let s_a = rescale_by_leading_eig(s_a_raw)?;
-        let s_b = rescale_by_leading_eig(s_b_raw)?;
-
-        // Evaluate the marginal designs on x (no XP rotation for CR
-        // since xp = I). Row-wise Kronecker → tensor product design.
-        let n = x.nrows();
-        let x_a_view = x.slice(ndarray::s![.., col_a..col_a + 1]);
-        let x_b_view = x.slice(ndarray::s![.., col_b..col_b + 1]);
-        let design_a = cr_a.evaluate(x_a_view);
-        let design_b = cr_b.evaluate(x_b_view);
-        debug_assert_eq!(design_a.shape(), &[n, k_a]);
-        debug_assert_eq!(design_b.shape(), &[n, k_b]);
-
-        let raw_design = row_kron(design_a.view(), design_b.view());
-
-        // Tensor product penalties on the reparameterised + rescaled
-        // marginal frame: S_te_a = S_a ⊗ I_{k_b}, S_te_b = I_{k_a} ⊗ S_b.
         let pk = k_a * k_b;
-        let s_te_a_raw = kron_with_identity_right(s_a.view(), k_b);
-        let s_te_b_raw = kron_with_identity_left(k_a, s_b.view());
-        debug_assert_eq!(s_te_a_raw.shape(), &[pk, pk]);
-        debug_assert_eq!(s_te_b_raw.shape(), &[pk, pk]);
 
         // Single sum-to-zero constraint on the WHOLE tensor product
         // (mgcv's `smoothCon` with `absorb.cons = TRUE`). The
@@ -237,6 +203,79 @@ impl TensorTermFit {
             predictor,
         })
     }
+    /// The `te` basis before its sum-to-zero constraint and any by-scaling:
+    /// both CR margins, the row-wise Kronecker design and the two marginal
+    /// penalties (each rescaled by its leading eigenvalue) as `S_a ⊗ I` and
+    /// `I ⊗ S_b`.
+    pub(crate) fn fit_raw(
+        x: ArrayView2<f64>,
+        col_a: usize,
+        col_b: usize,
+        k_a: usize,
+        k_b: usize,
+        bs_a: MarginKind,
+        bs_b: MarginKind,
+    ) -> Result<RawTensorFit> {
+        let (MarginKind::Cr, MarginKind::Cr) = (bs_a, bs_b);
+        // Uncentred marginal bases (matches mgcv's `mc[i] = FALSE` for
+        // every margin of a plain `te`).
+        let x_a_col = x.column(col_a);
+        let x_b_col = x.column(col_b);
+        let cr_a = CrSpline::with_quantile_knots(x_a_col, k_a)?;
+        let cr_b = CrSpline::with_quantile_knots(x_b_col, k_b)?;
+
+        // CR margins set `noterp = TRUE` (smooth.r:1512), which causes
+        // smooth.construct.tensor.smooth.spec to SKIP the SVD repara
+        // (smooth.r:799 — `if (is.null(object$margin[[i]]$noterp))`).
+        // For CR + CR `te` we therefore use identity reparams; if we
+        // ever add B-spline marginals here we'd switch back to the SVD
+        // path conditional on the margin kind.
+
+        // Marginal penalties in the reparameterised frame (identity
+        // here since CR margins are noterp). mgcv smooth.r:825 rescales
+        // each marginal penalty by its leading eigenvalue.
+        let s_a_raw = cr_a.penalties().pop().unwrap();
+        let s_b_raw = cr_b.penalties().pop().unwrap();
+        let s_a = rescale_by_leading_eig(s_a_raw)?;
+        let s_b = rescale_by_leading_eig(s_b_raw)?;
+
+        // Evaluate the marginal designs on x (no XP rotation for CR
+        // since xp = I). Row-wise Kronecker → tensor product design.
+        let n = x.nrows();
+        let x_a_view = x.slice(ndarray::s![.., col_a..col_a + 1]);
+        let x_b_view = x.slice(ndarray::s![.., col_b..col_b + 1]);
+        let design_a = cr_a.evaluate(x_a_view);
+        let design_b = cr_b.evaluate(x_b_view);
+        debug_assert_eq!(design_a.shape(), &[n, k_a]);
+        debug_assert_eq!(design_b.shape(), &[n, k_b]);
+
+        let raw_design = row_kron(design_a.view(), design_b.view());
+
+        // Tensor product penalties on the reparameterised + rescaled
+        // marginal frame: S_te_a = S_a ⊗ I_{k_b}, S_te_b = I_{k_a} ⊗ S_b.
+        let pk = k_a * k_b;
+        let s_te_a_raw = kron_with_identity_right(s_a.view(), k_b);
+        let s_te_b_raw = kron_with_identity_left(k_a, s_b.view());
+        debug_assert_eq!(s_te_a_raw.shape(), &[pk, pk]);
+        debug_assert_eq!(s_te_b_raw.shape(), &[pk, pk]);
+
+        Ok(RawTensorFit {
+            cr_a,
+            cr_b,
+            raw_design,
+            s_te_a_raw,
+            s_te_b_raw,
+        })
+    }
+}
+
+/// A `te` basis before constraints: see [`TensorTermFit::fit_raw`].
+pub(crate) struct RawTensorFit {
+    pub cr_a: CrSpline,
+    pub cr_b: CrSpline,
+    pub raw_design: Array2<f64>,
+    pub s_te_a_raw: Array2<f64>,
+    pub s_te_b_raw: Array2<f64>,
 }
 
 // =============================================================================

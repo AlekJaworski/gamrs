@@ -33,12 +33,12 @@ use ndarray_linalg::Eigh;
 use crate::error::{GamrsError, Result};
 
 mod additive;
-mod by;
-mod cr;
+pub(crate) mod by;
+pub(crate) mod cr;
 pub(crate) mod identifiability;
 mod parametric;
-mod re;
-mod tensor;
+pub(crate) mod re;
+pub(crate) mod tensor;
 mod tps;
 
 pub use additive::{Additive, AdditivePredictor, MarginKind, TermSpec};

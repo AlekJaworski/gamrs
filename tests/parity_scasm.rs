@@ -348,8 +348,8 @@ fn check_efs_1d(n: usize) {
         .map(first)
         .collect();
     let new = xn.insert_axis(ndarray::Axis(1));
-    let terms = design.predict_terms(&fit.beta, &new);
-    let se = design.predict_terms_se(&fit.vp, &new);
+    let terms = design.predict_terms(&fit.beta, &new).unwrap();
+    let se = design.predict_terms_se(&fit.vp, &new).unwrap();
     let t_ref = vec_of(&fin["term_new"][0]);
     let se_ref = vec_of(&fin["term_new_se"][0]);
     let e_t = terms
@@ -373,7 +373,9 @@ fn check_efs_1d(n: usize) {
         c.x.fold(f64::NEG_INFINITY, |a, &b| a.max(b)),
     );
     let grid: Array1<f64> = Array1::linspace(lo - 1.0, hi + 1.0, 5001);
-    let f = design.predict_terms(&fit.beta, &grid.insert_axis(ndarray::Axis(1)));
+    let f = design
+        .predict_terms(&fit.beta, &grid.insert_axis(ndarray::Axis(1)))
+        .unwrap();
     let rise = f
         .column(0)
         .windows(2)
@@ -473,7 +475,7 @@ fn check_setup_te(n: usize) {
     );
     let new = mat_of(&c.internals["inputs"]["x_new"]);
     let lp = mat_of(&setup["lpmatrix_new"]);
-    let mine = c.design.terms[0].design(&new);
+    let mine = c.design.terms[0].design(&new).unwrap();
     let e = max_err(&mine, &lp.slice(ndarray::s![.., 1..]).to_owned());
     eprintln!("te n={n}: prediction matrix max error {e:.2e}");
     assert!(e < 1e-12, "prediction matrix off by {e:.3e}");
@@ -601,8 +603,8 @@ fn check_efs_te(n: usize) {
         .fold(0.0, f64::max);
     let e_vp = max_err(&fit.vp, &mat_of(&fin["Vp"]));
     let new = mat_of(&c.internals["inputs"]["x_new"]);
-    let terms = c.design.predict_terms(&fit.beta, &new);
-    let se = c.design.predict_terms_se(&fit.vp, &new);
+    let terms = c.design.predict_terms(&fit.beta, &new).unwrap();
+    let se = c.design.predict_terms_se(&fit.vp, &new).unwrap();
     let e_t = terms
         .column(0)
         .iter()
@@ -651,6 +653,7 @@ fn check_efs_te(n: usize) {
     let f = c
         .design
         .predict_terms(&fit.beta, &grid)
+        .unwrap()
         .column(0)
         .to_owned()
         .into_shape_with_order((g, g))
