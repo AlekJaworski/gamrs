@@ -185,3 +185,54 @@ fn scasm_constraints_1d_n500() {
 fn scasm_constraints_1d_n3000() {
     check_constraints_1d(3000);
 }
+
+fn check_fixed_sp_1d(n: usize) {
+    use gamrs::shape::constraints::{monotone_start, shape_rows, Constraints, Shape};
+    use gamrs::shape::pcls::{normal_equations, pcls};
+    let c = case_1d(n);
+    let src = load(&format!("scasm_mono_gaussian_n{n}_k10"));
+    let y = Array1::from_vec(vec_of(&src["inputs"]["y_train"]));
+    let basis = BsBasis::from_data(c.x.view(), 10, (3, 2)).unwrap();
+    let xb = basis.design(c.x.view());
+    let x = with_intercept(&xb);
+    let cm = column_means(&xb);
+    let (s, _) = scale_penalty(&basis.penalty(), &xb);
+    let mut cons = Constraints::empty(11);
+    cons.add_smooth(1, &shape_rows(Shape::Decreasing, 10), Some(&cm));
+    let mut beta0 = Array1::<f64>::zeros(11);
+    beta0
+        .slice_mut(ndarray::s![1..])
+        .assign(&monotone_start(Shape::Decreasing, &cm));
+    let w = Array1::<f64>::ones(n);
+    for rung in c.internals["fixed_sp"].as_array().unwrap() {
+        let sp = first(&rung["sp"]);
+        let (h, xty) = normal_equations(&x, &w, &y, &[(1, &s, sp)]);
+        let fit = pcls(&h, &xty, &cons.ain, &cons.bin, &cons.c, &beta0).unwrap();
+        let b_ref = vec_of(&rung["coefficients"]);
+        let e = fit
+            .beta
+            .iter()
+            .zip(&b_ref)
+            .map(|(a, b)| (a - b).abs() / (1.0 + b.abs()))
+            .fold(0.0, f64::max);
+        let act: Vec<i64> = fit.active.iter().map(|a| *a as i64 + 1).collect();
+        let act_ref: Vec<i64> = match &rung["active"] {
+            Value::Array(v) => v.iter().map(|a| a.as_i64().unwrap()).collect(),
+            Value::Number(a) => vec![a.as_i64().unwrap()],
+            _ => vec![],
+        };
+        eprintln!("n={n} sp={sp:.4e}: coef max error {e:.2e}, active {act:?} (scasm {act_ref:?})");
+        assert!(e < 2e-12, "coefficients off by {e:.3e} at sp {sp}");
+        assert_eq!(act, act_ref, "active set differs at sp {sp}");
+    }
+}
+
+#[test]
+fn scasm_fixed_sp_1d_n500() {
+    check_fixed_sp_1d(500);
+}
+
+#[test]
+fn scasm_fixed_sp_1d_n3000() {
+    check_fixed_sp_1d(3000);
+}
