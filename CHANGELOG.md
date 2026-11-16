@@ -7,6 +7,20 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ## [Unreleased]
 
+### Added
+
+- **Monotone smooths, ported from mgcv's `scasm()` (Rust API, Gaussian,
+  1-D).** `gamrs::shape` fits `y ~ s(x, bs = "sc", xt = "m+")` /
+  `xt = "m-"` models: mgcv's `bs` B-spline basis with its derivative
+  penalty, increasing or decreasing as linear inequality constraints on the
+  coefficients, an active-set constrained least-squares solve (mgcv's
+  `pcls`) and scasm's extended Fellner-Schall REML loop. Against mgcv 1.9-4
+  on synthetic fixtures (n = 500 and 3,000, k = 10): smoothing parameter to
+  9e-13 relative, REML to 6e-16, edf to 1.2e-13, fitted values and term
+  predictions to 3e-14, `Vp` to 5e-16; every EFS iteration matches scasm's,
+  active constraint sets included. The fitted curve is monotone on a dense
+  grid by construction.
+
 ## [0.16.3] — 2026-11-13
 
 ### Performance

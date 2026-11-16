@@ -236,3 +236,163 @@ fn scasm_fixed_sp_1d_n500() {
 fn scasm_fixed_sp_1d_n3000() {
     check_fixed_sp_1d(3000);
 }
+
+fn ints_of(v: &Value) -> Vec<usize> {
+    match v {
+        Value::Array(a) => a.iter().map(|x| x.as_u64().unwrap() as usize).collect(),
+        Value::Number(x) => vec![x.as_u64().unwrap() as usize],
+        _ => vec![],
+    }
+}
+
+fn rel(a: f64, b: f64) -> f64 {
+    (a - b).abs() / b.abs().max(1e-300)
+}
+
+fn check_efs_1d(n: usize) {
+    use gamrs::shape::constraints::Shape;
+    use gamrs::shape::scasm::{fit_gaussian, ScSpec, ScasmDesign};
+    let c = case_1d(n);
+    let src = load(&format!("scasm_mono_gaussian_n{n}_k10"));
+    let y = Array1::from_vec(vec_of(&src["inputs"]["y_train"]));
+    let data = c.x.clone().insert_axis(ndarray::Axis(1));
+    let design = ScasmDesign::build(
+        &data,
+        &[ScSpec {
+            col: 0,
+            k: 10,
+            shape: Some(Shape::Decreasing),
+        }],
+    )
+    .unwrap();
+    let fit = fit_gaussian(&design.model, &y).unwrap();
+
+    // Every EFS iteration against the traced R loop.
+    let efs = &c.internals["efs"];
+    let lsp0 = first(&efs["lsp_initial"]);
+    let iters = efs["iterations"].as_array().unwrap();
+    assert_eq!(fit.iterations.len(), iters.len(), "EFS iteration count");
+    let mut worst = 0.0_f64;
+    for (k, (mine, r)) in fit.iterations.iter().zip(iters).enumerate() {
+        if k == 0 {
+            worst = worst.max(rel(mine.lsp[0], lsp0));
+        }
+        assert_eq!(
+            mine.active.iter().map(|a| a + 1).collect::<Vec<_>>(),
+            ints_of(&r["active"]),
+            "active set, iteration {k}"
+        );
+        let rank = (mine.tr_s[0] * mine.lsp[0].exp()).round();
+        let rank_ref = (first(&r["trS"]) * first(&r["lsp"]).exp()).round();
+        assert_eq!(rank, rank_ref, "projected penalty rank, iteration {k}");
+        for (a, b) in [
+            (mine.lsp[0], first(&r["lsp"])),
+            (mine.edf_total, r["edf_total"].as_f64().unwrap()),
+            (mine.scale, r["scale"].as_f64().unwrap()),
+            (mine.sedf[0], first(&r["sedf"])),
+            (mine.tr_s[0], first(&r["trS"])),
+            (mine.psp[0], first(&r["pSp"])),
+        ] {
+            worst = worst.max(rel(a, b));
+        }
+    }
+    eprintln!(
+        "n={n}: {} EFS iterations, worst relative error over the trace {worst:.2e}",
+        iters.len()
+    );
+    assert!(worst < 1e-11, "EFS trace off by {worst:.3e}");
+
+    let fin = &c.internals["final"];
+    let e_sp = rel(fit.sp[0], first(&fin["sp"]));
+    let e_reml = rel(fit.reml(), fin["reml"].as_f64().unwrap());
+    let e_scale = rel(fit.scale, fin["scale"].as_f64().unwrap());
+    let edf_ref = vec_of(&fin["edf"]);
+    let e_edf = fit
+        .edf
+        .iter()
+        .zip(&edf_ref)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0, f64::max);
+    let fitted_ref = vec_of(&fin["fitted"]);
+    let e_fit = fit
+        .fitted
+        .iter()
+        .zip(&fitted_ref)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0, f64::max);
+    let coef_ref = vec_of(&fin["coefficients"]);
+    let e_coef = fit
+        .beta
+        .iter()
+        .zip(&coef_ref)
+        .map(|(a, b)| (a - b).abs() / (1.0 + b.abs()))
+        .fold(0.0, f64::max);
+    let e_vp = max_err(&fit.vp, &mat_of(&fin["Vp"]));
+    eprintln!(
+        "n={n}: sp {e_sp:.2e} rel, REML {e_reml:.2e} rel, scale {e_scale:.2e} rel, edf {e_edf:.2e} abs, fitted {e_fit:.2e} abs, coef {e_coef:.2e}, Vp {e_vp:.2e}"
+    );
+    assert!(
+        e_sp < 1e-11 && e_reml < 1e-13 && e_scale < 1e-13,
+        "sp/REML/scale off"
+    );
+    assert!(
+        e_edf < 1e-12 && e_fit < 1e-12 && e_coef < 1e-12 && e_vp < 1e-12,
+        "edf/fitted/coef/Vp off"
+    );
+
+    // predict(type = "terms") and its standard errors on new points.
+    let xn: Array1<f64> = c.internals["inputs"]["x_new"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(first)
+        .collect();
+    let new = xn.insert_axis(ndarray::Axis(1));
+    let terms = design.predict_terms(&fit.beta, &new);
+    let se = design.predict_terms_se(&fit.vp, &new);
+    let t_ref = vec_of(&fin["term_new"][0]);
+    let se_ref = vec_of(&fin["term_new_se"][0]);
+    let e_t = terms
+        .column(0)
+        .iter()
+        .zip(&t_ref)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0, f64::max);
+    let e_se = se
+        .column(0)
+        .iter()
+        .zip(&se_ref)
+        .map(|(a, b)| rel(*a, *b))
+        .fold(0.0, f64::max);
+    eprintln!("n={n}: terms on new data {e_t:.2e} abs, their se {e_se:.2e} rel");
+    assert!(e_t < 1e-12 && e_se < 1e-11, "predicted terms off");
+
+    // Monotone by construction: dense grid across and beyond the data.
+    let (lo, hi) = (
+        c.x.fold(f64::INFINITY, |a, &b| a.min(b)),
+        c.x.fold(f64::NEG_INFINITY, |a, &b| a.max(b)),
+    );
+    let grid: Array1<f64> = Array1::linspace(lo - 1.0, hi + 1.0, 5001);
+    let f = design.predict_terms(&fit.beta, &grid.insert_axis(ndarray::Axis(1)));
+    let rise = f
+        .column(0)
+        .windows(2)
+        .into_iter()
+        .map(|w| w[1] - w[0])
+        .fold(f64::NEG_INFINITY, f64::max);
+    eprintln!("n={n}: largest increase between grid neighbours {rise:.2e}");
+    assert!(
+        rise <= 1e-12,
+        "decreasing smooth increases by {rise:.3e} on the grid"
+    );
+}
+
+#[test]
+fn scasm_efs_1d_n500() {
+    check_efs_1d(500);
+}
+
+#[test]
+fn scasm_efs_1d_n3000() {
+    check_efs_1d(3000);
+}
