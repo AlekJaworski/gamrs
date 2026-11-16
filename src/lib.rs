@@ -52,6 +52,7 @@ pub mod inner;
 pub mod outer;
 pub mod profile;
 pub mod score;
+pub mod shape;
 pub mod special;
 pub mod stats;
 pub mod traits;
