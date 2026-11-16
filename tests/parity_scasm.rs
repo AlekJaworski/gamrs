@@ -147,3 +147,41 @@ fn scasm_setup_1d_n500() {
 fn scasm_setup_1d_n3000() {
     check_setup_1d(3000);
 }
+
+fn check_constraints_1d(n: usize) {
+    use gamrs::shape::constraints::{monotone_start, shape_rows, Constraints, Shape};
+    let c = case_1d(n);
+    let setup = &c.internals["setup"];
+    let basis = BsBasis::from_data(c.x.view(), 10, (3, 2)).unwrap();
+    let xb = basis.design(c.x.view());
+    let cm = column_means(&xb);
+    let mut cons = Constraints::empty(11);
+    cons.add_smooth(1, &shape_rows(Shape::Decreasing, 10), Some(&cm));
+    assert_eq!(cons.ain, mat_of(&setup["Ain"]), "Ain differs");
+    assert_eq!(cons.bin.to_vec(), vec_of(&setup["bin"]), "bin differs");
+    let e = max_err(&cons.c, &mat_of(&setup["C"]));
+    assert!(e < 1e-12, "C off by {e:.3e}");
+
+    let mut beta0 = Array1::<f64>::zeros(11);
+    beta0
+        .slice_mut(ndarray::s![1..])
+        .assign(&monotone_start(Shape::Decreasing, &cm));
+    let b_ref = vec_of(&setup["beta0"]);
+    let e = beta0
+        .iter()
+        .zip(&b_ref)
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0, f64::max);
+    eprintln!("n={n}: feasible start max error {e:.2e}");
+    assert!(e < 1e-15, "beta0 off by {e:.3e}");
+}
+
+#[test]
+fn scasm_constraints_1d_n500() {
+    check_constraints_1d(500);
+}
+
+#[test]
+fn scasm_constraints_1d_n3000() {
+    check_constraints_1d(3000);
+}

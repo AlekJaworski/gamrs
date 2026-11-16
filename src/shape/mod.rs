@@ -8,3 +8,4 @@
 //! smoothing parameters come from scasm's extended Fellner-Schall REML loop.
 
 pub mod bspline;
+pub mod constraints;
