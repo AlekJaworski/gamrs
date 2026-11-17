@@ -230,8 +230,8 @@ peff.plot(x="x", y="mean")  # or hand to matplotlib / seaborn / altair
 ## 9. Large-n fits — switch to `method="fREML"`
 
 `gamrs`'s default is REML via damped Newton; for GLM families at large n,
-`method="fREML"` switches to mgcv R's `bam()` optimiser (Fellner-Schall
-multiplicative λ updates with single-step IRLS per outer iteration).
+`method="fREML"` switches to the Fellner–Schall λ updates `bam()` uses,
+still on the REML criterion: results match `gam(method = "REML")`.
 
 ```python
 g = Gam(family="poisson", method="fREML").fit(X_big, y_big)
@@ -338,6 +338,5 @@ isn't there — it's rebuilt on demand.
 ## Where next
 
 - **[docs/perf.md](perf.md)** — REML vs fREML, large-n tips, reading `fit_stats_`.
-- **scripts/bench_large_n.py** — reproducible bench harness vs `mgcv_rust`.
 - **tests/python/** — parity tests against `mgcv` R fixtures, also serve as
   worked examples for every family.

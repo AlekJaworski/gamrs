@@ -9,11 +9,11 @@ name = "gamrs"
 # silently builds mis-versioned wheels that `--skip-existing` then drops on
 # publish (the 0.11.4 release that shipped nothing).
 dynamic = ["version"]
-description = "GAM core (Rust) with sklearn-style Python bindings — beta"
+description = "Generalised additive models in Rust, with a Python API; a reimplementation of R's mgcv"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
-keywords = ["statistics", "gam", "regression", "splines"]
+keywords = ["statistics", "gam", "mgcv", "regression", "splines", "smoothing"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -32,6 +32,11 @@ dependencies = [
 # fallback (elf_sigma=0 heuristic — the 0.4.0 behaviour), so the base wheel
 # works without it. Optional so the base wheel keeps building on Python
 # versions / platforms where scipy has no wheel yet (e.g. cp314).
+[project.urls]
+Repository = "https://github.com/AlekJaworski/gamrs"
+Changelog = "https://github.com/AlekJaworski/gamrs/blob/master/CHANGELOG.md"
+Issues = "https://github.com/AlekJaworski/gamrs/issues"
+
 [project.optional-dependencies]
 quantile = ["scipy>=1.7"]
 
