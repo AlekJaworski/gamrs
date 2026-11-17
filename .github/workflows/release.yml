@@ -204,6 +204,17 @@ jobs:
             3.12
             3.13
             3.14
+      # The arm64 image's default python3 runs ahead of pyo3 (3.15 by 2026-11),
+      # so the validate step found no wheel for it. Pin it too.
+      - name: Set up Python interpreters (arm64)
+        if: matrix.target == 'aarch64'
+        uses: actions/setup-python@v6
+        with:
+          python-version: |
+            3.11
+            3.12
+            3.13
+            3.14
       # For blas-static: openblas-src compiles from source, no brew openblas needed.
       # Only install the Fortran compiler.
       - name: Install build tools
