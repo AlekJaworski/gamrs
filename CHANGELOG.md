@@ -5,6 +5,19 @@ based on [Keep a Changelog](https://keepachangelog.com/); this project is in
 beta (`0.x`), so minor bumps may carry breaking changes until the 1.0 surface
 is locked. Versions correspond to the published PyPI wheels.
 
+## [0.17.1] — 2026-11-17
+
+### Fixed
+
+- **The returned fit is the fully converged one.** After the smoothing search, the
+  final inner fit at the chosen smoothing parameters started again from zero and
+  could stop slightly short (scat with 1,000 random-effect levels: fitted values
+  1.3e-4 sd from the fully converged answer). It now starts from the search's last
+  converged fit at those parameters and lands 4.5e-8 sd from it, in 2 inner steps
+  instead of 6–11. REML and smoothing parameters are unchanged.
+- **`shape_params_` docs for scat** now give the real layout,
+  `[log σ², log(ν − 3)]` (they said `[log ν, log σ²]`).
+
 ## [0.17.0] — 2026-11-17
 
 ### Added

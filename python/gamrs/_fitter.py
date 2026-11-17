@@ -1719,8 +1719,8 @@ class Gam:
     @property
     def shape_params_(self) -> np.ndarray:
         """Family-specific fitted shape parameters. Empty for fixed-shape
-        families (Gaussian, Bernoulli, Poisson, etc.). See family docs
-        for the per-family layout (ocat → log-gap θ, t-dist → [log ν, log σ²]).
+        families (Gaussian, Bernoulli, Poisson, etc.). Per family: ocat →
+        log-gap θ; scat → [log σ², log(ν − 3)], so ν = 3 + exp(θ[1]).
         """
         return np.asarray(self._require_fitted().shape_params)
 
