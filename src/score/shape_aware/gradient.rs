@@ -109,6 +109,58 @@ where
         Some(out)
     }
 
+    /// The Newton-A inputs of a `use_newton_irls` family at the converged
+    /// fit; `None` for any other family or when A_newton cannot be factored.
+    pub(crate) fn newton_tk(
+        &self,
+        fit: &GaussianInnerFit<S>,
+        family: &Family<L, K, V>,
+        rho_slice: &[f64],
+    ) -> Option<crate::inner::TkKKTInputs> {
+        if !family.loss.use_newton_irls() {
+            return None;
+        }
+        let prior = self
+            .prior_weights
+            .clone()
+            .unwrap_or_else(|| Array1::ones(fit.n));
+        crate::inner::pirls::lazy_tk_kkt_inputs(
+            family,
+            &self.y,
+            &fit.mu,
+            &fit.beta,
+            &prior,
+            &self.x_design,
+            &self.s_list,
+            self.penalty_blocks(),
+            &Array1::from(rho_slice.to_vec()),
+        )
+    }
+
+    /// The ρ-gradient of a Newton-weight family, differentiating the score's
+    /// Newton `log|X'W_newton X + λS|` (see [`Self::newton_tk`]).
+    pub(crate) fn newton_rho_gradient(
+        &self,
+        tk: &crate::inner::TkKKTInputs,
+        family: &Family<L, K, V>,
+        rho_slice: &[f64],
+        bsb_per_term: &[f64],
+        phi: f64,
+    ) -> Vec<f64> {
+        let rank_adj = family.loss.score_rank_adjustment();
+        (0..self.s_list.len())
+            .map(|j| {
+                let lambda_j = rho_slice[j].exp();
+                let adj_rank_j = ((self.rank_s_list[j] as i32 + rank_adj).max(1)) as f64;
+                let tk_j = (&tk.a1 * &tk.eta1_per_term[j] * &tk.lev_uw).sum();
+                lambda_j * bsb_per_term[j] / (2.0 * phi)
+                    + 0.5 * lambda_j * tk.tr_a_newton_inv_s_per_term[j]
+                    + 0.5 * tk_j
+                    - 0.5 * adj_rank_j
+            })
+            .collect()
+    }
+
     pub(crate) fn compute_rho_envelope_gradient(
         &self,
         fit: &GaussianInnerFit<S>,
@@ -189,36 +241,8 @@ where
         // Level-1 route below is μ-coordinate ½·Dμμμ against the PIRLS factor:
         // right for identity-link scat/ocat, not for a log-link Newton score
         // (NegBin stopped with a true gradient of 0.01–0.04 against a 8e-5 bar).
-        if family.loss.use_newton_irls() {
-            let prior = self
-                .prior_weights
-                .clone()
-                .unwrap_or_else(|| Array1::ones(n));
-            let rho_arr = Array1::from(rho_slice.to_vec());
-            let s_total = crate::design::combined_s(&self.s_list, &rho_arr, self.x_design.ncols());
-            if let Some(tk) = crate::inner::pirls::lazy_tk_kkt_inputs(
-                family,
-                &self.y,
-                &fit.mu,
-                &fit.beta,
-                &prior,
-                &self.x_design,
-                &self.s_list,
-                &s_total,
-                &rho_arr,
-            ) {
-                return (0..n_terms)
-                    .map(|j| {
-                        let lambda_j = rho_slice[j].exp();
-                        let adj_rank_j = ((self.rank_s_list[j] as i32 + rank_adj).max(1)) as f64;
-                        let tk_j = (&tk.a1 * &tk.eta1_per_term[j] * &tk.lev_uw).sum();
-                        lambda_j * bsb_per_term[j] / (2.0 * phi)
-                            + 0.5 * lambda_j * tk.tr_a_newton_inv_s_per_term[j]
-                            + 0.5 * tk_j
-                            - 0.5 * adj_rank_j
-                    })
-                    .collect();
-            }
+        if let Some(tk) = self.newton_tk(fit, family, rho_slice) {
+            return self.newton_rho_gradient(&tk, family, rho_slice, bsb_per_term, phi);
         }
         let ift_rows = family
             .loss
@@ -767,7 +791,6 @@ where
                 .clone()
                 .unwrap_or_else(|| Array1::ones(fit.n));
             let rho_arr = Array1::from(rho_slice.to_vec());
-            let s_total = crate::design::combined_s(&self.s_list, &rho_arr, self.x_design.ncols());
             crate::inner::pirls::lazy_tk_kkt_inputs(
                 family,
                 &self.y,
@@ -776,7 +799,7 @@ where
                 &prior_w,
                 &self.x_design,
                 &self.s_list,
-                &s_total,
+                self.penalty_blocks(),
                 &rho_arr,
             )
         } else {
@@ -1268,6 +1291,7 @@ mod ift_ladder {
             y,
             prior_weights: None,
             s_list: vec![s].into(),
+            s_blocks: Default::default(),
             family_base: tdist_identity(5.0, 1.0),
             rank_s_list: vec![rank],
             mp: 2,

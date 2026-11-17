@@ -5,7 +5,7 @@ based on [Keep a Changelog](https://keepachangelog.com/); this project is in
 beta (`0.x`), so minor bumps may carry breaking changes until the 1.0 surface
 is locked. Versions correspond to the published PyPI wheels.
 
-## [Unreleased]
+## [0.17.0] — 2026-11-17
 
 ### Added
 
@@ -40,6 +40,45 @@ is locked. Versions correspond to the published PyPI wheels.
   ~1e-4 inside the data range, and beyond the data the slope can reverse —
   both exactly as in scasm. Other families raise an error. Models without
   sc terms are unchanged (recorder battery bit-identical).
+
+### Performance
+
+- **Gamma, negative binomial, Tweedie and inverse Gaussian fits with a large
+  random effect are 3.5–7× faster.** These families score with the Newton
+  (observed-information) `A`, built apart from the PIRLS factor, and that
+  path had missed the 0.16.x speed-ups: it inverted `A` by one hand-written
+  triangular solve pair per column, summed every trace over the full p×p
+  matrix, added the penalties through a dense p×p sum per call, and the
+  negative binomial / Tweedie Hessian formed each `A⁻¹S_j` as a dense p³
+  product. It now inverts with LAPACK `dpotri` and works on each penalty's
+  nonzero block for `S·v`, `A⁻¹S`, the traces and adding `λS`; the negative
+  binomial / Tweedie smoothing-parameter step builds the Newton `A⁻¹` once
+  instead of once for the gradient and again for the Hessian. Single thread,
+  n=20,000, random effect + four CR smooths, against 0.16.3: with 1,000
+  levels Gamma 22.1 → 5.1 s, negative binomial 63.5 → 9.2 s, Tweedie 316 →
+  59 s, inverse Gaussian 216 → 60 s; with 50 levels negative binomial 1.64 →
+  1.38 s, Tweedie 15.4 → 14.2 s, inverse Gaussian 14.7 → 13.3 s, Gamma
+  unchanged at 0.65 s.
+- **Poisson and binomial gradients no longer re-factorise `A`.** The
+  β-chain of `log|A|` rebuilt `X'WX + λS` and LU-factorised it on every
+  gradient. For a canonical link that matrix is the fit's own `A`, whose
+  inverse the gradient already holds. Poisson with 1,000 levels 5.6 → 4.9 s,
+  with 50 levels 1.18 → 1.02 s.
+- **Exactness.** Iteration counts are unchanged on every benchmark fit; REML
+  agrees to 5e-11 (relative) and fitted values to 3e-8. Well-determined λ
+  agree to 3e-10 on Gamma, negative binomial and Poisson and to 1e-6 on
+  inverse Gaussian and Tweedie; the λ of a term already fitted as a straight
+  line (λ ≈ 1e5–1e9) moves by up to 1e-3. That is the size of a
+  summation-order change on these fits: 0.16.3 itself, given the same data
+  with the rows in reverse order, moves the same λ by the same amounts
+  (inverse Gaussian with 50 levels: 6e-7 and 5e-4; Tweedie with 1,000
+  levels: 8e-8 and 9e-5). Over the Python test battery (195 fits) the
+  largest change is such a straight-line λ in a 300-row Poisson fit (ρ
+  22.220 → 22.227, edf 1.000007 either way).
+- **Rust API:** `InnerSolver::lazy_tk_kkt_inputs`, `lazy_newton_log_det_h`
+  and `fisher_log_det_beta_chain` take the penalties' blocks
+  (`&[PenaltyBlock]`); `ShapeAwareEnvelopeScore` has an `s_blocks` field
+  (`Default::default()`; filled on first use).
 
 ## [0.16.3] — 2026-11-13
 

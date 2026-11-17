@@ -258,7 +258,9 @@ impl<'a> SplitDesign<'a> {
                 .zip(blocks)
                 .map(|(s_j, b)| {
                     let cols = a_inv.slice(s![.., b.range.clone()]);
-                    let m = times_block(cols, s_j, b).dot(&a_inv.slice(s![b.range.clone(), ..]));
+                    let m = b
+                        .times_s(cols, s_j.view())
+                        .dot(&a_inv.slice(s![b.range.clone(), ..]));
                     self.leverage(m.view())
                 })
                 .collect();
@@ -269,7 +271,7 @@ impl<'a> SplitDesign<'a> {
             .zip(blocks)
             .map(|(s_j, b)| {
                 let xa_b = xa.slice(s![.., b.range.clone()]);
-                let xa_s = times_block(xa_b, s_j, b);
+                let xa_s = b.times_s(xa_b, s_j.view());
                 Array1::from_shape_fn(xa.nrows(), |r| xa_s.row(r).dot(&xa_b.row(r)))
             })
             .collect()
@@ -311,16 +313,6 @@ fn dot(a: &[f64], b: &[f64]) -> f64 {
 fn row(a: &Array2<f64>, r: usize) -> &[f64] {
     let k = a.ncols();
     &a.as_slice().expect("standard layout")[r * k..][..k]
-}
-
-/// `Y · S[block, block]` for the `block` columns `Y` of a penalty `S`.
-fn times_block(y: ArrayView2<f64>, s: &Array2<f64>, b: &PenaltyBlock) -> Array2<f64> {
-    let s_b = s.slice(s![b.range.clone(), b.range.clone()]);
-    if b.diagonal {
-        &y * &s_b.diag()
-    } else {
-        y.dot(&s_b)
-    }
 }
 
 /// `A · B` without the zero products of a `B` that is dense only in a few

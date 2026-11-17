@@ -806,7 +806,12 @@ pub trait InnerSolver {
     /// of mgcv_rust `src/reml/mod.rs:460-483` (the Newton-A log|H| block
     /// in the REML score evaluator, NOT inside `fit_pirls_cached`).
     #[allow(unused_variables)]
-    fn lazy_newton_log_det_h(&self, fit: &Self::Fit, rho: &Array1<f64>) -> Option<f64> {
+    fn lazy_newton_log_det_h(
+        &self,
+        fit: &Self::Fit,
+        rho: &Array1<f64>,
+        s_blocks: &[crate::design::PenaltyBlock],
+    ) -> Option<f64> {
         None
     }
 
@@ -824,6 +829,7 @@ pub trait InnerSolver {
         &self,
         fit: &Self::Fit,
         rho: &Array1<f64>,
+        s_blocks: &[crate::design::PenaltyBlock],
     ) -> Option<crate::inner::TkKKTInputs> {
         None
     }
@@ -833,7 +839,12 @@ pub trait InnerSolver {
     /// observed penalised Hessian. `None` where the inner solver has no such
     /// weight (or already supplies the Newton form via `lazy_tk_kkt_inputs`).
     #[allow(unused_variables)]
-    fn fisher_log_det_beta_chain(&self, fit: &Self::Fit, rho: &Array1<f64>) -> Option<Vec<f64>> {
+    fn fisher_log_det_beta_chain(
+        &self,
+        fit: &Self::Fit,
+        rho: &Array1<f64>,
+        s_blocks: &[crate::design::PenaltyBlock],
+    ) -> Option<Vec<f64>> {
         None
     }
 }

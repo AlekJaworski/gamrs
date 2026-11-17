@@ -242,18 +242,20 @@ where
         let rho_slice: Vec<f64> = theta.slice(ndarray::s![..n_terms]).to_vec();
         let value = self.score_value(&fit, &family, &rho_slice);
 
+        // Newton-A inputs for `use_newton_irls()` families (NegBin here),
+        // shared by the gradient and the Hessian below: both differentiate
+        // the score's Newton `log|H|`, not the Fisher one.
+        let lazy_tk = self.newton_tk(&fit, &family, &rho_slice);
+
         // ρ-gradient via the shared envelope helper. Per-term `bsb_j`
         // and `tr(H⁻¹·S_j)` are computed here; φ comes from the active
         // Profile (FixedAtOneProfile for NegBin → φ=1).
         let mut bsb_per_term: Vec<f64> = Vec::with_capacity(n_terms);
-        let mut tr_hinv_s_per_term: Vec<f64> = Vec::with_capacity(n_terms);
         let mut bsb_total = 0.0_f64;
         for j in 0..n_terms {
             let s_beta = self.s_list[j].dot(&fit.beta);
             let bsb_j: f64 = fit.beta.iter().zip(s_beta.iter()).map(|(a, b)| a * b).sum();
-            let tr_hinv_s_j = fit.trace_a_inv(self.s_list[j].view());
             bsb_per_term.push(bsb_j);
-            tr_hinv_s_per_term.push(tr_hinv_s_j);
             bsb_total += rho_slice[j].exp() * bsb_j;
         }
         let tr_hinv_xtwx = fit.p as f64;
@@ -261,14 +263,23 @@ where
             .profile
             .dispersion(&family.loss, &fit, 1.0, bsb_total, tr_hinv_xtwx, self.mp)
             .unwrap_or(1.0);
-        let rho_grad = self.compute_rho_envelope_gradient(
-            &fit,
-            &family,
-            &rho_slice,
-            &bsb_per_term,
-            &tr_hinv_s_per_term,
-            phi,
-        );
+        let rho_grad = match &lazy_tk {
+            Some(tk) => self.newton_rho_gradient(tk, &family, &rho_slice, &bsb_per_term, phi),
+            None => {
+                let tr_hinv_s_per_term: Vec<f64> = (self.s_list.iter())
+                    .zip(self.penalty_blocks())
+                    .map(|(s_j, b)| b.trace(fit.a_inv_ref().view(), s_j.view()))
+                    .collect();
+                self.compute_rho_envelope_gradient(
+                    &fit,
+                    &family,
+                    &rho_slice,
+                    &bsb_per_term,
+                    &tr_hinv_s_per_term,
+                    phi,
+                )
+            }
+        };
         let mut g_rho = Array1::<f64>::zeros(n_terms);
         for j in 0..n_terms {
             g_rho[j] = rho_grad[j];
@@ -281,30 +292,8 @@ where
         // score formula uses (Newton-W, not Fisher-W).
         let lambda: Vec<f64> = rho_slice.iter().map(|&r| r.exp()).collect();
         let sigma2 = phi; // ScaleParameterMethod::Profile uses φ from above.
-        let use_newton = family.loss.use_newton_irls();
-        let lazy_tk = if use_newton {
-            let prior_w = self
-                .prior_weights
-                .clone()
-                .unwrap_or_else(|| Array1::ones(fit.n));
-            let rho_arr = Array1::from(rho_slice.clone());
-            let s_total = crate::design::combined_s(&self.s_list, &rho_arr, self.x_design.ncols());
-            crate::inner::pirls::lazy_tk_kkt_inputs(
-                &family,
-                &self.y,
-                &fit.mu,
-                &fit.beta,
-                &prior_w,
-                &self.x_design,
-                &self.s_list,
-                &s_total,
-                &rho_arr,
-            )
-        } else {
-            None
-        };
-        let (a_inv_owned, xtwx_owned, dev_grad_beta) = if let Some(ref tk) = lazy_tk {
-            let a_inv = tk.a_newton_inv.clone();
+        let (a_inv, xtwx_owned, dev_grad_beta) = if let Some(ref tk) = lazy_tk {
+            let a_inv = &tk.a_newton_inv;
             let n = fit.n;
             let mut w_newton = Array1::<f64>::zeros(n);
             for i in 0..n {
@@ -334,7 +323,7 @@ where
             );
             (a_inv, xtwx_n, dev_grad)
         } else {
-            let a_inv = fit.a_inv();
+            let a_inv = fit.a_inv_ref();
             let xtwx_f = build_xtwx(&self.x_design, &fit.working_weights);
             let dev_grad = compute_dev_grad_beta_working_rss(
                 &self.x_design,
@@ -346,9 +335,10 @@ where
         };
         let ctx = HessIftCtx {
             s_list: &self.s_list,
+            s_blocks: self.penalty_blocks(),
             lambda: &lambda,
             beta: &fit.beta,
-            a_inv: &a_inv_owned,
+            a_inv,
             xtwx: &xtwx_owned,
             sigma2,
             dev_grad_beta: &dev_grad_beta,
@@ -362,7 +352,7 @@ where
         // `warm_state` write (`gam_optimized.rs:1408-1414`). b1[:, k] =
         // -λ_k · A⁻¹ · S_k · β is the same IFT first-derivative used
         // inside `hess_ift_rho` above; we recompute here from the already-
-        // materialised `a_inv_owned` (cheap: m × O(p²) GEMVs).
+        // materialised `a_inv` (cheap: m × O(p²) GEMVs).
         //
         // Stored as Newton-A b1 when `use_newton_irls()` (matches the A
         // used in the Hessian and the score's log|H| override); Fisher-A
@@ -374,7 +364,7 @@ where
             let mut b1 = Array2::<f64>::zeros((p, n_terms));
             for k in 0..n_terms {
                 let s_k_beta: Array1<f64> = self.s_list[k].dot(&fit.beta);
-                let ainv_sk_beta: Array1<f64> = a_inv_owned.dot(&s_k_beta);
+                let ainv_sk_beta: Array1<f64> = a_inv.dot(&s_k_beta);
                 let lam_k = lambda[k];
                 for r in 0..p {
                     b1[[r, k]] = -lam_k * ainv_sk_beta[r];
@@ -631,7 +621,6 @@ where
                 .clone()
                 .unwrap_or_else(|| Array1::ones(fit.n));
             let rho_arr = Array1::from(rho_slice.clone());
-            let s_total = crate::design::combined_s(&self.s_list, &rho_arr, self.x_design.ncols());
             crate::inner::pirls::lazy_tk_kkt_inputs(
                 family,
                 &self.y,
@@ -640,7 +629,7 @@ where
                 &prior_w,
                 &self.x_design,
                 &self.s_list,
-                &s_total,
+                self.penalty_blocks(),
                 &rho_arr,
             )
         } else {
@@ -653,8 +642,8 @@ where
         // path: build xtwx from `fit.working_weights` and use `fit.a_inv()`.
         // `dev_grad_beta` then uses the SAME W/working_response pair so
         // the term-2 `(dev_grad)·b2` piece stays consistent.
-        let (a_inv_owned, xtwx_owned, dev_grad_beta) = if let Some(ref tk) = lazy_tk {
-            let a_inv = tk.a_newton_inv.clone();
+        let (a_inv, xtwx_owned, dev_grad_beta) = if let Some(ref tk) = lazy_tk {
+            let a_inv = &tk.a_newton_inv;
             // Newton working weights — port of `lazy_tk_kkt_inputs`'s internal
             // `w_newton` (pirls.rs:171-187). Not exposed on TkKKTInputs so we
             // re-derive here using the same `wf · α` formula with the Fisher
@@ -693,7 +682,7 @@ where
             (a_inv, xtwx_n, dev_grad)
         } else {
             // Fisher / Ocat path.
-            let a_inv = fit.a_inv();
+            let a_inv = fit.a_inv_ref();
             let xtwx_f = build_xtwx(&self.x_design, &fit.working_weights);
             let dev_grad = compute_dev_grad_beta_working_rss(
                 &self.x_design,
@@ -706,9 +695,10 @@ where
 
         let ctx = HessIftCtx {
             s_list: &self.s_list,
+            s_blocks: self.penalty_blocks(),
             lambda: &lambda,
             beta: &fit.beta,
-            a_inv: &a_inv_owned,
+            a_inv,
             xtwx: &xtwx_owned,
             sigma2,
             dev_grad_beta: &dev_grad_beta,
@@ -831,7 +821,6 @@ where
                 .clone()
                 .unwrap_or_else(|| Array1::ones(n));
             let rho_arr = Array1::from(rho_slice.clone());
-            let s_total = crate::design::combined_s(&self.s_list, &rho_arr, self.x_design.ncols());
             crate::inner::pirls::lazy_tk_kkt_inputs(
                 family,
                 &self.y,
@@ -840,7 +829,7 @@ where
                 &prior_w,
                 &self.x_design,
                 &self.s_list,
-                &s_total,
+                self.penalty_blocks(),
                 &rho_arr,
             )
         } else {

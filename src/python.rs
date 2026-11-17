@@ -296,6 +296,7 @@ impl PyFittedGam {
             y: y_arr.clone(),
             prior_weights: None,
             s_list: prep.s_list.clone().into(),
+            s_blocks: Default::default(),
             family_base: crate::family::ocat_identity(
                 Array1::zeros(n_cats.saturating_sub(2)),
                 n_cats,
@@ -587,11 +588,6 @@ impl PyFittedGam {
         // diagnostic has to evaluate the SAME criterion the fitter optimises,
         // or a profile taken with it is a profile of a different function.
         let prior_w_ones = Array1::<f64>::ones(fit.n);
-        let s_total_eval = crate::design::combined_s(
-            &prep.s_list,
-            &Array1::from(rho_slice.to_vec()),
-            prep.x_design.ncols(),
-        );
         let log_det_h = crate::inner::pirls::score_log_det_h(
             &family,
             &y_arr,
@@ -599,7 +595,9 @@ impl PyFittedGam {
             &fit.mu,
             &prior_w_ones,
             &prep.x_design,
-            &s_total_eval,
+            &prep.s_list,
+            &crate::design::penalty_blocks(&prep.s_list),
+            &Array1::from(rho_slice.to_vec()),
             &fit,
         );
         let mp = prep.mp;
@@ -641,6 +639,7 @@ impl PyFittedGam {
                 y: y_arr.clone(),
                 prior_weights: None,
                 s_list: prep.s_list.clone().into(),
+                s_blocks: Default::default(),
                 family_base: tdist_identity(5.0, 1.0),
                 rank_s_list: prep.rank_s_list.clone(),
                 mp: prep.mp,
@@ -791,7 +790,11 @@ impl PyFittedGam {
         // time — see `src/reml/mod.rs:460-483`). Mirrors the score body
         // in `envelope.rs`.
         let log_det_h = inner
-            .lazy_newton_log_det_h(&fit, &rho_slice)
+            .lazy_newton_log_det_h(
+                &fit,
+                &rho_slice,
+                &crate::design::penalty_blocks(&prep.s_list),
+            )
             .unwrap_or_else(|| fit.log_det_a());
         let mp = prep.mp;
 

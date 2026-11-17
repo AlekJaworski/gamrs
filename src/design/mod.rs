@@ -27,7 +27,7 @@
 
 use std::ops::Range;
 
-use ndarray::{s, Array1, Array2, ArrayView2, Axis};
+use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2, Axis};
 use ndarray_linalg::Eigh;
 
 use crate::error::{GamrsError, Result};
@@ -263,6 +263,59 @@ impl PenaltyBlock {
         let block = s.slice(s![range.clone(), range.clone()]);
         let diagonal = block.indexed_iter().all(|((r, c), &v)| r == c || v == 0.0);
         Self { range, diagonal }
+    }
+
+    /// `tr(M·S)` for the penalty `S` this block was taken from.
+    pub fn trace(&self, m: ArrayView2<f64>, s: ArrayView2<f64>) -> f64 {
+        let mut tr = 0.0;
+        for i in self.range.clone() {
+            for k in self.range.clone() {
+                tr += m[[i, k]] * s[[k, i]];
+            }
+        }
+        tr
+    }
+
+    /// `S·v` for the penalty `S` this block was taken from.
+    pub fn s_dot(&self, s: ArrayView2<f64>, v: ArrayView1<f64>) -> Array1<f64> {
+        let r = self.range.clone();
+        let mut out = Array1::zeros(v.len());
+        out.slice_mut(s![r.clone()])
+            .assign(&s.slice(s![r.clone(), r.clone()]).dot(&v.slice(s![r])));
+        out
+    }
+
+    /// `Y·S[block, block]` for the `block` columns `Y` of some `M`: the
+    /// nonzero columns of `M·S`.
+    pub fn times_s(&self, y: ArrayView2<f64>, s: ArrayView2<f64>) -> Array2<f64> {
+        let s_b = s.slice(s![self.range.clone(), self.range.clone()]);
+        if self.diagonal {
+            &y * &s_b.diag()
+        } else {
+            y.dot(&s_b)
+        }
+    }
+}
+
+pub fn penalty_blocks(s_list: &[Array2<f64>]) -> Vec<PenaltyBlock> {
+    s_list.iter().map(|s| PenaltyBlock::of(s.view())).collect()
+}
+
+/// `A += Σ_j exp(ρ_j)·S_j`, touching only each penalty's block. Equal to
+/// adding [`combined_s`] wherever the blocks do not overlap.
+pub fn add_penalties(
+    a: &mut Array2<f64>,
+    s_list: &[Array2<f64>],
+    blocks: &[PenaltyBlock],
+    rho: &Array1<f64>,
+) {
+    for ((s, b), &r) in s_list.iter().zip(blocks).zip(rho) {
+        let lambda = r.exp();
+        for i in b.range.clone() {
+            for k in b.range.clone() {
+                a[[i, k]] += lambda * s[[i, k]];
+            }
+        }
     }
 }
 
