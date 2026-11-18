@@ -675,15 +675,14 @@ impl Default for FellnerSchallOpts {
 /// `OuterFit { theta: log_lambda_hat, ... }` so the caller can plug
 /// it into the same downstream pipeline as Newton's output.
 ///
-/// `phi_fn` reads the dispersion at the current fit — for Bernoulli /
-/// Poisson / NegBin it's `1.0`; for Gaussian / Gamma / IG it's the
-/// Pearson φ̂ at convergence.
+/// `phi_fn(fit, edf)` is the scale the update uses at the current fit: 1 for
+/// a known scale, otherwise mgcv's `efsudr` estimate (see the driver).
 pub fn fellner_schall_minimize<I, S>(
     inner: &I,
     s_list: &[Array2<f64>],
     rank_s_list: &[usize],
     rho0: Array1<f64>,
-    phi_fn: impl Fn(&crate::inner::GaussianInnerFit<S>) -> f64,
+    phi_fn: impl Fn(&crate::inner::GaussianInnerFit<S>, f64) -> f64,
     opts: FellnerSchallOpts,
     stats: Option<&crate::stats::FitStats>,
 ) -> Result<OuterFit>
@@ -718,8 +717,21 @@ where
         if let Some(s) = stats {
             s.record_pirls_call(fit.iterations);
         }
-        let phi = phi_fn(&fit);
         let a_inv = fit.a_inv();
+        let tr: Vec<f64> = s_list
+            .iter()
+            .map(|s_i| {
+                let mut t = 0.0_f64;
+                for r in 0..a_inv.nrows() {
+                    for c in 0..a_inv.ncols() {
+                        t += a_inv[[r, c]] * s_i[[c, r]];
+                    }
+                }
+                t
+            })
+            .collect();
+        let edf = fit.p as f64 - (0..m).map(|i| rho[i].exp() * tr[i]).sum::<f64>();
+        let phi = phi_fn(&fit, edf);
 
         // Compute the FS step per smooth and the max |log change|.
         let mut max_change = 0.0_f64;
@@ -728,18 +740,11 @@ where
             let s_i = &s_list[i];
             let lambda_i = rho[i].exp().max(1e-20);
             let rank_i = rank_s_list[i] as f64;
-            // tr(A⁻¹ S_i)
-            let mut tr = 0.0_f64;
-            for r in 0..a_inv.nrows() {
-                for c in 0..a_inv.ncols() {
-                    tr += a_inv[[r, c]] * s_i[[c, r]];
-                }
-            }
             // β' S_i β
             let s_beta = s_i.dot(&fit.beta);
             let bsb_raw: f64 = fit.beta.iter().zip(s_beta.iter()).map(|(a, b)| a * b).sum();
             let bsb = bsb_raw.max(tiny);
-            let num_raw = rank_i / lambda_i - tr;
+            let num_raw = rank_i / lambda_i - tr[i];
             let num = num_raw.max(tiny);
             let log_ratio_raw = (phi * num / bsb).ln();
             let log_ratio = log_ratio_raw.clamp(-opts.log_step_clamp, opts.log_step_clamp);

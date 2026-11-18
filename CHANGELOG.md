@@ -5,6 +5,19 @@ based on [Keep a Changelog](https://keepachangelog.com/); this project is in
 beta (`0.x`), so minor bumps may carry breaking changes until the 1.0 surface
 is locked. Versions correspond to the published PyPI wheels.
 
+## [Unreleased]
+
+### Fixed
+
+- **`method="fREML"` for Gamma, inverse Gaussian, quasipoisson and
+  quasibinomial.** The Fellner-Schall update held the scale at 1, so the
+  smoothing parameters came out wrong by about a factor 1/φ: log λ off by +1.0
+  and +3.1 on a Gamma fit with φ ≈ 0.32, −0.9 and −1.5 on a quasipoisson fit
+  with φ ≈ 2.1, +1.6 on an inverse Gaussian fit with φ ≈ 0.2. It
+  now reads the scale estimate mgcv's own Fellner-Schall optimiser uses
+  (`gam(optimizer = "efs")`: Pearson with Fletcher's correction, refreshed at
+  every update), and lands on mgcv's smoothing parameters to 2e-4 in log λ.
+
 ## [0.17.2] — 2026-11-18
 
 ### Fixed

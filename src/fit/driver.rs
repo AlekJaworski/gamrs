@@ -302,11 +302,10 @@ where
                 &score.s_list,
                 &score.rank_s_list,
                 Array1::zeros(n_terms),
-                // FS dispersion: 1.0 for fixed-φ families (Bernoulli,
-                // Poisson, NegBin), Pearson φ̂ for profiled families.
-                // mgcv R defaults φ=1 for fREML on GLMs (matches mgcv_rust
-                // smooth.rs:3894 caller).
-                |_fit| 1.0,
+                |fit, edf| match score.loss.fixed_dispersion() {
+                    Some(phi) => phi,
+                    None => fletcher_scale(&score.inner, fit, edf),
+                },
                 crate::outer::FellnerSchallOpts::default(),
                 score.stats(),
             )?;
@@ -349,6 +348,38 @@ where
         shape_params: Array1::zeros(0),
         stats: score.stats.snapshot(),
     })
+}
+
+/// mgcv's default scale estimate (`gam.control(scale.est = "fletcher")`), the
+/// one its Fellner-Schall loop `efsudr` reads at each fit: Pearson over
+/// `n − edf`, divided by `1 + s̄` with `s̄ = mean(V'(μ)(y − μ)/V(μ))`.
+fn fletcher_scale<L, K, V, S>(
+    inner: &PirlsInner<L, K, V, S>,
+    fit: &GaussianInnerFit<S>,
+    edf: f64,
+) -> f64
+where
+    L: Loss + Clone,
+    K: Link + Clone,
+    V: VarianceFn + Clone,
+    S: LinearSolver,
+{
+    let n = inner.y.len();
+    let (mut pearson, mut s_bar) = (0.0_f64, 0.0_f64);
+    for i in 0..n {
+        let (y, mu) = (inner.y[i], fit.mu[i]);
+        let var = inner.family.variance.variance(mu).max(1e-300);
+        let w = inner.prior_weights.as_ref().map_or(1.0, |w| w[i]);
+        pearson += w * (y - mu) * (y - mu) / var;
+        s_bar += inner.family.variance.d_variance(mu) * (y - mu) / var;
+    }
+    let s_bar = s_bar / n as f64;
+    let phi = pearson / (n as f64 - edf);
+    if s_bar.is_finite() {
+        phi / (1.0 + s_bar.max(-0.9))
+    } else {
+        phi
+    }
 }
 
 /// Default-Cholesky-backend shorthand for `fit_pirls_envelope`. 99% of
