@@ -307,6 +307,7 @@ impl Loss for Tweedie {
         dp: f64,
         _n_minus_mp: f64,
         phi_score: f64,
+        prior_w: Option<ndarray::ArrayView1<f64>>,
     ) -> Option<ndarray::Array1<f64>> {
         let phi = phi_score.max(1e-12);
         let p = self.p;
@@ -322,22 +323,22 @@ impl Loss for Tweedie {
         // Series derivatives.
         let y_slice: Vec<f64> = y.iter().copied().collect();
         let (_, dlog_w_drho, _, dlog_w_dp) = crate::special::tweedie_series(&y_slice, phi, p);
-        let sum_dlog_w_drho: f64 = dlog_w_drho.iter().sum();
-        let sum_dlog_w_dp: f64 = dlog_w_dp.iter().sum();
-
         let n = y.len();
         debug_assert_eq!(mu.len(), n, "y/mu length mismatch in Tweedie analytic grad");
+        let wt = |i: usize| prior_w.map_or(1.0, |w| w[i]);
+        let sum_dlog_w_drho: f64 = (0..n).map(|i| wt(i) * dlog_w_drho[i]).sum();
+        let sum_dlog_w_dp: f64 = (0..n).map(|i| wt(i) * dlog_w_dp[i]).sum();
 
         // Per-obs l_base contributions and its p-derivative
         // (`tweedie_dls_dp::dl_base_dp` from v0.x).
         let mut sum_l_base = 0.0_f64;
         let mut sum_dl_base_dp = 0.0_f64;
-        for &yi in y.iter() {
+        for (i, &yi) in y.iter().enumerate() {
             if yi <= 0.0 {
                 continue;
             }
             let log_y = yi.ln();
-            let y_2p = yi.powf(twop);
+            let y_2p = wt(i) * yi.powf(twop);
             // l_base = y^(2-p) · (1/(1-p) - 1/(2-p)) · (1/φ)
             //        = y^(2-p) / ((1-p)·(2-p)·φ)
             sum_l_base += y_2p * (inv_onep - inv_twop) * inv_phi;
@@ -364,7 +365,7 @@ impl Loss for Tweedie {
             let term_b = (y_mu1p * log_mu - y_2p_log) * inv_onep;
             let term_c = -(y_2p - mu2p) * inv_twop2;
             let term_d = (y_2p - y_mu1p) * inv_onep2;
-            sum_dd_dp += 2.0 * (term_a + term_b + term_c + term_d);
+            sum_dd_dp += 2.0 * wt(i) * (term_a + term_b + term_c + term_d);
         }
 
         // Mp from n_minus_mp = n - Mp.

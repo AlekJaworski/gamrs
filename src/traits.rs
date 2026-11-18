@@ -530,6 +530,7 @@ pub trait Loss {
     /// - `phi_score` — the score's current σ² (`Profile` output, or
     ///   `fixed_dispersion()` for shape-managed dispersion families like
     ///   Tweedie). The impl uses this for the `D/(2φ)` and `log(2πφ)` terms.
+    /// - `prior_w` — prior weights, multiplying each observation's terms.
     ///
     /// Envelope-theorem assumption: at PIRLS convergence, ∂(β̂)/∂(shape) does
     /// NOT contribute to the score gradient — only the explicit
@@ -545,6 +546,7 @@ pub trait Loss {
         _dp: f64,
         _n_minus_mp: f64,
         _phi_score: f64,
+        _prior_w: Option<ndarray::ArrayView1<f64>>,
     ) -> Option<ndarray::Array1<f64>> {
         None
     }

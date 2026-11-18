@@ -5,6 +5,22 @@ based on [Keep a Changelog](https://keepachangelog.com/); this project is in
 beta (`0.x`), so minor bumps may carry breaking changes until the 1.0 surface
 is locked. Versions correspond to the published PyPI wheels.
 
+## [Unreleased]
+
+### Fixed
+
+- **Fits with `sample_weight` for Gamma (log link), inverse Gaussian, negative
+  binomial, Tweedie and scat.** The smoothing-parameter search followed a
+  gradient that left the prior weights out of parts of the REML score it was
+  differentiating, so with non-unit weights it stopped away from the REML
+  optimum. For negative binomial, Tweedie and scat the score itself also
+  dropped the weights from the saturated log-likelihood (mgcv weights it),
+  which moved θ, p and ν. On a 400-row weighted fixture against mgcv: negative
+  binomial θ was 1.35 against mgcv's 4.24 and is now 4.2364 against 4.2364;
+  fitted values were off by up to 5% (negative binomial), 3% (Tweedie), 0.6%
+  (inverse Gaussian) and 0.5% (Gamma), and now by at most 8e-7, 8e-7, 6e-8 and
+  4e-5. Unweighted fits are unchanged.
+
 ## [0.17.1] — 2026-11-17
 
 ### Fixed

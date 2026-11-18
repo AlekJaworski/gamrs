@@ -115,6 +115,7 @@ where
                     fit.deviance,
                     1.0,
                     ctx.phi_center,
+                    self.prior_weights.as_ref().map(|w| w.view()),
                 )
                 .is_some();
         // The IFT analytic shape-gradient path fires when the family
@@ -312,7 +313,7 @@ where
                 } else {
                     1.0
                 };
-                w_newton[i] = wf * alpha;
+                w_newton[i] = self.prior_weights.as_ref().map_or(1.0, |w| w[i]) * wf * alpha;
             }
             let xtwx_n = build_xtwx(&self.x_design, &w_newton);
             let dev_grad = compute_dev_grad_beta_working_rss(
@@ -644,10 +645,8 @@ where
         // the term-2 `(dev_grad)·b2` piece stays consistent.
         let (a_inv, xtwx_owned, dev_grad_beta) = if let Some(ref tk) = lazy_tk {
             let a_inv = &tk.a_newton_inv;
-            // Newton working weights — port of `lazy_tk_kkt_inputs`'s internal
-            // `w_newton` (pirls.rs:171-187). Not exposed on TkKKTInputs so we
-            // re-derive here using the same `wf · α` formula with the Fisher
-            // fallback when α ≤ 0 (matching pirls.rs:268-271 alpha clamp).
+            // PIRLS's own Newton working weight (α ≤ 0 falls back to Fisher),
+            // which is what `fit.working_response` was stamped with.
             let n = fit.n;
             let mut w_newton = Array1::<f64>::zeros(n);
             for i in 0..n {
@@ -666,7 +665,7 @@ where
                 } else {
                     1.0
                 };
-                w_newton[i] = wf * alpha;
+                w_newton[i] = self.prior_weights.as_ref().map_or(1.0, |w| w[i]) * wf * alpha;
             }
             let xtwx_n = build_xtwx(&self.x_design, &w_newton);
             // Newton normal equation: `X'·W_n·(z_n − Xβ) = λSβ` at converged β.

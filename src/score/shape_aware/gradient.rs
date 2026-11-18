@@ -633,11 +633,12 @@ where
             (dp / n_minus_mp).max(1e-8)
         };
 
-        let ls_sum: f64 = self
-            .y
-            .iter()
-            .map(|&yi| family.loss.saturated_log_lik(yi, phi))
-            .sum();
+        let ls_sum = crate::score::weighted_saturated_log_lik(
+            &family.loss,
+            &self.y,
+            phi,
+            self.prior_weights.as_ref(),
+        );
         let dp = deviance_ls + bsb_total;
         let reml = crate::score::reml_score_from_parts(
             dp,
@@ -702,6 +703,7 @@ where
                 dp,
                 n_minus_mp,
                 phi,
+                self.prior_weights.as_ref().map(|w| w.view()),
             ) {
                 debug_assert_eq!(
                     analytic.len(),
@@ -1048,6 +1050,7 @@ where
                 dp,
                 n_minus_mp,
                 phi_center,
+                self.prior_weights.as_ref().map(|w| w.view()),
             ) {
                 debug_assert_eq!(analytic.len(), n_shape);
                 for k in 0..n_shape {
@@ -1186,6 +1189,7 @@ where
                 dp,
                 ctx.n_minus_mp,
                 phi,
+                self.prior_weights.as_ref().map(|w| w.view()),
             ) {
                 debug_assert_eq!(analytic.len(), n_shape);
                 for k in 0..n_shape {

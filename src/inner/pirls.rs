@@ -254,26 +254,9 @@ where
     let n = x_design.nrows();
     let p = x_design.ncols();
 
-    // Newton weights w_newton[i] = wf · α — NO prior_w factor (mgcv_rust's
-    // `compute_newton_score_weights` uses pure family weights; prior_w is
-    // applied separately in the score formula). Match v0.x's
-    // `compute_tk_kkt_inputs` which used `wf · α` without prior_w.
-    let mut w_newton = Array1::<f64>::zeros(n);
-    for i in 0..n {
-        let mu_i = mu[i];
-        let var_i = family.variance.variance(mu_i).max(1e-300);
-        let g_prime_mu = family.link.d_link_dmu(mu_i);
-        let wf = 1.0 / (var_i * g_prime_mu * g_prime_mu);
-        let v_prime = family.variance.d_variance(mu_i);
-        let v1n = v_prime / var_i;
-        let g_double_prime = family.link.d2_link_dmu(mu_i);
-        let g2n = g_double_prime / g_prime_mu;
-        let c_resid = y[i] - mu_i;
-        let alpha = 1.0 + c_resid * (v1n + g2n);
-        w_newton[i] = wf * alpha;
-        if !w_newton[i].is_finite() {
-            return None;
-        }
+    let w_newton = newton_score_weights(family, y, mu, prior_w);
+    if w_newton.iter().any(|w| !w.is_finite()) {
+        return None;
     }
 
     let xs = x_design.split();
@@ -329,7 +312,7 @@ where
         let alpha = 1.0 + c_resid * (v1n + g2n);
         let xx = v2n - v1n * v1n + g3n - g2n * g2n;
         let dalpha_dmu = -(v1n + g2n) + c_resid * xx;
-        a1[i] = wf * (alpha * (-v1n - 2.0 * g2n) + dalpha_dmu) * g_prime_mu.recip();
+        a1[i] = prior_w[i] * wf * (alpha * (-v1n - 2.0 * g2n) + dalpha_dmu) * g_prime_mu.recip();
     }
 
     let lev_uw = xs.leverage(a_inv.view());
@@ -357,7 +340,6 @@ where
         eta1_per_term.push(xs.dot_vec(b1_k.view()));
         tr_a_newton_inv_s_per_term.push(b.trace(a_inv.view(), s_list[k].view()));
     }
-    let _ = prior_w; // kept for signature uniformity with the score-weights helper
     let sign_w = Array1::<f64>::ones(n);
     Some(super::TkKKTInputs {
         a1,

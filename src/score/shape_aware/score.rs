@@ -402,11 +402,12 @@ where
         } else {
             fit.log_det_a()
         };
-        let ls_sum: f64 = self
-            .y
-            .iter()
-            .map(|&yi| family.loss.saturated_log_lik(yi, phi))
-            .sum();
+        let ls_sum = crate::score::weighted_saturated_log_lik(
+            &family.loss,
+            &self.y,
+            phi,
+            self.prior_weights.as_ref(),
+        );
         crate::score::reml_score_from_parts(dp, phi, self.mp, log_det_h, log_det_lambda_s, ls_sum)
     }
 }
