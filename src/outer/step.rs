@@ -293,6 +293,27 @@ pub(super) fn quadratic_model_error(
     (pred - actual_change).abs() / denom
 }
 
+/// Whether no step `t·s`, `t ∈ (0, 1]`, can lower the score by more than `margin`
+/// under the quadratic model `g'·ts + ½ t²·s'Hs`. Halving only ever tries such
+/// shorter steps, so once this holds the remaining probes cannot be accepted.
+pub(super) fn model_cannot_improve(
+    g: &Array1<f64>,
+    h: &Array2<f64>,
+    step: &Array1<f64>,
+    margin: f64,
+) -> bool {
+    let a: f64 = g.iter().zip(step.iter()).map(|(x, y)| x * y).sum();
+    let b = 0.5 * step.dot(&h.dot(step));
+    let best = if a >= 0.0 {
+        (a + b).min(0.0)
+    } else if b > 0.0 && -a < 2.0 * b {
+        -a * a / (4.0 * b)
+    } else {
+        a + b
+    };
+    best > -margin
+}
+
 /// Clamp a trial point into the per-axis box, if there is one — mgcv-style
 /// box-constrained Newton (`smooth.r:~1976` lo/hi clamp).
 pub(super) fn clamp_to_box(mut t: Array1<f64>, bnds: Option<&Vec<(f64, f64)>>) -> Array1<f64> {
@@ -701,6 +722,18 @@ mod tests {
         // Predicted -0.5; realised a token -1e-8.
         let qerr = quadratic_model_error(&g, &h, &s, -1e-8, 70.0, MGCV_CONV_TOL);
         assert!(qerr > QERROR_THRESH, "expected a refusal, got {qerr:.3e}");
+    }
+
+    #[test]
+    fn model_cannot_improve_uses_the_interior_minimum() {
+        let g = array![-1.0];
+        let h = array![[4.0]];
+        // Model along s = 1: -t + 2t², minimum -1/8 at t = 1/4.
+        let s = array![1.0];
+        assert!(!model_cannot_improve(&g, &h, &s, 0.12));
+        assert!(model_cannot_improve(&g, &h, &s, 0.13));
+        // Uphill direction: nothing to gain at any length.
+        assert!(model_cannot_improve(&g, &h, &(-&s), 1e-12));
     }
 
     #[test]

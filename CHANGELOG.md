@@ -21,6 +21,19 @@ is locked. Versions correspond to the published PyPI wheels.
   (inverse Gaussian) and 0.5% (Gamma), and now by at most 8e-7, 8e-7, 6e-8 and
   4e-5. Unweighted fits are unchanged.
 
+### Changed
+
+- **Fewer wasted evaluations at the end of the smoothing search.** When the
+  last Newton step could not improve the REML score (typical once a term has
+  gone flat, λ → ∞), the step-halving loop switched to steepest descent and
+  then ran all 30 halvings, each a full inner fit, at a scale where no step
+  could be accepted. It now stops as soon as the quadratic model says no
+  shorter step can beat the acceptance margin, or the step falls below the
+  minimum length. On a random effect plus four smooths (n = 20,000), scat with
+  50 levels: 39 → 13 line-search evaluations, 2.0 s → 1.5 s; with 1,000
+  levels: 40 → 14, 11.4 s → 8.5 s; Tweedie with 50 levels: 39 → 13,
+  14.5 s → 12.7 s. REML and smoothing parameters are unchanged on those fits.
+
 ## [0.17.1] — 2026-11-17
 
 ### Fixed

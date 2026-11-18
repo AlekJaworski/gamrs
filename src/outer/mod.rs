@@ -416,7 +416,8 @@ impl OuterSolver for NewtonWithHalving {
                         _ => None,
                     }
                 };
-                let improves = |vt: f64| vt < v - 1e-10 * v.abs();
+                let accept_margin = 1e-10 * v.abs();
+                let improves = |vt: f64| vt < v - accept_margin;
                 let qerr_of = |s: &Array1<f64>, vt: f64| -> f64 {
                     step::quadratic_model_error(&g, &h, s, vt - v, score_scale, step::MGCV_CONV_TOL)
                 };
@@ -510,7 +511,18 @@ impl OuterSolver for NewtonWithHalving {
                                 }
                             }
                             ii += 1;
-                            if !sd_used && alpha < opts.step_min {
+                            if alpha < opts.step_min {
+                                break;
+                            }
+                            let sd_pending = !sd_used && iter < 10 && ii <= 3;
+                            if !sd_pending
+                                && step::model_cannot_improve(
+                                    &g,
+                                    &h,
+                                    &(&trial - &theta),
+                                    accept_margin,
+                                )
+                            {
                                 break;
                             }
                         }
