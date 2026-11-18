@@ -233,7 +233,8 @@ where
     /// accidental criterion no longer fires — so we clamp ρ to a physically
     /// meaningful box, matching mgcv's `optim.scale.bound`.
     fn axis_bounds(&self) -> Option<Vec<(f64, f64)>> {
-        Some(vec![(-30.0, 30.0); self.s_list.len()])
+        let b = crate::outer::RHO_BOX;
+        Some(vec![(-b, b); self.s_list.len()])
     }
 
     fn value_grad_hess(&self, theta: &Array1<f64>) -> Result<(f64, Array1<f64>, Array2<f64>)> {

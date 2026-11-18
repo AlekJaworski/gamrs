@@ -653,20 +653,29 @@ pub struct FellnerSchallOpts {
     pub max_iters: usize,
     /// Relative `log λ` change for convergence; `max_i |Δlog λ_i| < tol`.
     pub tol: f64,
+    /// A term is also settled once `|∂REML/∂ρ_i| < grad_tol · (|REML| + 1)`
+    /// (envelope gradient), the REML path's own test. A term with no curvature
+    /// to fit has its fixed point at λ = ∞ and creeps towards it, so the λ
+    /// test alone never fires there.
+    pub grad_tol: f64,
     /// Per-iter cap on `|Δlog λ_i|`. mgcv default `3.0`.
     pub log_step_clamp: f64,
-    /// Lower / upper bounds on λ (clamped post-update). mgcv default
-    /// `(1e-9, 1e7)`.
+    /// Lower / upper bounds on λ (clamped post-update). The REML path's
+    /// box, so a term with no curvature to fit reaches the same straight line.
     pub lambda_bounds: (f64, f64),
 }
+
+/// `|log λ|` limit of the outer search, shared by the REML and Fellner-Schall paths.
+pub(crate) const RHO_BOX: f64 = 30.0;
 
 impl Default for FellnerSchallOpts {
     fn default() -> Self {
         Self {
             max_iters: 200,
             tol: 1e-6,
+            grad_tol: NewtonOpts::default().grad_tol,
             log_step_clamp: 3.0,
-            lambda_bounds: (1e-9, 1e7),
+            lambda_bounds: ((-RHO_BOX).exp(), RHO_BOX.exp()),
         }
     }
 }
@@ -677,12 +686,15 @@ impl Default for FellnerSchallOpts {
 ///
 /// `phi_fn(fit, edf)` is the scale the update uses at the current fit: 1 for
 /// a known scale, otherwise mgcv's `efsudr` estimate (see the driver).
+/// `value_at(ρ, fit)` is the REML value on that fit, the scale of the
+/// stopping test.
 pub fn fellner_schall_minimize<I, S>(
     inner: &I,
     s_list: &[Array2<f64>],
     rank_s_list: &[usize],
     rho0: Array1<f64>,
     phi_fn: impl Fn(&crate::inner::GaussianInnerFit<S>, f64) -> f64,
+    value_at: impl Fn(&Array1<f64>, &crate::inner::GaussianInnerFit<S>) -> Result<f64>,
     opts: FellnerSchallOpts,
     stats: Option<&crate::stats::FitStats>,
 ) -> Result<OuterFit>
@@ -701,7 +713,8 @@ where
         rho[k] = rho[k].clamp(log_lo, log_hi);
     }
     let mut warm_beta: Option<Array1<f64>> = None;
-    let tiny = 1e-10_f64;
+    // Guards only zero: at large λ both sides of the ratio are legitimately tiny.
+    let tiny = f64::MIN_POSITIVE;
 
     for iter in 0..opts.max_iters {
         if let Some(s) = stats {
@@ -736,6 +749,7 @@ where
         // Compute the FS step per smooth and the max |log change|.
         let mut max_change = 0.0_f64;
         let mut new_rho = rho.clone();
+        let mut g = vec![0.0_f64; m];
         for i in 0..m {
             let s_i = &s_list[i];
             let lambda_i = rho[i].exp().max(1e-20);
@@ -745,6 +759,7 @@ where
             let bsb_raw: f64 = fit.beta.iter().zip(s_beta.iter()).map(|(a, b)| a * b).sum();
             let bsb = bsb_raw.max(tiny);
             let num_raw = rank_i / lambda_i - tr[i];
+            g[i] = 0.5 * lambda_i * (bsb_raw / phi - num_raw);
             let num = num_raw.max(tiny);
             let log_ratio_raw = (phi * num / bsb).ln();
             let log_ratio = log_ratio_raw.clamp(-opts.log_step_clamp, opts.log_step_clamp);
@@ -752,10 +767,12 @@ where
             max_change = max_change.max((new_log_lambda - rho[i]).abs());
             new_rho[i] = new_log_lambda;
         }
+        let g_tol = opts.grad_tol * (value_at(&rho, &fit)?.abs() + 1.0);
+        let settled = (0..m).all(|i| (new_rho[i] - rho[i]).abs() < opts.tol || g[i].abs() < g_tol);
         rho = new_rho;
         warm_beta = Some(fit.beta.clone());
 
-        if max_change < opts.tol {
+        if settled {
             return Ok(OuterFit {
                 theta: rho,
                 // Not tracked here; the caller scores the returned λ.

@@ -7,6 +7,7 @@ gamrs's fREML is the Fellner-Schall update of mgcv's ``gam(optimizer="efs")``
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 
 import gamrs
@@ -36,3 +37,18 @@ def test_freml_matches_mgcv_efs(stem, family):
     assert drho < 1e-3, f"max |Δlog λ| vs efs {drho:.3e}"
     assert rel < 1e-5, f"fitted rel {rel:.3e}"
 
+
+def test_freml_takes_flat_terms_to_a_straight_line():
+    """A term with no curvature to fit has REML's λ → ∞. fREML used to stop at
+    λ = 1e7 (log λ 16.1), short of the straight line REML reaches."""
+    rng = np.random.default_rng(0)
+    n = 20000
+    X = pd.DataFrame({k: rng.uniform(size=n) for k in "abcd"})
+    y = rng.poisson(np.exp(0.3 + np.sin(6 * X.a) + X.b**2 - X.c)).astype(float)
+    terms = [gamrs.CrTerm(k, k=10) for k in "abcd"]
+    fs = gamrs.Gam(terms=terms, family="poisson", method="fREML").fit(X, y)
+    reml = gamrs.Gam(terms=terms, family="poisson", method="REML").fit(X, y)
+    assert fs.converged_
+    assert np.atleast_1d(fs.rho_)[2] > 19.0, fs.rho_
+    np.testing.assert_allclose(fs.edf_, reml.edf_, atol=0.01)
+    assert abs(fs.reml_value_ - reml.reml_value_) < 0.01

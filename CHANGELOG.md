@@ -17,6 +17,14 @@ is locked. Versions correspond to the published PyPI wheels.
   now reads the scale estimate mgcv's own Fellner-Schall optimiser uses
   (`gam(optimizer = "efs")`: Pearson with Fletcher's correction, refreshed at
   every update), and lands on mgcv's smoothing parameters to 2e-4 in log λ.
+- **`method="fREML"` now takes flat terms all the way to a straight line.**
+  Smoothing parameters were capped at λ = 1e7 and a 1e-10 floor in the update
+  stalled them earlier still, so a term with no curvature to fit stopped short
+  of linear (Poisson, four smooths, n = 200,000: edf 1.63 and 1.64 on the two
+  flat terms against REML's 1.01, REML score 0.69 worse). fREML now searches
+  the same λ range as REML and also counts a term as settled when the REML
+  score is flat in it, REML's own test: edf 1.002 and 1.000, REML score 0.01
+  better than the REML fit's.
 
 ## [0.17.2] — 2026-11-18
 

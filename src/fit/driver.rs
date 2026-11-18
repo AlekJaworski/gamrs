@@ -306,7 +306,13 @@ where
                     Some(phi) => phi,
                     None => fletcher_scale(&score.inner, fit, edf),
                 },
-                crate::outer::FellnerSchallOpts::default(),
+                |rho, fit| score.compute_value_from_fit(rho, fit),
+                crate::outer::FellnerSchallOpts {
+                    grad_tol: crate::outer::resolve_tuning(&score.loss)
+                        .to_newton_opts()
+                        .grad_tol,
+                    ..Default::default()
+                },
                 score.stats(),
             )?;
             fs.value = score.value(&fs.theta)?;
