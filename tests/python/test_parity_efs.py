@@ -22,6 +22,7 @@ pytestmark = pytest.mark.parity
     [
         ("2d_gamma_log_efs_n2000_k10_cr", "gamma"),
         ("2d_quasipoisson_log_efs_n2000_k10_cr", "quasipoisson"),
+        ("2d_quasibinomial_logit_efs_n2000_k10_cr", "quasibinomial"),
     ],
 )
 def test_freml_matches_mgcv_efs(stem, family):
@@ -31,7 +32,7 @@ def test_freml_matches_mgcv_efs(stem, family):
     x = x_train_2d(fx)
     g = gamrs.Gam(
         terms=[gamrs.CrTerm(0, k=10), gamrs.CrTerm(1, k=10)], family=family, method="fREML"
-    ).fit(x, y_train(fx))
+    ).fit(x, y_train(fx), sample_weight=fx["inputs"].get("weights"))
     drho = np.max(np.abs(np.asarray(g.rho_) - np.log(fx["efs"]["sp"])))
     rel = max_rel_err(np.asarray(g.predict(x)), np.asarray(fx["efs"]["predictions_train"]))
     assert drho < 1e-3, f"max |Δlog λ| vs efs {drho:.3e}"
