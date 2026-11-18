@@ -1,5 +1,4 @@
-//! `scat` on a REML surface with NO interior λ optimum — the regime behind the
-//! open disagreement in `docs/scat_adjuster_parity_2026-08.md`.
+//! `scat` on a REML surface with NO interior λ optimum.
 //!
 //! WHAT THE REGIME IS. When the signal is (near-)linear in a coarse ordinal
 //! predictor, the REML score of a CR smooth has no interior minimum in λ: it
@@ -10,7 +9,7 @@
 //! dollars across it. mgcv's outer Newton walks it to the limit; gamrs's stops
 //! part-way.
 //!
-//! WHY IT IS NOT the fixture in `parity_scat_tf9963.rs`. That one locks a term
+//! WHY IT IS NOT the fixture in `parity_scat_saturated.rs`. That one locks a term
 //! with an interior optimum (`garage_spaces`, edf ≈ 2.42) and catches a
 //! *direction-of-penalty* defect. This one has no interior optimum at all, and
 //! catches an *early-stop* defect: the two failure modes need different data.

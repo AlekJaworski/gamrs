@@ -7,7 +7,7 @@
 //! −1, which subtracted one from the penalty null-space rank inside the
 //! score's `log|λS|₊`. That tilts the REML surface by ρ/2 per smooth, so the
 //! outer Newton converged to a genuinely under-penalised λ — mgcv's own
-//! fixed-sp REML sweep on the TF-9963 `garage_spaces` term put gamrs' answer
+//! fixed-sp REML sweep on a real `garage_spaces` term put gamrs' answer
 //! ~30× under-penalised (edf 4.02 against mgcv's 2.37). Dropping the
 //! adjustment moved every scat fixture ~8-16× closer to mgcv; this fixture
 //! went 4.1e-3 → 3.8e-4.
@@ -167,8 +167,7 @@ fn scat_raw_scale_via_rust_api() {
     );
 }
 
-/// Regression for the v0.11 `scat` IRLS-fallback bug (see
-/// `docs/scat_parity_bug.md`). The bug inverted the robustness: in the
+/// Regression for the v0.11 `scat` IRLS-fallback bug. The bug inverted the robustness: in the
 /// presence of high-side outliers gamrs `scat` pulled the fitted mean
 /// *above* the Gaussian/OLS fit, when scat must down-weight large-residual
 /// points and pull the fit *below* it (toward the bulk). This is a

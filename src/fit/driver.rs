@@ -93,8 +93,7 @@ impl LambdaInit for SmartInit {
 /// which can start a term on the wrong side of a ridge in the criterion:
 /// on a 1,000-sale `scat` fit it started `lot_sqft` at log λ 6.48 against
 /// mgcv's −0.11, past a basin boundary at ~5.1, and the fit ended with the
-/// term a straight line and REML 15 units worse
-/// (`docs/scat_start_basin_bug.md`).
+/// term a straight line and REML 15 units worse.
 #[derive(Clone, Default)]
 pub struct MgcvInit {
     /// Working weights `w_i` (not their square roots); `None` = all 1.

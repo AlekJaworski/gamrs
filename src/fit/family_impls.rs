@@ -340,7 +340,7 @@ impl<S: LinearSolver> FamilyFitWithSolver<LogLink, NegBinVariance, S> for NegBin
 /// in millions, sd ≈ 0.1) was never standardized: the default σ² start of
 /// sd² then sat far from the O(1) scale everything else is tuned for, and the
 /// outer loop walked log σ² down one capped step per iteration — 40–200 outer
-/// iterations where mgcv takes 8–16 (docs/scat_start_basin_bug.md).
+/// iterations where mgcv takes 8–16.
 ///
 /// scat's observed IRLS weight is `W = ½·Dμμ ~ 1/σ²`, and the inner solve
 /// forms `X'WX + λS` and Cholesky-factorizes it. A raw response with

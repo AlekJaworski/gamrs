@@ -8,8 +8,8 @@
 # penalty embedded in p x p at its `off`, a set of working weights, and
 # log(initial.sp(X, S, off)) both unweighted and on sqrt(w)*X — which is what
 # initial.spg passes for an extended family such as scat. Synthetic data; the
-# third covariate is lot-size-like (a few values far out), the shape behind
-# docs/scat_start_basin_bug.md.
+# third covariate is lot-size-like (a few values far out), the shape that
+# started SmartInit past a ridge in the criterion.
 suppressMessages({library(mgcv); library(jsonlite)})
 set.seed(20260929)
 n <- 200

@@ -38,7 +38,7 @@
 # ============================================================================
 suppressMessages({library(mgcv); library(MASS); library(jsonlite)})
 
-FIX <- "/home/alex/vibe_coding/gammon/tests/fixtures"
+FIX <- "tests/fixtures"
 k0 <- 8L; k1 <- 8L; k2 <- 8L
 
 emit_3d <- function(path, name, desc, family, link, x0, x1, x2, y, fit,

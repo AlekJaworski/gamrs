@@ -421,7 +421,7 @@ class Gam:
         # NOTE — `df` is an INITIAL VALUE, not a constraint, and that differs
         # from mgcv: `mgcv::scat(theta=)` pins ν, while gamrs seeds the outer
         # Newton's `log(ν − 3)` axis and then re-estimates it alongside λ and
-        # σ². On the TF-9963 garage_spaces term, sweeping df 3.5 → 100 left
+        # σ². On a saturated real-data scat term, sweeping df 3.5 → 100 left
         # the fitted shape and λ unchanged to 4 significant figures, which is
         # what "seed, not constraint" looks like. The bounds below are
         # therefore a sanity check on the seed, not the range of achievable ν.

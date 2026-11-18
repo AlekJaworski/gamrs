@@ -19,7 +19,7 @@
 # extraction by printing held-out coverage (should sit near τ) before writing.
 suppressMessages({library(mgcv); library(jsonlite)})
 
-FIX  <- "/home/alex/vibe_coding/gammon/tests/fixtures"
+FIX  <- "tests/fixtures"
 SEED <- 20260610L
 N_TR <- 800L
 N_TE <- 400L

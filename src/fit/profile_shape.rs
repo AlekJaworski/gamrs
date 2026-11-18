@@ -13,7 +13,7 @@
 //! the joint Newton in mgcv_rust too (`joint_tdist_active` /
 //! `joint_ocat_active`), so they stay on `fit_shape_aware`.
 //!
-//! Citations (mgcv_rust at /home/alex/vibe_coding/nn_exploring):
+//! Citations (mgcv_rust source):
 //! - `src/smooth.rs:1866-1869` — architectural comment "NegBin/Tweedie
 //!   profile blocks run their 1-D Newton AFTER the ρ step".
 //! - `src/smooth.rs:2383` — `reml_hessian_mgcv_exact_ift` returns an

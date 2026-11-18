@@ -15,7 +15,7 @@
 # (ν, σ) pair, on mgcv's convention).
 suppressMessages({library(mgcv); library(jsonlite)})
 
-FIX <- "/home/alex/vibe_coding/gammon/tests/fixtures"
+FIX <- "tests/fixtures"
 
 emit <- function(path, name, desc, d, ks, x_list, y, fit, extra = list()) {
   n <- length(y)

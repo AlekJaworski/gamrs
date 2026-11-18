@@ -18,7 +18,7 @@
 # quantile is well-specified and the τ-surfaces genuinely fan out.
 suppressMessages({library(qgam); library(mgcv); library(jsonlite)})
 
-FIX  <- "/home/alex/vibe_coding/gammon/tests/fixtures"
+FIX  <- "tests/fixtures"
 SEED <- 20260610L
 N_TR <- 600L
 N_TE <- 400L

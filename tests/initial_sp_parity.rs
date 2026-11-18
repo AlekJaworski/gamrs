@@ -1,7 +1,7 @@
 //! `MgcvInit` is mgcv's `initial.sp`, checked on mgcv's own design and
 //! penalties so the gamrs basis is not in the comparison. The fixture's third
 //! term is lot-size-like; `SmartInit` started that shape past a ridge in the
-//! criterion on real data (docs/scat_start_basin_bug.md).
+//! criterion on real data.
 
 use ndarray::{Array1, Array2};
 use serde::Deserialize;

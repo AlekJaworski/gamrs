@@ -15,7 +15,7 @@
 # that well-posed regime so multi-smooth ocat has a real parity bar.
 suppressMessages({library(mgcv); library(jsonlite)})
 
-FIX <- "/home/alex/vibe_coding/gammon/tests/fixtures"
+FIX <- "tests/fixtures"
 
 set.seed(20260609)
 n <- 1500

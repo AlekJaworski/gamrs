@@ -19,8 +19,7 @@
 # and the sp ladder below is recorded so the Rust test can assert it.
 #
 # Fully generated numbers. The regime is taken from a real adjuster term; none
-# of the data is (same constraint as docs/scat_parity_bug.md — real housing
-# residuals stay in the gitignored data/ tree).
+# of the data is.
 #
 # The (seed, df) pair is chosen, not incidental: on a saturated basis a t sample
 # can easily carry enough spurious curvature to push mgcv to edf ≈ 4 (the whole
@@ -30,7 +29,7 @@
 # level, so a single bound covers all three.
 suppressMessages({library(mgcv); library(jsonlite)})
 
-FIX <- "/home/alex/vibe_coding/gammon/tests/fixtures"
+FIX <- "tests/fixtures"
 OUT <- "1d_scat_saturated_basis_n620_k5_cr.json"
 SEED <- 165L
 K <- 5L

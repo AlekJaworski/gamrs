@@ -1,5 +1,5 @@
 //! Parity lock for `scat` on the geometry that exposed the
-//! `score_rank_adjustment` defect fixed in 0.13.0 (TF-9963): a **saturated**
+//! `score_rank_adjustment` defect fixed in 0.13.0: a **saturated**
 //! CR basis — 5 distinct x against k = 5 — on a dollar-scale response with
 //! heavy-tailed noise and very lopsided level counts, [6, 161, 432, 19, 2].
 //!
@@ -26,8 +26,7 @@
 //! does not matter, so a single bound covers all three.
 //!
 //! Fixture: fully synthetic — `scripts/r/gen_scat_saturated_basis_fixture.R`,
-//! seed 165. No customer data (real housing residuals stay in the gitignored
-//! `data/` tree — same constraint as `docs/scat_parity_bug.md`).
+//! seed 165. No real data.
 
 use std::path::PathBuf;
 
@@ -90,7 +89,7 @@ fn max_rel(pred: &[f64], target: &[f64]) -> f64 {
 }
 
 #[test]
-fn tf9963_garage_spaces_scat_lands_on_mgcv_optimum() {
+fn saturated_scat_lands_on_mgcv_optimum() {
     let fx = load();
     let n = fx.inputs.y_train.len();
     let x = Array2::from_shape_vec((n, 1), fx.inputs.x_train.clone()).unwrap();
@@ -224,7 +223,7 @@ fn saturated_basis_fixture_has_an_interior_lambda_optimum() {
 /// to `"fREML"` in the Python wrapper, which made every scat fit ever made
 /// declare an optimiser it never ran.
 #[test]
-fn tf9963_scat_refuses_fellner_schall_instead_of_ignoring_it() {
+fn saturated_scat_refuses_fellner_schall_instead_of_ignoring_it() {
     let fx = load();
     let n = fx.inputs.y_train.len();
     let x = Array2::from_shape_vec((n, 1), fx.inputs.x_train.clone()).unwrap();
@@ -351,7 +350,7 @@ fn scat_criterion_matches_mgcv_on_its_own_sp_ladder() {
     );
 
     // B. The steep side, three decades below the optimum. An off-by-one in the
-    //    `log|λS|` rank convention — the original TF-9963 defect — shifts this
+    //    `log|λS|` rank convention — the original defect — shifts this
     //    by ½·ln(10³) = 3.454 units, 61% of the value.
     let want_steep = fx.sp_ladder[0].reml - fx.sp_ladder[opt].reml;
     let got_steep = v[0] - v[opt];

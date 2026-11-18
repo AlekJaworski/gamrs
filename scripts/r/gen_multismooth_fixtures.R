@@ -4,7 +4,7 @@
 # and Python parity tests fit the identical (x, y) mgcv saw.
 suppressMessages({library(mgcv); library(MASS); library(jsonlite)})
 
-FIX <- "/home/alex/vibe_coding/gammon/tests/fixtures"
+FIX <- "tests/fixtures"
 k0 <- 8L; k1 <- 8L
 
 emit <- function(path, name, desc, family, link, x0, x1, y, fit, extra = list()) {

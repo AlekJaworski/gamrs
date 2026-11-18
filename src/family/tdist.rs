@@ -164,7 +164,7 @@ impl Loss for TDist {
     // for three months. It is not a free constant: `log|λS|₊` contributes
     // `-½·rank·ρ` to the score, so dropping the rank by one tilts the whole
     // REML surface by `+ρ/2` per smooth and the outer Newton converges
-    // under-penalised. Measured on the TF-9963 `garage_spaces` term (620
+    // under-penalised. Measured on a real `garage_spaces` term (620
     // rows, 5 distinct x, k=5, so the basis is saturated): mgcv's own
     // fixed-sp REML sweep bottoms out at edf 2.37, gamrs with the `-1`
     // landed on edf 4.02 — mgcv's own answer at ~30× less penalty — and

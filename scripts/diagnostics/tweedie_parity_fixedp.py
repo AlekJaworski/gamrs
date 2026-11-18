@@ -6,11 +6,6 @@ p at 1.5; gamrs always profiles p, so they end up at different (p, λ)
 and the prediction gap reflects that mismatch — NOT a structural Rust
 bug.
 """
-import sys
-
-sys.path.insert(0, "/home/alex/vibe_coding/gammon/python")
-sys.path.insert(0, "/home/alex/vibe_coding/nn_exploring/python")
-
 import numpy as np
 import pandas as pd
 

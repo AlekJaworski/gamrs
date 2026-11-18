@@ -2,17 +2,9 @@
 
 Layer-by-layer cross-evaluation, following the ocat parity methodology.
 
-Run with:
-    PYTHONPATH=/home/alex/vibe_coding/nn_exploring/python:/home/alex/vibe_coding/gammon/python \
-        python scripts/diagnostics/tweedie_parity_layered.py
+Needs both `gamrs` and `mgcv_rust` importable:
+    python scripts/diagnostics/tweedie_parity_layered.py
 """
-import sys
-
-# Wire both packages into sys.path so the diagnostic can compare v0.x and
-# gamrs without relying on PYTHONPATH (which gets stripped by the harness's
-# bash filter).
-sys.path.insert(0, "/home/alex/vibe_coding/gammon/python")
-sys.path.insert(0, "/home/alex/vibe_coding/nn_exploring/python")
 
 import numpy as np
 import pandas as pd
