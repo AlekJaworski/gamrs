@@ -5,7 +5,7 @@ based on [Keep a Changelog](https://keepachangelog.com/); this project is in
 beta (`0.x`), so minor bumps may carry breaking changes until the 1.0 surface
 is locked. Versions correspond to the published PyPI wheels.
 
-## [Unreleased]
+## [0.17.3] — 2026-11-18
 
 ### Fixed
 
@@ -25,6 +25,12 @@ is locked. Versions correspond to the published PyPI wheels.
   the same λ range as REML and also counts a term as settled when the REML
   score is flat in it, REML's own test: edf 1.002 and 1.000, REML score 0.01
   better than the REML fit's.
+
+### Changed
+
+- Rust API: `fellner_schall_minimize` takes the scale function as
+  `phi_fn(fit, edf)` and a new `value_at` argument; `FellnerSchallOpts` gains
+  `grad_tol`, and its default λ bounds are e^±30.
 
 ### Documentation
 
