@@ -20,6 +20,10 @@ is locked. Versions correspond to the published PyPI wheels.
   fitted values were off by up to 5% (negative binomial), 3% (Tweedie), 0.6%
   (inverse Gaussian) and 0.5% (Gamma), and now by at most 8e-7, 8e-7, 6e-8 and
   4e-5. Unweighted fits are unchanged.
+- **`reml_value_` under `method="fREML"`** was always 0.0 for the GLM families
+  that run Fellner-Schall (Poisson, Bernoulli, Gamma, …). It is now the REML
+  score at the returned smoothing parameters, the same number `method="REML"`
+  reports at those parameters.
 
 ### Changed
 

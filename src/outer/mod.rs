@@ -753,7 +753,8 @@ where
         if max_change < opts.tol {
             return Ok(OuterFit {
                 theta: rho,
-                value: 0.0, // FS doesn't track the REML value directly
+                // Not tracked here; the caller scores the returned λ.
+                value: f64::NAN,
                 grad_norm: max_change,
                 iterations: iter + 1,
                 converged: true,
@@ -765,7 +766,7 @@ where
     let _ = warm_beta;
     Ok(OuterFit {
         theta: rho,
-        value: 0.0,
+        value: f64::NAN,
         grad_norm: f64::NAN,
         iterations: opts.max_iters,
         converged: false,

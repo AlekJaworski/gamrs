@@ -297,7 +297,7 @@ where
             solver.minimize(&score, Array1::zeros(n_terms))?
         }
         crate::outer::OuterAlgorithm::FellnerSchall => {
-            crate::outer::fellner_schall_minimize(
+            let mut fs = crate::outer::fellner_schall_minimize(
                 &score.inner,
                 &score.s_list,
                 &score.rank_s_list,
@@ -309,13 +309,14 @@ where
                 |_fit| 1.0,
                 crate::outer::FellnerSchallOpts::default(),
                 score.stats(),
-            )?
+            )?;
+            fs.value = score.value(&fs.theta)?;
+            fs
         }
     };
 
-    // The search ends on a converged inner fit at these λ, so the final fit starts from its β
-    // (from β = 0 only when there is none, e.g. after Fellner-Schall); one that still stops at the
-    // cap carries on from where it stopped.
+    // The search ends on a converged inner fit at these λ, so the final fit starts from its β;
+    // one that still stops at the cap carries on from where it stopped.
     let start = score.last_beta.borrow().clone();
     let first: GaussianInnerFit<S> = score.inner.fit_warm(&outer.theta, start.as_ref())?;
     let final_fit = if first.converged {
