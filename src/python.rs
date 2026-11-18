@@ -1778,9 +1778,9 @@ fn set_outer_tuning_override(grad_tol: Option<f64>, reml_tol: Option<f64>) {
 }
 
 /// Override the outer-Newton algorithm. Pass `"REML"` for the default
-/// damped Newton (mgcv R `gam()` equivalent) or `"fREML"` for Wood &
-/// Fasiolo (2017) Fellner-Schall multiplicative updates (mgcv R `bam()`
-/// equivalent — cheaper per-iter, wins on GLM families at large n).
+/// damped Newton (mgcv R `gam()` equivalent) or `"fREML"` for the Wood &
+/// Fasiolo (2017) Fellner-Schall updates of mgcv's `gam(optimizer = "efs")`
+/// (cheaper per iteration, wins on GLM families at large n).
 /// Pass `None` to clear the override and revert to Newton.
 #[pyfunction]
 #[pyo3(signature = (algorithm=None))]

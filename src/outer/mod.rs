@@ -177,7 +177,7 @@ pub fn resolve_tuning<L: crate::traits::Loss>(loss: &L) -> OuterTuning {
 ///   assembly. Best for small-to-mid n (≤ ~10K) where the per-iter cost
 ///   pays off via fast convergence.
 /// - `FellnerSchall`: Wood & Fasiolo (2017) multiplicative λ update
-///   (mgcv `bam()`'s `fREML` equivalent). Per-iter cost: inner PIRLS + a
+///   (mgcv `gam(optimizer = "efs")`). Per-iter cost: one inner IRLS step + a
 ///   few O(p²) traces. Cheaper per-iter, slightly more iters; wins at
 ///   large n on GLM families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -645,8 +645,8 @@ impl OuterSolver for NewtonWithHalving {
 /// and `φ` is the dispersion. Performed in log-space with a per-iter
 /// step clamp to keep the update stable.
 ///
-/// Port of mgcv_rust `smooth.rs:fellner_schall_step` (which is mgcv R's
-/// `bam(method="fREML")` core update).
+/// The update of mgcv's `efsudr` (`gam(optimizer = "efs")`), with one inner
+/// IRLS step per update instead of a converged fit.
 #[derive(Debug, Clone, Copy)]
 pub struct FellnerSchallOpts {
     /// Max outer iterations before bailing out.
@@ -720,9 +720,7 @@ where
         if let Some(s) = stats {
             s.bump_outer();
         }
-        // Single IRLS step at the warm-started β (mgcv R `bam(method=
-        // "fREML")` port — audit `nn_exploring/src/pirls/mod.rs:4078-4097`).
-        // FS λ-updates move slowly; one IRLS step from a warm β closes
+        // Single IRLS step at the warm-started β. FS λ-updates move slowly; one IRLS step from a warm β closes
         // the per-outer-iter convergence error well enough for the FS
         // update to find descent. Avoids the 2-3× redundant inner iters
         // that full-PIRLS would do.

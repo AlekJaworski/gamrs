@@ -26,6 +26,12 @@ is locked. Versions correspond to the published PyPI wheels.
   score is flat in it, REML's own test: edf 1.002 and 1.000, REML score 0.01
   better than the REML fit's.
 
+### Documentation
+
+- **What `method="fREML"` is.** The docs called it the Fellner-Schall update
+  `bam()` uses. It is the update of mgcv's `gam(optimizer = "efs")`;
+  `bam(method = "fREML")` runs Newton on the same REML criterion.
+
 ## [0.17.2] — 2026-11-18
 
 ### Fixed

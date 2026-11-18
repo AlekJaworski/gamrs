@@ -291,13 +291,11 @@ class Gam:
         g = Gam(terms=[CrTerm("x0", k=10), CrTerm("x1", k=15)]).fit(X, y)
         g = Gam(terms=[TeTerm(cols=("x0", "x1"), k=(8, 8))]).fit(X, y)
 
-    For GLM families at large n, pass ``method="fREML"`` for the
-    mgcv R ``bam()`` optimiser (Fellner-Schall multiplicative λ updates
-    with single-step IRLS). See ``docs/perf.md`` for the trade-off. It is a
-    cheaper route to the *same* REML criterion, not a different objective —
-    the same is true of mgcv's own ``bam(method="fREML")``, whose criterion
-    returns numbers identical to its REML when both are evaluated at a pinned
-    ``sp``.
+    For GLM families at large n, pass ``method="fREML"`` for Fellner-Schall
+    λ updates, as in mgcv's ``gam(optimizer="efs")``, with one inner IRLS
+    step per update. It is a cheaper route to the *same* REML criterion; see
+    ``docs/perf.md``. It is not mgcv's ``bam(method="fREML")``, which runs
+    Newton on that criterion.
 
     Fellner-Schall was only ever ported to the GLM envelope driver, so
     ``method="fREML"`` on the gaussian closed-form path, the quantile path,
@@ -570,9 +568,9 @@ class Gam:
 
         The ``method`` constructor argument selects the outer optimiser:
         ``"REML"`` / ``None`` (default) → damped Newton on the REML
-        score; ``"fREML"`` → Wood & Fasiolo (2017) Fellner-Schall
-        multiplicative updates (mgcv R ``bam()`` equivalent; cheaper
-        per-iter, wins on GLM families at large n). On a fit path with no
+        score; ``"fREML"`` → Wood & Fasiolo (2017) Fellner-Schall updates,
+        as in mgcv's ``gam(optimizer="efs")`` (cheaper per iteration, wins
+        on GLM families at large n). On a fit path with no
         Fellner-Schall branch, ``"fREML"`` warns and fits on REML.
         """
         # Set/restore the outer-algorithm override for this fit only.

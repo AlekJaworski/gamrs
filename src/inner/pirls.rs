@@ -450,8 +450,7 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver> I
         self.pirls_loop(s_total, rho, beta_warm)
     }
 
-    /// **Single IRLS step** — mgcv R `bam(method="fREML")` single-step
-    /// inner port. Build (w, z) at `η = X·β_warm` (or per-family init if
+    /// **Single IRLS step** for the Fellner-Schall loop. Build (w, z) at `η = X·β_warm` (or per-family init if
     /// `beta_warm = None`), solve `(X'WX + λS) β = X'Wz` once, populate
     /// a minimal `GaussianInnerFit` and return. No PIRLS loop, no
     /// step-halving, no convergence guard.

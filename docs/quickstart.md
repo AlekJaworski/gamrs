@@ -230,23 +230,18 @@ peff.plot(x="x", y="mean")  # or hand to matplotlib / seaborn / altair
 ## 9. Large-n fits — switch to `method="fREML"`
 
 `gamrs`'s default is REML via damped Newton; for GLM families at large n,
-`method="fREML"` switches to the Fellner–Schall λ updates `bam()` uses,
-still on the REML criterion: results match `gam(method = "REML")`.
+`method="fREML"` switches to Fellner–Schall λ updates, as in mgcv's
+`gam(optimizer = "efs")`, still on the REML criterion: results match
+`gam(method = "REML")`.
 
 ```python
 g = Gam(family="poisson", method="fREML").fit(X_big, y_big)
-g = Gam(family="gaussian", method="fREML").fit(X_big, y_big)
 ```
 
-Pick `method="fREML"` when:
-
-- `n >= 50_000` AND family is Poisson / Bernoulli / Gaussian / Gamma
-- you don't need analytic posterior samples (the fREML Hessian is
-  approximated; CIs from `predict_ci` are slightly wider — see
-  [`docs/perf.md`](perf.md))
-
-Default (REML) is fine for `n < 50_000` and for shape-aware families
-(NegBin, Tweedie, TDist), which already use bespoke optimisers.
+Pick `method="fREML"` when `n >= 50_000` and the family is binomial, Poisson,
+Gamma, inverse Gaussian or quasi (see [`docs/perf.md`](perf.md)). Other
+families (Gaussian, NegBin, Tweedie, scat, …) have their own optimisers; there
+`method="fREML"` warns and fits by REML.
 
 ## 10. Quantile regression (ELF)
 

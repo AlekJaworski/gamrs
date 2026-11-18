@@ -772,8 +772,8 @@ pub trait InnerSolver {
         self.fit(rho)
     }
 
-    /// **Single IRLS step** — port of mgcv R `bam(method="fREML")`'s
-    /// one-step inner. Build the working pair `(W, z)` at `η = X·β_warm`,
+    /// **Single IRLS step** per smoothing-parameter update, as in `bam()`'s
+    /// performance iteration. Build the working pair `(W, z)` at `η = X·β_warm`,
     /// solve `(X'WX + λS)·β = X'Wz` once, return the new fit. No PIRLS
     /// convergence loop / step-halving guards.
     ///

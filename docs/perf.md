@@ -5,12 +5,13 @@
 | `method=` | Smoothing-parameter search | Use it for |
 | --- | --- | --- |
 | `"REML"` (default) | Damped Newton on the REML score, inner fit run to convergence | Everything; the most accurate |
-| `"fREML"` | Fellner–Schall updates (as in `bam()`), one inner step per update | Large-n binomial, Poisson, Gamma, inverse Gaussian and quasi fits |
+| `"fREML"` | Fellner–Schall updates (as in mgcv's `gam(optimizer = "efs")`), one inner step per update | Large-n binomial, Poisson, Gamma, inverse Gaussian and quasi fits |
 
-Both search the same REML criterion. On a Poisson fit with four smooths and
-n = 200,000, `fREML` took 1.6 s against 10.6 s for `REML`. The linear
-predictors agreed to 0.002, but `fREML` stopped earlier on terms that are close
-to straight lines (edf 1.5 rather than 1.0).
+Both search the same REML criterion. `fREML` is not mgcv's
+`bam(method = "fREML")`, which runs Newton on it. On a Poisson fit with four
+smooths and n = 200,000, `fREML` took 1.7 s against 5.0 s for `REML`, and the
+linear predictors agreed to 1.3e-4, including on the two terms that are
+straight lines (edf 1.00 under both).
 
 Other families (Gaussian, `nb`, `tw`, `scat`, `ocat`, quantile and
 location–scale fits) have their own solvers. Passing `method="fREML"` there
