@@ -5,7 +5,7 @@ based on [Keep a Changelog](https://keepachangelog.com/); this project is in
 beta (`0.x`), so minor bumps may carry breaking changes until the 1.0 surface
 is locked. Versions correspond to the published PyPI wheels.
 
-## [Unreleased]
+## [0.17.2] — 2026-11-18
 
 ### Fixed
 
@@ -37,6 +37,11 @@ is locked. Versions correspond to the published PyPI wheels.
   50 levels: 39 → 13 line-search evaluations, 2.0 s → 1.5 s; with 1,000
   levels: 40 → 14, 11.4 s → 8.5 s; Tweedie with 50 levels: 39 → 13,
   14.5 s → 12.7 s. REML and smoothing parameters are unchanged on those fits.
+
+### Changed
+
+- Rust API: `Loss::analytic_shape_score_gradient` takes the prior weights as
+  an extra argument.
 
 ## [0.17.1] — 2026-11-17
 
