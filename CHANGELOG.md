@@ -36,13 +36,42 @@ is locked. Versions correspond to the published PyPI wheels.
   agree to 7e-8 or better (2e-12 for nb) and λ to 5e-7 or better. The
   sampling applies only under `method="bam"`.
 
-  At n = 20,000, one thread, three k=10 smooths, it is 5–7× faster than
-  default mgcv `bam()` (gaussian, nb, weighted scat) and about 6× faster than
-  `method="REML"` on nb and scat.
+  At n = 20,000, one thread, three k=10 smooths, it is 4–12× faster than
+  default mgcv `bam()` (gaussian, nb, weighted scat), and 15–25× faster on
+  the random-effect benchmarks (a 947-level condo model: 1.6 s against 22 s).
 
-  Tensor terms raise an error for now. `method="REML"` and `"fREML"` are
-  unchanged. Rust: `gamrs::fit_bam`, `family::bam::BamFamily`,
-  `Additive::prepare_with`, `Centring`.
+  bam's terms are built with mgcv's own arithmetic, so a tie resolves as it
+  does in R: knots by R's `quantile`, the cr basis and penalty as `crspl` and
+  `getFS` compute them, the penalty scaled as `smoothCon` scales it, column
+  variances summed in extended precision as R's `var` does, and sweep-and-drop
+  applied as row and column removal. When two basis columns have exactly equal
+  variance (a sale alone on each of the top two knots), gamrs drops the same
+  column R drops. A fixture with such a tie matches bam's REML to 5e-15. The
+  penalty eigendecomposition uses LAPACK `dsyevr`, as R's `eigen` does.
+
+  One limit remains: a covariate spanning a range of about 1e5× (lot size
+  from 1e3 to 2.5e8, say) can leave a fit about 1e-5 sd from R's, because
+  gamrs works with X'WX, which squares the design's condition number, where
+  bam works with a QR factor.
+
+  Models with no smooth terms fit as bam fits them: a weighted least-squares
+  working fit inside the performance iteration, for every family above. They
+  match bam to 3e-12 in fitted values, with the same IRLS counts.
+
+  Tensor terms, Tweedie, inverse Gaussian, fixed θ and quantile fits raise an
+  error under `method="bam"`. Rust: `gamrs::fit_bam`,
+  `family::bam::BamFamily`, `Additive::prepare_with`, `Centring`.
+
+### Changed
+
+- **`method="fREML"` now means mgcv's `bam(method = "fREML")`**, as it does
+  in mgcv. It is an alias of `method="bam"`, with identical results. Where bam
+  is not available (tensors, Tweedie, inverse Gaussian, fixed θ, quantile and
+  location–scale fits), `"fREML"` warns and fits by REML, as it did before for
+  paths without Fellner–Schall. **Results under `method="fREML"` change for the
+  GLM families** (binomial, poisson, Gamma), which used to run Fellner–Schall.
+  For the old behaviour use **`method="efs"`**, mgcv's
+  `gam(optimizer = "efs")`. `method="REML"` is unchanged.
 
 ## [0.17.5] — 2026-11-19
 

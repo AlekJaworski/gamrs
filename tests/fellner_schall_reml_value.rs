@@ -1,4 +1,4 @@
-//! Under Fellner-Schall (`method="fREML"`) the reported `reml_value` must be
+//! Under Fellner-Schall (`method="efs"`) the reported `reml_value` must be
 //! the REML score at the returned smoothing parameters, the same number the
 //! REML path reports at those parameters.
 

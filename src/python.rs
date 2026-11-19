@@ -1621,7 +1621,7 @@ fn fit_additive<'py>(
     if bam {
         if theta.is_some() || nu.is_some() || sigma2.is_some() {
             return Err(PyValueError::new_err(
-                "bam estimates theta like mgcv's nb() and scat(); fixed shape values are not supported",
+                "bam does not support fixed shape values: it estimates theta like mgcv's nb() and scat()",
             ));
         }
         let design = Additive { terms: term_specs };
@@ -1647,8 +1647,8 @@ fn fit_additive<'py>(
                     w_view,
                 ),
                 other => Err(GamrsError::InvalidParameter(format!(
-                    "bam is implemented for gaussian, poisson, binomial, gamma, Gamma, negbin \
-                     and scat; got {other:?}"
+                    "bam does not support family {other:?}; bam is implemented for gaussian, \
+                     poisson, binomial, gamma, Gamma, negbin and scat"
                 ))),
             })
             .map_err(map_err)?;
@@ -1834,12 +1834,12 @@ fn set_outer_algorithm(algorithm: Option<&str>) -> PyResult<()> {
             crate::outer::set_algorithm_override(crate::outer::OuterAlgorithm::Newton);
             Ok(())
         }
-        Some("fREML") | Some("FellnerSchall") | Some("fellner-schall") => {
+        Some("efs") | Some("fREML") | Some("FellnerSchall") | Some("fellner-schall") => {
             crate::outer::set_algorithm_override(crate::outer::OuterAlgorithm::FellnerSchall);
             Ok(())
         }
         Some(other) => Err(PyValueError::new_err(format!(
-            "algorithm must be 'REML' or 'fREML' (got {other:?})"
+            "algorithm must be 'REML' or 'efs' (got {other:?})"
         ))),
     }
 }

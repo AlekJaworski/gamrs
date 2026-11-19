@@ -37,10 +37,15 @@ from ._stubs import GamSummary, TermContributions  # noqa: F401
 # `src/outer.rs::FS_UNAVAILABLE_MARKER`, which has a unit test asserting the
 # rendered message still contains it; matching on it here is what turns a
 # refusal into the warned REML fallback in `Gam.fit`.
-FS_UNAVAILABLE_MARKER = "method='fREML' (Fellner-Schall) is not implemented for the"
+FS_UNAVAILABLE_MARKER = "method='efs' (Fellner-Schall) is not implemented for the"
 
-# Reproduces mgcv `bam(method = "fREML")`.
+# Reproduces mgcv `bam(method = "fREML")`; "fREML" is its alias.
 BAM = "bam"
+FREML = "fREML"
+# mgcv `gam(optimizer = "efs")`: Fellner-Schall updates on the REML criterion.
+EFS = "efs"
+# The prefix of every native refusal of a model bam does not cover.
+BAM_UNSUPPORTED_MARKER = "bam does not support"
 
 ArrayLike = Any  # avoid hard dep on pandas/polars typing
 
@@ -275,7 +280,7 @@ def _resolve_term_cols(term: Term, col_names: Sequence[str]) -> Term:
 
 
 class Gam:
-    """Sklearn-style GAM with smoothing-parameter selection by REML or fREML.
+    """Sklearn-style GAM with smoothing-parameter selection by REML or fREML (bam).
 
     Fits one of ten families (see ``family=``). Supports single 1-D smooths,
     additive multi-smooth (``y ~ s(x0) + s(x1) + …``), n-margin tensor
@@ -294,19 +299,18 @@ class Gam:
         g = Gam(terms=[CrTerm("x0", k=10), CrTerm("x1", k=15)]).fit(X, y)
         g = Gam(terms=[TeTerm(cols=("x0", "x1"), k=(8, 8))]).fit(X, y)
 
-    For GLM families at large n, pass ``method="fREML"`` for Fellner-Schall
-    λ updates, as in mgcv's ``gam(optimizer="efs")``, with one inner IRLS
-    step per update. It is a cheaper route to the *same* REML criterion; see
-    ``docs/perf.md``. It is not mgcv's ``bam(method="fREML")``, which runs
-    Newton on that criterion.
+    ``method="fREML"`` (alias ``"bam"``) reproduces mgcv's
+    ``bam(method="fREML")``: gaussian, poisson, binomial, Gamma, nb and scat,
+    one penalty per term. On a model bam does not cover (tensors, Tweedie,
+    inverse Gaussian, fixed θ, quantile) ``"fREML"`` warns and fits by REML;
+    ``"bam"`` raises.
 
-    Fellner-Schall was only ever ported to the GLM envelope driver, so
-    ``method="fREML"`` on the gaussian closed-form path, the quantile path,
-    or a shape-parameter family (scat / negbin / tweedie / ocat) fits on
-    REML instead and warns. Same criterion either way, and damped Newton on
-    the REML score is the stronger optimiser of the two here, so the
-    fallback is not a downgrade — the warning exists so the running
-    optimiser is never a different one from the declared optimiser.
+    ``method="efs"`` runs Fellner-Schall λ updates, as in mgcv's
+    ``gam(optimizer="efs")``, with one inner IRLS step per update: a cheaper
+    route to the REML criterion for GLM families at large n (see
+    ``docs/perf.md``). It was only ported to the GLM envelope driver, so on
+    the gaussian closed-form path, the quantile path or a shape-parameter
+    family it warns and fits by REML.
 
     Compatible with the v0.x ``mgcv_rust.Gam`` API surface; a textual
     substitution of ``from mgcv_rust import Gam`` → ``from gamrs import Gam``
@@ -569,28 +573,30 @@ class Gam:
         column to ``"re"``). For the typed-term API, pass ``terms=`` to
         the constructor — that path bypasses predictor-name resolution.
 
-        The ``method`` constructor argument selects the outer optimiser:
-        ``"REML"`` / ``None`` (default) → damped Newton on the REML
-        score; ``"fREML"`` → Wood & Fasiolo (2017) Fellner-Schall updates,
-        as in mgcv's ``gam(optimizer="efs")`` (cheaper per iteration, wins
-        on GLM families at large n). On a fit path with no
-        Fellner-Schall branch, ``"fREML"`` warns and fits on REML.
-        ``"bam"`` reproduces mgcv's ``bam(method="fREML")`` (gaussian,
-        poisson, binomial, gamma, negbin, scat; one penalty per term).
+        The ``method`` constructor argument selects the fit:
+        ``"REML"`` / ``None`` (default) → damped Newton on the REML score;
+        ``"fREML"`` / ``"bam"`` → mgcv's ``bam(method="fREML")`` (gaussian,
+        poisson, binomial, gamma, negbin, scat; one penalty per term), where
+        ``"fREML"`` falls back to REML with a warning on models bam does not
+        cover and ``"bam"`` raises; ``"efs"`` → Wood & Fasiolo (2017)
+        Fellner-Schall updates, as in mgcv's ``gam(optimizer="efs")``,
+        warning and fitting on REML where there is no Fellner-Schall branch.
         """
         # Set/restore the outer-algorithm override for this fit only.
         # Only touches the thread-local when method != "REML" (gamrs's
         # default) — `"REML"` is what an unspecified method becomes via
         # the constructor default and shouldn't clobber any external
         # override (e.g. set by the bench / sweep scripts).
+        if self.method == FREML:
+            return self._fit_freml(X, y, sample_weight)
         wants_override = self.method not in (None, "REML", BAM)
         if wants_override:
             try:
                 _gamrs_native.set_outer_algorithm(self.method)
             except ValueError as e:
                 raise ValueError(
-                    f"method={self.method!r} not recognised; "
-                    f"supported: 'REML' (default), 'fREML', {BAM!r}"
+                    f"method={self.method!r} not recognised; supported: "
+                    f"'REML' (default), {FREML!r}, {BAM!r}, {EFS!r}"
                 ) from e
         try:
             try:
@@ -600,12 +606,8 @@ class Gam:
                     raise
                 # Fellner-Schall reached only the GLM envelope driver; the
                 # native side says so rather than running Newton behind the
-                # caller's back. Refit on REML instead of propagating: both
-                # optimise the same criterion, damped Newton is the stronger
-                # of the two here, and callers that have passed fREML for
-                # years should not start failing over an optimiser word. The
-                # refusal fires before the outer solve, so the retry repeats
-                # design assembly, not a fit.
+                # caller's back. Both optimise the same criterion and damped
+                # Newton is the stronger of the two here, so refit on REML.
                 _gamrs_native.set_outer_algorithm(None)
                 warnings.warn(
                     f"method={self.method!r} is not available for this fit "
@@ -621,6 +623,26 @@ class Gam:
         finally:
             if wants_override:
                 _gamrs_native.set_outer_algorithm(None)
+
+    def _fit_freml(self, X: ArrayLike, y: ArrayLike, sample_weight: Any) -> "Gam":
+        """``method="fREML"``: bam, or REML with a warning where bam does not
+        cover the model (gamrs's long-standing convention for this word)."""
+        self.method = BAM
+        try:
+            return self._fit_impl(X, y, sample_weight)
+        except ValueError as e:
+            if BAM_UNSUPPORTED_MARKER not in str(e):
+                raise
+            self.method = "REML"
+            warnings.warn(
+                f"method='fREML' runs mgcv's bam, which does not support this "
+                f"model (family={self.family!r}); fitting by REML instead. "
+                f"Pass method='REML' to silence this. Native message: {e}",
+                stacklevel=3,
+            )
+            return self._fit_impl(X, y, sample_weight)
+        finally:
+            self.method = FREML
 
     def _fit_impl(self, X: ArrayLike, y: ArrayLike, sample_weight: Any) -> "Gam":
         X_arr, cols = to_2d_with_columns(X, self.predictors)

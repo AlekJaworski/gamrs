@@ -104,13 +104,13 @@ def main():
     for family, synth in SCENARIOS:
         for n in N_VALUES:
             x, y, fam = synth(n)
-            # gamrs Newton + fREML
+            # gamrs Newton + efs (Fellner-Schall)
             try:
                 g_newton_ms, _ = time_fit(gamrs, x, y, fam, gamrs_algorithm=None)
             except Exception:
                 g_newton_ms = float("nan")
             try:
-                g_freml_ms, _ = time_fit(gamrs, x, y, fam, gamrs_algorithm="fREML")
+                g_freml_ms, _ = time_fit(gamrs, x, y, fam, gamrs_algorithm="efs")
             except Exception:
                 g_freml_ms = float("nan")
             # mgcv_rust REML + fREML

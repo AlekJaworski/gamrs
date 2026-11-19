@@ -244,7 +244,7 @@ fn saturated_scat_refuses_fellner_schall_instead_of_ignoring_it() {
         Ok(_) => panic!("scat + Fellner-Schall must be refused, not silently ignored"),
     };
     assert!(
-        msg.contains("fREML") && msg.contains("shape-parameter"),
+        msg.contains("efs") && msg.contains("shape-parameter"),
         "error should name the parameter and the path; got {msg:?}"
     );
 }

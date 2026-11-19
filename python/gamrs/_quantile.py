@@ -614,7 +614,8 @@ def fit_quantile_lss(
       shape: ``"gaussian"`` (default; `z_τ = Φ⁻¹(τ)`, no scipy needed) or
         ``"shash"`` (fit skew/kurtosis; needs the `[quantile]` extra). A SHASH
         fit that diverges falls back to Gaussian with a warning.
-      method: outer optimiser for the two GAMs (``"REML"`` default / ``"fREML"``).
+      method: ``Gam(method=)`` for the two GAMs (``"REML"`` default, ``"fREML"``
+        for mgcv bam, ``"efs"`` for Fellner-Schall).
 
     Returns:
       A :class:`QuantileLSSFit`. Use `.predict_quantile(X, tau)` for any/all τ,

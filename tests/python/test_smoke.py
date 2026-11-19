@@ -890,8 +890,9 @@ def test_all_parametric_design_fits_for_a_non_gaussian_family():
 # --------------------------------------------------------------------------- #
 # method= is honoured, or substituted out loud — never silently dropped       #
 # --------------------------------------------------------------------------- #
-def test_freml_falls_back_to_reml_where_fellner_schall_was_never_ported():
-    """`method="fREML"` used to be a silent no-op on most fit paths.
+def test_efs_falls_back_to_reml_where_fellner_schall_was_never_ported():
+    """Fellner-Schall (`method="efs"`, formerly "fREML") used to be a silent
+    no-op on most fit paths.
 
     Fellner-Schall reached the GLM envelope driver only. The gaussian
     closed-form path, the quantile path and the shape-parameter families
@@ -913,16 +914,16 @@ def test_freml_falls_back_to_reml_where_fellner_schall_was_never_ported():
         y_fam = np.abs(y) * 3.0 if family == "nb" else y
         reml = gamrs.Gam(family=family, method="REML", k_default=6).fit(x, y_fam)
         with pytest.warns(UserWarning, match="not available for this fit path"):
-            fell = gamrs.Gam(family=family, method="fREML", k_default=6).fit(x, y_fam)
+            fell = gamrs.Gam(family=family, method="efs", k_default=6).fit(x, y_fam)
         # Fell back, so it must be the REML answer itself, not a near miss.
         assert np.allclose(fell.predict(x), reml.predict(x), rtol=0, atol=1e-12), family
 
 
-def test_freml_still_runs_fellner_schall_where_it_was_ported():
+def test_efs_still_runs_fellner_schall_where_it_was_ported():
     """The fallback must not have swallowed the solver it falls back from.
 
     Poisson goes through the GLM envelope driver, the one path Fellner-Schall
-    was ported to. Asserting "does not raise" would still pass if `fREML` had
+    was ported to. Asserting "does not raise" would still pass if `efs` had
     become an alias for REML, so this asserts the two optimisers leave
     different tracks: FS takes a different iteration count to reach the same
     criterion, and warns about nothing.
@@ -934,10 +935,10 @@ def test_freml_still_runs_fellner_schall_where_it_was_ported():
     reml = gamrs.Gam(family="poisson", method="REML", k_default=10).fit(x, y)
     with warnings.catch_warnings():
         warnings.simplefilter("error", UserWarning)
-        fell = gamrs.Gam(family="poisson", method="fREML", k_default=10).fit(x, y)
+        fell = gamrs.Gam(family="poisson", method="efs", k_default=10).fit(x, y)
 
     assert fell.n_iters_ != reml.n_iters_, (
-        f"fREML took the same {reml.n_iters_} iterations as REML — "
+        f"efs took the same {reml.n_iters_} iterations as REML — "
         "Fellner-Schall looks aliased away, not run"
     )
     # Different routes, different answers — each matching its mgcv counterpart
@@ -948,6 +949,33 @@ def test_freml_still_runs_fellner_schall_where_it_was_ported():
     # and why these two used to "agree".
     assert np.allclose(reml.get_lambdas(), [91.558444], rtol=1e-4)
     assert np.allclose(fell.get_lambdas(), [91.982778], rtol=1e-4)
+
+
+def test_freml_is_bam():
+    """`method="fREML"` is mgcv's bam: the same fit as `method="bam"`."""
+    rng = np.random.default_rng(0)
+    x = np.linspace(0.0, 1.0, 300)
+    y = rng.poisson(np.exp(1.0 + np.sin(2 * np.pi * x))).astype(float)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        fr = gamrs.Gam(family="poisson", method="fREML", k_default=10).fit(x, y)
+    bam = gamrs.Gam(family="poisson", method="bam", k_default=10).fit(x, y)
+    assert fr.method == "fREML"
+    assert np.array_equal(fr.predict(x), bam.predict(x))
+    assert np.array_equal(fr.get_lambdas(), bam.get_lambdas())
+
+
+def test_freml_falls_back_to_reml_where_bam_does_not_apply():
+    """Where bam has no port, "fREML" warns and fits REML; "bam" raises."""
+    rng = np.random.default_rng(0)
+    x = np.linspace(0.0, 1.0, 300)
+    y = np.exp(np.sin(2 * np.pi * x) + rng.normal(scale=0.2, size=x.size))
+    reml = gamrs.Gam(family="tweedie", method="REML", k_default=6).fit(x, y)
+    with pytest.warns(UserWarning, match="runs mgcv's bam"):
+        fell = gamrs.Gam(family="tweedie", method="fREML", k_default=6).fit(x, y)
+    assert np.array_equal(fell.predict(x), reml.predict(x))
+    with pytest.raises(ValueError, match="bam does not support"):
+        gamrs.Gam(family="tweedie", method="bam", k_default=6).fit(x, y)
 
 
 def test_non_convergence_warns_instead_of_being_silent():

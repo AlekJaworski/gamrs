@@ -227,21 +227,21 @@ peff = g.partial_effect("x0", grid_n=100, level=0.95)
 peff.plot(x="x", y="mean")  # or hand to matplotlib / seaborn / altair
 ```
 
-## 9. Large-n fits — switch to `method="fREML"`
+## 9. Large-n fits — `method="fREML"` (mgcv `bam`)
 
-`gamrs`'s default is REML via damped Newton; for GLM families at large n,
-`method="fREML"` switches to Fellner–Schall λ updates, as in mgcv's
-`gam(optimizer = "efs")`, still on the REML criterion: results match
-`gam(method = "REML")`.
+`method="fREML"` (or its alias `"bam"`) fits what mgcv's
+`bam(method = "fREML")` fits, with bam's performance iteration and, above
+n = 10,000, bam's own row sample for setting up the basis:
 
 ```python
 g = Gam(family="poisson", method="fREML").fit(X_big, y_big)
 ```
 
-Pick `method="fREML"` when `n >= 50_000` and the family is binomial, Poisson,
-Gamma, inverse Gaussian or quasi (see [`docs/perf.md`](perf.md)). Other
-families (Gaussian, NegBin, Tweedie, scat, …) have their own optimisers; there
-`method="fREML"` warns and fits by REML.
+It covers gaussian, poisson, binomial, Gamma, nb and scat with one penalty per
+term; other models fit by REML with a warning. For Fellner–Schall λ updates on
+the REML criterion, as in mgcv's `gam(optimizer = "efs")`, pass
+`method="efs"` (binomial, Poisson, Gamma, inverse Gaussian or quasi; see
+[`docs/perf.md`](perf.md)).
 
 ## 10. Quantile regression (ELF)
 
@@ -332,6 +332,6 @@ isn't there — it's rebuilt on demand.
 
 ## Where next
 
-- **[docs/perf.md](perf.md)** — REML vs fREML, large-n tips, reading `fit_stats_`.
+- **[docs/perf.md](perf.md)** — REML vs fREML (bam) vs efs, large-n tips, reading `fit_stats_`.
 - **tests/python/** — parity tests against `mgcv` R fixtures, also serve as
   worked examples for every family.

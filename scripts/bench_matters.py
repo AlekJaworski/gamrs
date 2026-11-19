@@ -198,10 +198,10 @@ def run_cell(label: str, family: str, X: np.ndarray, y: np.ndarray, *,
     n = X.shape[0]
     # gamrs REML
     g_med, g_best = time_fit(cell_gamrs(family, X, y, d=d, k=k, **gamrs_kw))
-    # gamrs fREML (when applicable — single-smooth GLM families benefit most)
+    # gamrs efs (Fellner-Schall; when applicable — single-smooth GLM families benefit most)
     try:
         g_fs_med, g_fs_best = time_fit(
-            cell_gamrs(family, X, y, d=d, k=k, method="fREML", **gamrs_kw)
+            cell_gamrs(family, X, y, d=d, k=k, method="efs", **gamrs_kw)
         )
     except Exception:
         g_fs_med = g_fs_best = float("nan")
