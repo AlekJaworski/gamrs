@@ -31,8 +31,7 @@ def mgcv_theta(family, g):
     [
         ("3d_gaussian_bam_freml_n2000_k10_cr", "gaussian", 1e-9),
         ("3d_gaussian_weighted_bam_freml_n2000_k10_cr", "gaussian", 1e-9),
-        # x2's λ sits on a flat ridge that moves with the linear-algebra path (1.2e-7).
-        ("3d_nb_log_bam_freml_n2000_k10_cr", "negbin", 1e-6),
+        ("3d_nb_log_bam_freml_n2000_k10_cr", "negbin", 1e-8),
         ("3d_scat_identity_weighted_bam_freml_n1500_k10_cr", "scat", 1e-8),
         ("3d_gamma_log_bam_freml_n2000_k10_cr", "gamma", 1e-8),
         ("2d_gaussian_bam_freml_sweepdrop_tie_n1500", "gaussian", 1e-9),
