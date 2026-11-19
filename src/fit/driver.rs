@@ -82,8 +82,9 @@ impl LambdaInit for SmartInit {
     }
 }
 
-/// mgcv's `initial.sp` (mgcv 1.9-3) on the weighted design `√w·X` — what
-/// `initial.spg` does for an extended family such as `scat`. Each term's
+/// mgcv's `initial.sp` on the weighted design `√w·X` — where `initial.spg`
+/// starts every `gam()` smoothing search ([`MgcvInit::glm`] gives the
+/// weights for an exponential family; scat passes its own). Each term's
 /// λ is set from its OWN block: the mean of `diag(X'WX)` over the columns
 /// its penalty acts on, over the mean of `diag(S_j)` there. All λ are then
 /// scaled together by powers of 10 until the penalised columns are about
