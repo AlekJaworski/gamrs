@@ -439,13 +439,13 @@ pub fn combined_s(s_list: &[Array2<f64>], rho: &Array1<f64>, p: usize) -> Array2
         rho.len(),
         "combined_s: s_list and rho length mismatch"
     );
+    let lambdas: Vec<f64> = rho.iter().map(|r| r.exp()).collect();
     let mut s_total = Array2::<f64>::zeros((p, p));
-    for (j, s_j) in s_list.iter().enumerate() {
-        let lambda = rho[j].exp();
-        for r in 0..p {
-            for c in 0..p {
-                s_total[[r, c]] += lambda * s_j[[r, c]];
-            }
+    // Row by row, so each output row stays in cache across the terms; the per-entry
+    // summation order over j is unchanged.
+    for (r, mut row) in s_total.rows_mut().into_iter().enumerate() {
+        for (s_j, &lambda) in s_list.iter().zip(&lambdas) {
+            row.scaled_add(lambda, &s_j.row(r));
         }
     }
     s_total

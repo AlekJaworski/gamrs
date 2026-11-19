@@ -289,12 +289,7 @@ pub(crate) fn beta_sbeta(s: &Array2<f64>, beta: &Array1<f64>) -> f64 {
 /// Add `λ · S` to `xtwx` in place (penalty assembly).
 #[inline]
 pub(crate) fn add_penalty(a: &mut Array2<f64>, s: &Array2<f64>, lambda: f64) {
-    let p = a.nrows();
-    for i in 0..p {
-        for j in 0..p {
-            a[[i, j]] += lambda * s[[i, j]];
-        }
-    }
+    a.scaled_add(lambda, s);
 }
 
 /// Add `1e-7 · max(|A_ii|, 1)` to the diagonal of `a` and return its lower
