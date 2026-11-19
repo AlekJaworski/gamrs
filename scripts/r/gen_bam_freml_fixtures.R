@@ -130,3 +130,83 @@ for (n in c(12000L, 25000L)) {
              "lattice scat(identity), prior weights, default chunk.size", "scat", d,
              bam(fx("ys"), data = d, weights = w, family = scat(link = "identity"), method = "fREML"))
 }
+
+# Sweep-and-drop tie: a half-step discrete covariate whose two top values are
+# each held by one row, so with knots on the values two basis columns are
+# single-1 indicators with exactly equal variance in R (long-double sums), and
+# bam drops the first. A plain f64 running sum makes the second smaller.
+set.seed(20261121)
+n <- 1500
+xd <- sample(seq(1, 4, by = 0.5), n, TRUE); xd[129] <- 4.5; xd[1217] <- 6
+x1 <- runif(n); w <- runif(n, 0.5, 2)
+ft <- y ~ s(xd, k = 9, bs = "cr") + s(x1, k = 10, bs = "cr")
+emit_tie <- function(path, desc, family, d, fit, w = NULL) {
+  n <- nrow(d)
+  inputs <- list(n = n, k = c(9L, 10L), bs = c("cr", "cr"), family = family,
+                 x_train = lapply(seq_len(n), function(i) c(d$xd[i], d$x1[i])), y_train = as.numeric(d$y))
+  if (!is.null(w)) inputs$weights <- as.numeric(w)
+  obj <- list(schema_version = 1L, name = sub("\\.json$", "", path), description = desc,
+              metadata = list(mgcv_version = as.character(packageVersion("mgcv"))),
+              inputs = inputs, bam = summarise(fit))
+  cat(toJSON(obj, auto_unbox = TRUE, digits = 17), file = file.path(FIX, path))
+  cat(sprintf("  %-46s dropped col %d, edf=%.4f\n", obj$name, attr(fit$smooth[[1]], "qrc")[1], sum(fit$edf)))
+}
+d <- data.frame(xd = xd, x1 = x1, y = 1 + 0.5 * (xd - 2)^2 + sin(4 * x1) + rnorm(n, sd = 0.5))
+emit_tie("2d_gaussian_bam_freml_sweepdrop_tie_n1500.json", "gaussian, tied sweep-and-drop column variances",
+         "gaussian", d, bam(ft, data = d, method = "fREML"))
+d$y <- 1 + 0.5 * (xd - 2)^2 + sin(4 * x1) + 0.4 * rt(n, 4)
+emit_tie("2d_scat_identity_weighted_bam_freml_sweepdrop_tie_n1500.json",
+         "scat(identity), prior weights, tied sweep-and-drop column variances", "scat", d,
+         bam(ft, data = d, weights = w, family = scat(link = "identity"), method = "fREML"), w = w)
+
+# No smooth terms: bam switches to REML and its performance iteration fits each
+# working model by unpenalised least squares.
+set.seed(20261122)
+n <- 800
+x <- sample(1:3, n, TRUE) + 0; x2 <- runif(n); w <- runif(n, 0.5, 2); m <- sample(1:4, n, TRUE)
+d <- data.frame(x = x, x2 = x2, w = w, m = m,
+                scat = 10 + 2 * x + 1.5 * rt(n, 4), negbin = rnbinom(n, size = 2, mu = exp(0.5 + 0.3 * x)),
+                poisson = rpois(n, exp(0.5 + 0.3 * x)), gamma = rgamma(n, 3, rate = 3 / exp(1 + 0.2 * x)),
+                binomial = rbinom(n, m, plogis(-0.5 + 0.4 * x)) / m)
+fits <- list(
+  scat = bam(scat ~ x, data = d, weights = w, family = scat(link = "identity"), method = "fREML"),
+  negbin = bam(negbin ~ x + x2, data = d, family = nb(), method = "fREML"),
+  poisson = bam(poisson ~ x, data = d, family = poisson(), method = "fREML"),
+  gamma = bam(gamma ~ x, data = d, family = Gamma(link = "log"), method = "fREML"),
+  binomial = bam(binomial ~ x, data = d, weights = m, family = binomial(), method = "fREML"))
+out <- lapply(fits, function(b) {
+  th <- b$family$getTheta
+  list(predictions_train = as.numeric(fitted(b)), beta = as.numeric(coef(b)), reml = as.numeric(b$gcv.ubre),
+       scale = as.numeric(b$sig2), irls_iter = as.integer(b$iter),
+       theta = if (is.null(th)) NULL else I(as.numeric(th(TRUE))))
+})
+obj <- list(schema_version = 1L, name = "parametric_only_bam_n800",
+            description = "bam with no smooth terms: scat (weights) y~x, nb y~x+x2, poisson, Gamma(log) y~x, binomial (sizes as weights) y~x",
+            metadata = list(mgcv_version = as.character(packageVersion("mgcv"))),
+            inputs = list(n = n, x = x, x2 = x2, w = w, m = m, y = lapply(d[names(fits)], as.numeric)), bam = out)
+cat(toJSON(obj, auto_unbox = TRUE, digits = 17), file = file.path(FIX, "parametric_only_bam_n800.json"))
+cat(sprintf("  parametric_only_bam_n800: irls %s\n", paste(sapply(fits, `[[`, "iter"), collapse = ",")))
+
+# Ill-conditioned: a covariate spanning 1e3 to 2.5e8 with a heavy right tail and
+# three points at the top, as lot sizes do; the cr basis then has condition ~1e10.
+set.seed(20261123)
+n <- 2000
+xl <- pmax(exp(rnorm(n, log(8000), 0.6)), 1e3); xl[sample(n, 3)] <- c(3e6, 4e7, 2.5e8)
+x2 <- runif(n)
+fl <- y ~ s(xl, k = 10, bs = "cr") + s(x2, k = 10, bs = "cr")
+emit_ill <- function(path, desc, family, d, fit) {
+  inputs <- list(n = n, k = c(10L, 10L), bs = c("cr", "cr"), family = family,
+                 x_train = lapply(seq_len(n), function(i) c(d$xl[i], d$x2[i])), y_train = as.numeric(d$y))
+  obj <- list(schema_version = 1L, name = sub("\\.json$", "", path), description = desc,
+              metadata = list(mgcv_version = as.character(packageVersion("mgcv"))),
+              inputs = inputs, bam = summarise(fit))
+  cat(toJSON(obj, auto_unbox = TRUE, digits = 17), file = file.path(FIX, path))
+  cat(sprintf("  %-46s edf=%.4f\n", obj$name, sum(fit$edf)))
+}
+s <- log(xl); s <- (s - mean(s)) / sd(s)
+d <- data.frame(xl = xl, x2 = x2, y = 1 + s + sin(4 * x2) + rnorm(n, sd = 0.5))
+emit_ill("2d_gaussian_bam_freml_illcond_n2000.json", "gaussian, covariate spanning 1e3-2.5e8",
+         "gaussian", d, bam(fl, data = d, method = "fREML"))
+d$y <- 1 + s + sin(4 * x2) + 0.5 * rt(n, 4)
+emit_ill("2d_scat_identity_bam_freml_illcond_n2000.json", "scat(identity), covariate spanning 1e3-2.5e8",
+         "scat", d, bam(fl, data = d, family = scat(link = "identity"), method = "fREML"))

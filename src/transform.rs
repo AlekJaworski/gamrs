@@ -80,16 +80,9 @@ impl<B: Basis> SumToZero<B> {
     /// column but the dropped one, `m` their means), which equals mgcv's
     /// `X[, -drop] − m'` only because the basis rows sum to one (true of CR).
     pub fn sweep_drop(inner: B, x_fit_design: ArrayView2<f64>) -> Self {
-        let (n, k) = x_fit_design.dim();
-        let mean = x_fit_design.sum_axis(Axis(0)) / n as f64;
-        let var: Vec<f64> = (0..k)
-            .map(|j| {
-                let col = x_fit_design.column(j);
-                col.iter().map(|&v| (v - mean[j]).powi(2)).sum::<f64>() / (n as f64 - 1.0)
-            })
-            .collect();
-        let min = var.iter().cloned().fold(f64::INFINITY, f64::min);
-        let drop = var.iter().position(|&v| v == min).unwrap_or(0);
+        let k = x_fit_design.ncols();
+        let mean: Array1<f64> = x_fit_design.columns().into_iter().map(r_mean).collect();
+        let drop = sweep_drop_column(x_fit_design);
         let mut c = Array2::<f64>::zeros((k, k - 1));
         for (out, j) in (0..k).filter(|&j| j != drop).enumerate() {
             c[[j, out]] = 1.0;
@@ -271,6 +264,72 @@ pub(crate) fn descending_eigh(penalty: ArrayView2<f64>) -> Result<(Array1<f64>, 
 /// Public wrapper around [`nullspace_householder`] for callers (e.g. the
 /// n-margin tensor builder) that have a raw column-sum vector but no
 /// `Basis` instance to feed [`SumToZero::from_fit_design`].
+/// R's `var(x)`: two-pass mean with a correction pass, then the sum of
+/// squared deviations over `n − 1`, all accumulated in extended precision
+/// (R uses long double). The values are summed in sorted order with
+/// compensated sums, so columns holding the same values give bitwise-equal
+/// variances: on a discrete covariate whose values sit on the knots, columns
+/// are 0/1 indicators, R's variances tie exactly, and `which.min` must see
+/// the tie (an f64 running sum breaks it by an ulp and drops another column).
+/// The column `sweep_drop` removes: mgcv's `min(which(vcol == min(vcol)))`.
+pub(crate) fn sweep_drop_column(x_fit_design: ArrayView2<f64>) -> usize {
+    let var: Vec<f64> = x_fit_design.columns().into_iter().map(r_var).collect();
+    let min = var.iter().cloned().fold(f64::INFINITY, f64::min);
+    var.iter().position(|&v| v == min).unwrap_or(0)
+}
+
+/// `X[, -drop] − m'` as mgcv forms it, from a `sweep_drop` map `c`: its
+/// dropped row holds `−m`.
+pub(crate) fn apply_sweep_drop(
+    raw: ArrayView2<f64>,
+    c: ArrayView2<f64>,
+    drop: usize,
+) -> Array2<f64> {
+    let keep: Vec<usize> = (0..raw.ncols()).filter(|&j| j != drop).collect();
+    let mut out = raw.select(ndarray::Axis(1), &keep);
+    for (o, mut col) in out.columns_mut().into_iter().enumerate() {
+        let m = -c[[drop, o]];
+        col.mapv_inplace(|v| v - m);
+    }
+    out
+}
+
+/// R's `colMeans`: the sum to extended precision, then divided by `n`.
+fn r_mean(x: ArrayView1<f64>) -> f64 {
+    let n = x.len() as f64;
+    let (hi, lo) = two_sum(x.iter().copied());
+    let q = hi / n;
+    q + ((-q).mul_add(n, hi) + lo) / n
+}
+
+fn r_var(x: ArrayView1<f64>) -> f64 {
+    let mut v = x.to_vec();
+    v.sort_by(|a, b| a.total_cmp(b));
+    let n = v.len() as f64;
+    let mut mean = neumaier(v.iter().copied()) / n;
+    mean += neumaier(v.iter().map(|&a| a - mean)) / n;
+    neumaier(v.iter().map(|&a| (a - mean) * (a - mean))) / (n - 1.0)
+}
+
+pub(crate) fn neumaier(values: impl Iterator<Item = f64>) -> f64 {
+    let (sum, comp) = two_sum(values);
+    sum + comp
+}
+
+fn two_sum(values: impl Iterator<Item = f64>) -> (f64, f64) {
+    let (mut sum, mut comp) = (0.0_f64, 0.0_f64);
+    for x in values {
+        let t = sum + x;
+        comp += if sum.abs() >= x.abs() {
+            (sum - t) + x
+        } else {
+            (x - t) + sum
+        };
+        sum = t;
+    }
+    (sum, comp)
+}
+
 pub(crate) fn nullspace_householder_pub(t: ArrayView1<f64>) -> Array2<f64> {
     nullspace_householder(t)
 }

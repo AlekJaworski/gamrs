@@ -371,6 +371,7 @@ impl Additive {
                     let pred = Predictor::Cr(CrPredictor {
                         knots: fit.knots,
                         centring: fit.centring,
+                        mgcv: fit.mgcv,
                     });
                     per_term_predictor.push(ByPredictor::wrap(pred, col, by));
                     cols_used.push(t.cols());

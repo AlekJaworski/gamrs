@@ -1,6 +1,8 @@
 //! `fit_bam` against mgcv `bam(method = "fREML")` on 3-D additive fixtures
 //! (`scripts/r/gen_bam_freml_fixtures.R`). x2 is linear, so its λ sits on a
 //! flat REML ridge where only the same Newton path lands on bam's value.
+//! The 2-D tie fixtures put one observation on each of the top two knots, so
+//! sweep-and-drop sees two columns of exactly equal variance.
 
 use std::path::PathBuf;
 
@@ -65,10 +67,11 @@ where
     p.push(format!("tests/fixtures/{name}.json"));
     let fx: Fixture = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
     let n = fx.inputs.y_train.len();
-    let x = Array2::from_shape_vec((n, 3), fx.inputs.x_train.concat()).unwrap();
+    let d = fx.inputs.k.len();
+    let x = Array2::from_shape_vec((n, d), fx.inputs.x_train.concat()).unwrap();
     let y = Array1::from_vec(fx.inputs.y_train);
     let w = fx.inputs.weights.map(Array1::from_vec);
-    let terms = (0..3)
+    let terms = (0..d)
         .map(|col| TermSpec::Cr {
             col,
             k: fx.inputs.k[col],
@@ -129,8 +132,8 @@ where
     assert!(sp < tol.sp, "{report}");
     assert!(edf_term < tol.fitted, "{report}");
     assert!(rel(fit.edf_total, r.edf_total) < tol.fitted, "{report}");
-    assert!(rel(fit.reml_value, r.reml) < 1e-9, "{report}");
-    assert!(rel(fit.scale, r.scale) < 1e-9, "{report}");
+    assert!(rel(fit.reml_value, r.reml) < tol.reml, "{report}");
+    assert!(rel(fit.scale, r.scale) < tol.reml, "{report}");
     assert!(th < tol.fitted, "{report} theta {th:.2e}");
     assert_eq!(fit.n_iters, r.iter, "{report}");
     if family_name != "gaussian" {
@@ -147,15 +150,25 @@ where
 struct Tol {
     fitted: f64,
     sp: f64,
+    reml: f64,
 }
 
 const GAUSSIAN: Tol = Tol {
     fitted: 1e-9,
     sp: 1e-7,
+    reml: 1e-9,
 };
 const PIRLS: Tol = Tol {
     fitted: 1e-6,
     sp: 1e-5,
+    reml: 1e-9,
+};
+/// A covariate spanning 1e3–2.5e8: X'WX squares the basis's ~1e10 condition
+/// number, so gamrs sits 8e-6 (fitted) and 1e-8 (REML) from bam's QR.
+const ILL_CONDITIONED: Tol = Tol {
+    fitted: 1e-4,
+    sp: 1e-6,
+    reml: 1e-7,
 };
 
 #[test]
@@ -342,4 +355,44 @@ fn bam_above_chunk_size_uses_mgcvs_row_sample() {
             PIRLS,
         );
     }
+}
+
+#[test]
+fn bam_sweep_drop_tie_drops_rs_column() {
+    check(
+        "2d_gaussian_bam_freml_sweepdrop_tie_n1500",
+        gaussian_identity(),
+        "gaussian",
+        GAUSSIAN,
+    );
+}
+
+#[test]
+fn bam_sweep_drop_tie_scat() {
+    check(
+        "2d_scat_identity_weighted_bam_freml_sweepdrop_tie_n1500",
+        tdist_identity(5.0, 1.0),
+        "scat",
+        PIRLS,
+    );
+}
+
+#[test]
+fn bam_ill_conditioned_covariate_gaussian() {
+    check(
+        "2d_gaussian_bam_freml_illcond_n2000",
+        gaussian_identity(),
+        "gaussian",
+        ILL_CONDITIONED,
+    );
+}
+
+#[test]
+fn bam_ill_conditioned_covariate_scat() {
+    check(
+        "2d_scat_identity_bam_freml_illcond_n2000",
+        tdist_identity(5.0, 1.0),
+        "scat",
+        ILL_CONDITIONED,
+    );
 }

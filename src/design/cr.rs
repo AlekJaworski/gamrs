@@ -11,7 +11,7 @@ use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use crate::basis::CrSpline;
 use crate::error::{GamrsError, Result};
 use crate::traits::{Basis, BasisTransform};
-use crate::transform::{descending_eigh, SumToZero};
+use crate::transform::{apply_sweep_drop, descending_eigh, sweep_drop_column, SumToZero};
 
 use super::by::{scale_rows, varies};
 use super::{
@@ -67,13 +67,34 @@ fn constraint_map(
 pub struct CrPredictor {
     pub knots: Array1<f64>,
     pub centring: Array2<f64>,
+    /// `bam`'s term: mgcv's knots and basis arithmetic, and `Some(column)` when
+    /// the constraint is sweep-and-drop (`X[, -drop] − m'`, formed as mgcv does).
+    #[cfg_attr(feature = "persistence", serde(default))]
+    pub mgcv: Option<MgcvCentring>,
+}
+
+#[cfg_attr(feature = "persistence", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug)]
+pub struct MgcvCentring {
+    pub sweep_drop: Option<usize>,
+}
+
+impl MgcvCentring {
+    fn centre(&self, raw: ArrayView2<f64>, c: ArrayView2<f64>) -> Array2<f64> {
+        match self.sweep_drop {
+            Some(d) => apply_sweep_drop(raw, c, d),
+            None => raw.dot(&c),
+        }
+    }
 }
 
 impl CrPredictor {
     pub(crate) fn design(&self, x_new: ArrayView2<f64>) -> Result<Array2<f64>> {
         let cr = CrSpline::new(self.knots.clone())?;
-        let raw = cr.evaluate(x_new);
-        let centred = raw.dot(&self.centring);
+        let centred = match self.mgcv {
+            Some(m) => m.centre(cr.evaluate_mgcv(x_new).view(), self.centring.view()),
+            None => cr.evaluate(x_new).dot(&self.centring),
+        };
         Ok(prepend_intercept(centred.view()))
     }
 
@@ -99,6 +120,9 @@ impl CrPredictor {
         by: Option<usize>,
         centring: Centring,
     ) -> Result<CenteredCrFit> {
+        if centring == Centring::SweepDrop {
+            return Self::fit_centred_mgcv(x, x_col_idx, k, pc, by);
+        }
         let x_col = x.column(x_col_idx);
         let cr = CrSpline::with_quantile_knots(x_col, k)?;
         let knots = cr.knots().to_owned();
@@ -127,6 +151,56 @@ impl CrPredictor {
             centring,
             centred,
             s_smooth,
+            mgcv: None,
+        })
+    }
+
+    /// `smoothCon` for `bam`, operation for operation: knots, basis, penalty
+    /// and its `S / (‖S‖₁ / ‖X‖∞²)` scaling, then sweep-and-drop as row and
+    /// column removal. Ill-scaled covariates and exact ties then land where R's do.
+    fn fit_centred_mgcv(
+        x: ArrayView2<f64>,
+        x_col_idx: usize,
+        k: usize,
+        pc: Option<f64>,
+        by: Option<usize>,
+    ) -> Result<CenteredCrFit> {
+        let cr = CrSpline::with_mgcv_knots(x.column(x_col_idx), k)?;
+        let knots = cr.knots().to_owned();
+        let raw = cr.evaluate_mgcv(x.slice(ndarray::s![.., x_col_idx..x_col_idx + 1]));
+        let s_raw = cr.penalty_mgcv();
+        let x_inf = matrix_inf_norm(raw.view());
+        let ma_s = matrix_inf_norm(s_raw.view()) / (x_inf * x_inf);
+        let s_scaled = if ma_s > 0.0 {
+            s_raw.mapv(|v| v / ma_s)
+        } else {
+            s_raw
+        };
+
+        let w = by.map(|b| x.column(b));
+        let centring = constraint_map(cr, raw.view(), pc, w, Centring::SweepDrop)?;
+        let sweeps = pc.is_none() && !w.is_some_and(varies);
+        let mgcv = MgcvCentring {
+            sweep_drop: sweeps.then(|| sweep_drop_column(raw.view())),
+        };
+        let mut centred = mgcv.centre(raw.view(), centring.view());
+        scale_rows(&mut centred, w);
+        let s_smooth = match mgcv.sweep_drop {
+            Some(d) => {
+                let keep: Vec<usize> = (0..s_scaled.nrows()).filter(|&j| j != d).collect();
+                s_scaled
+                    .select(ndarray::Axis(0), &keep)
+                    .select(ndarray::Axis(1), &keep)
+            }
+            None => centring.t().dot(&s_scaled).dot(&centring),
+        };
+
+        Ok(CenteredCrFit {
+            knots,
+            centring,
+            centred,
+            s_smooth,
+            mgcv: Some(mgcv),
         })
     }
 }
@@ -138,6 +212,7 @@ pub(crate) struct CenteredCrFit {
     pub centring: Array2<f64>,
     pub centred: Array2<f64>,
     pub s_smooth: Array2<f64>,
+    pub mgcv: Option<MgcvCentring>,
 }
 
 /// Cubic-regression spline + sum-to-zero constraint + intercept.
@@ -172,6 +247,7 @@ impl DesignStrategy for Cr {
             predictor: Predictor::Cr(CrPredictor {
                 knots: fit.knots,
                 centring: fit.centring,
+                mgcv: fit.mgcv,
             }),
             constraints: None,
         })

@@ -17,7 +17,7 @@
 use std::ops::Range;
 
 use ndarray::{s, Array1, Array2, ArrayView1};
-use ndarray_linalg::{DeterminantC, Eigh, FactorizeC, InverseC, UPLO};
+use ndarray_linalg::{DeterminantC, FactorizeC, InverseC, UPLO};
 
 use crate::error::{GamrsError, Result};
 use crate::inner::DesignMatrix;
@@ -94,9 +94,7 @@ impl FastRemlGaussianScore {
             }
             (first..=last).for_each(|r| covered[r] = true);
             let block = s_j.slice(s![first..=last, first..=last]);
-            let (vals, vecs) = block
-                .eigh(UPLO::Lower)
-                .map_err(|e| GamrsError::Linalg(format!("bam penalty reparam: {e}")))?;
+            let (vals, vecs) = r_eigen(block.to_owned())?;
             let k = vals.len();
             // Descending eigenvalues: the range columns come first.
             for (out, i) in (0..k).rev().enumerate() {
@@ -199,9 +197,66 @@ impl FastRemlGaussianScore {
     }
 }
 
+/// R's `eigen(symmetric = TRUE)`: LAPACK `dsyevr` (MRRR), ascending. On an
+/// ill-conditioned cr penalty it resolves the small eigenvectors about ten times
+/// closer than `dsyev`, and the reparametrisation inherits that error.
+pub(crate) fn r_eigen(mut a: Array2<f64>) -> Result<(Array1<f64>, Array2<f64>)> {
+    use std::os::raw::{c_char, c_int};
+    let n = a.nrows();
+    if n == 0 {
+        return Ok((Array1::zeros(0), Array2::zeros((0, 0))));
+    }
+    let ni = n as c_int;
+    // Column-major lower triangle = row-major upper; the matrix is symmetric.
+    let (jobz, range, uplo) = (b'V' as c_char, b'A' as c_char, b'L' as c_char);
+    let (vl, vu, il, iu, abstol) = (0.0, 0.0, 0 as c_int, 0 as c_int, 0.0);
+    let mut m: c_int = 0;
+    let mut w = vec![0.0; n];
+    let mut z = vec![0.0; n * n];
+    let mut isuppz = vec![0 as c_int; 2 * n];
+    let mut info: c_int = 0;
+    let mut call = |work: &mut [f64], lwork: c_int, iwork: &mut [c_int], liwork: c_int| unsafe {
+        lapack_sys::dsyevr_(
+            &jobz,
+            &range,
+            &uplo,
+            &ni,
+            a.as_mut_ptr(),
+            &ni,
+            &vl,
+            &vu,
+            &il,
+            &iu,
+            &abstol,
+            &mut m,
+            w.as_mut_ptr(),
+            z.as_mut_ptr(),
+            &ni,
+            isuppz.as_mut_ptr(),
+            work.as_mut_ptr(),
+            &lwork,
+            iwork.as_mut_ptr(),
+            &liwork,
+            &mut info,
+        );
+    };
+    let (mut wq, mut iq) = ([0.0], [0 as c_int]);
+    call(&mut wq, -1, &mut iq, -1);
+    let (lwork, liwork) = (wq[0] as c_int, iq[0]);
+    let mut work = vec![0.0; lwork as usize];
+    let mut iwork = vec![0 as c_int; liwork as usize];
+    call(&mut work, lwork, &mut iwork, liwork);
+    if info != 0 {
+        return Err(GamrsError::Linalg(format!("dsyevr info {info}")));
+    }
+    // `z` is column-major: eigenvector j is z[j*n .. (j+1)*n].
+    let vecs = Array2::from_shape_fn((n, n), |(r, c)| z[c * n + r]);
+    Ok((Array1::from_vec(w), vecs))
+}
+
 fn unsupported() -> GamrsError {
     GamrsError::InvalidParameter(
-        "bam fREML supports one penalty per term (cr, re, parametric); \
+        "bam does not support this term: one penalty per term (cr, re, parametric); \
          tensor products are not implemented yet"
             .into(),
     )

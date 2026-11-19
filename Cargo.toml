@@ -31,6 +31,12 @@ version = "0.17"
 optional = true
 default-features = false
 
+# Already linked through ndarray-linalg → lax; bam calls `dsyevr` (R's
+# `eigen`) directly, which lax does not wrap.
+[dependencies.lapack-sys]
+version = "0.14"
+optional = true
+
 # Pulled directly (alongside ndarray-linalg → lax → openblas-src) for two
 # reasons: (1) lax requests openblas-src with `default-features = false`, but
 # openblas-src 0.10.16 made its HTTPS source-fetcher require a TLS feature —
@@ -68,7 +74,7 @@ profile = []
 # it, ndarray-linalg's BLAS hookup only accelerates linalg routines
 # (`Cholesky::cholesky`, `Solve::solve`, etc.) and leaves plain `.dot()` on the
 # pure-Rust path. mgcv_rust's perf gap on scat at v0.10 was traceable here.
-blas = ["dep:ndarray-linalg", "ndarray/blas"]
+blas = ["dep:ndarray-linalg", "ndarray/blas", "dep:lapack-sys"]
 # openblas backends pull openblas-src directly too (see [dependencies.openblas-src]
 # above) to enable `rustls` + the OPENBLAS_DYNAMIC_ARCH build. MKL doesn't use it.
 blas-system = ["ndarray-linalg/openblas-system", "dep:openblas-src"]   # Linux dev box + manylinux wheel

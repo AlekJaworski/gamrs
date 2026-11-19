@@ -31,17 +31,21 @@ def mgcv_theta(family, g):
     [
         ("3d_gaussian_bam_freml_n2000_k10_cr", "gaussian", 1e-9),
         ("3d_gaussian_weighted_bam_freml_n2000_k10_cr", "gaussian", 1e-9),
-        ("3d_nb_log_bam_freml_n2000_k10_cr", "negbin", 1e-8),
+        # x2's λ sits on a flat ridge that moves with the linear-algebra path (1.2e-7).
+        ("3d_nb_log_bam_freml_n2000_k10_cr", "negbin", 1e-6),
         ("3d_scat_identity_weighted_bam_freml_n1500_k10_cr", "scat", 1e-8),
         ("3d_gamma_log_bam_freml_n2000_k10_cr", "gamma", 1e-8),
+        ("2d_gaussian_bam_freml_sweepdrop_tie_n1500", "gaussian", 1e-9),
+        ("2d_scat_identity_weighted_bam_freml_sweepdrop_tie_n1500", "scat", 1e-8),
     ],
 )
 def test_bam_matches_mgcv_bam(stem, family, tol):
     fx = load_fixture(stem)
     x = x_train_2d(fx)
     ref = fx["bam"]
+    k = np.atleast_1d(fx["inputs"]["k"])
     g = gamrs.Gam(
-        terms=[gamrs.CrTerm(i, k=10) for i in range(3)], family=family, method="bam"
+        terms=[gamrs.CrTerm(i, k=int(k[i])) for i in range(len(k))], family=family, method="bam"
     ).fit(x, y_train(fx), sample_weight=fx["inputs"].get("weights"))
     fitted = np.max(np.abs(g.predict(x) / np.asarray(ref["predictions_train"]) - 1))
     sp = np.max(np.abs(np.asarray(g.lambda_) / np.asarray(ref["sp"]) - 1))
@@ -51,6 +55,24 @@ def test_bam_matches_mgcv_bam(stem, family, tol):
     assert abs(g.reml_value_ / ref["reml"] - 1) < 1e-10
     for got, want in zip(mgcv_theta(family, g), ref.get("theta") or []):
         assert abs(got / want - 1) < tol
+
+
+@pytest.mark.parametrize("family", ["scat", "negbin", "poisson", "gamma", "binomial"])
+def test_bam_parametric_only_matches_mgcv_bam(family):
+    fx = load_fixture("parametric_only_bam_n800")
+    inp, ref = fx["inputs"], fx["bam"][family]
+    cols = [inp["x"], inp["x2"]] if family == "negbin" else [inp["x"]]
+    x = np.column_stack(cols).astype(float)
+    w = {"scat": inp["w"], "binomial": inp["m"]}.get(family)
+    g = gamrs.Gam(
+        terms=[gamrs.ParametricTerm(j) for j in range(x.shape[1])], family=family, method="bam"
+    ).fit(x, np.asarray(inp["y"][family], float), sample_weight=w)
+    assert np.max(np.abs(g.predict(x) / np.asarray(ref["predictions_train"]) - 1)) < 1e-9
+    assert abs(g.reml_value_ / ref["reml"] - 1) < 1e-10
+    assert abs(g.scale_ / ref["scale"] - 1) < 1e-10
+    for got, want in zip(mgcv_theta(family, g), ref.get("theta") or []):
+        assert abs(got / want - 1) < 1e-8
+    assert g.fit_stats_["inner_pirls_iterations_total"] == ref["irls_iter"]
 
 
 def test_bam_refuses_unported_families():

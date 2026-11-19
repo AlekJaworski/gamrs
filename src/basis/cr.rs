@@ -75,6 +75,35 @@ impl CrSpline {
         Self::new(Array1::from_vec(knots))
     }
 
+    /// mgcv's cr knots operation for operation: R `quantile(unique(x),
+    /// seq(0, 1, length = k))` (type 7), so a knot is the same double R places.
+    pub(crate) fn with_mgcv_knots(x: ArrayView1<f64>, k: usize) -> Result<Self> {
+        let mut xs: Vec<f64> = x.to_vec();
+        xs.sort_by(|a, b| a.total_cmp(b));
+        xs.dedup();
+        let n = xs.len();
+        if n < k || k < 3 {
+            return Self::with_quantile_knots(x, k);
+        }
+        let by = 1.0 / (k - 1) as f64;
+        let knots = (0..k)
+            .map(|i| {
+                let p = if i == k - 1 { 1.0 } else { i as f64 * by };
+                let index = 1.0 + (n - 1) as f64 * p;
+                let (lo, hi) = (index.floor(), index.ceil());
+                let qs = xs[lo as usize - 1];
+                let x_hi = xs[hi as usize - 1];
+                if index > lo && x_hi != qs {
+                    let h = index - lo;
+                    (1.0 - h) * qs + h * x_hi
+                } else {
+                    qs
+                }
+            })
+            .collect();
+        Self::new(Array1::from_vec(knots))
+    }
+
     pub fn knots(&self) -> ArrayView1<'_, f64> {
         self.knots.view()
     }
@@ -277,6 +306,141 @@ impl Basis for CrSpline {
 /// Binary-search the half-open interval `[knots[i], knots[i+1])` that
 /// contains `xi`. Caller must have already checked `xi ∈ [knots[0],
 /// knots[k-1]]` — the routine returns `num_int - 1` for the right endpoint.
+impl CrSpline {
+    /// mgcv's `crspl` evaluation, operation for operation: an `x` on an interior
+    /// knot belongs to the interval on its left, so basis columns carry R's rounding
+    /// and exact variance ties in sweep-and-drop resolve as in R.
+    pub(crate) fn evaluate_mgcv(&self, x: ArrayView2<f64>) -> Array2<f64> {
+        let xk = &self.knots;
+        let nk = self.k;
+        let (f, _) = mgcv_fs(xk.view());
+        let (kmin, kmax) = (xk[0], xk[nk - 1]);
+        let mut design = Array2::<f64>::zeros((x.nrows(), nk));
+        for (i, &xi) in x.column(0).iter().enumerate() {
+            let mut row = design.row_mut(i);
+            if xi < kmin {
+                let h = xk[1] - kmin;
+                let xik = xi - kmin;
+                let (cjm, cjp) = (-xik * h / 3.0, -xik * h / 6.0);
+                for k in 0..nk {
+                    row[k] = cjm * f[[0, k]] + cjp * f[[1, k]];
+                }
+                row[0] += 1.0 - xik / h;
+                row[1] += xik / h;
+            } else if xi > kmax {
+                let j = nk - 1;
+                let h = kmax - xk[j - 1];
+                let xik = xi - kmax;
+                let (cjm, cjp) = (xik * h / 6.0, xik * h / 3.0);
+                for k in 0..nk {
+                    row[k] = cjm * f[[j - 1, k]] + cjp * f[[j, k]];
+                }
+                row[nk - 2] += -xik / h;
+                row[nk - 1] += 1.0 + xik / h;
+            } else {
+                let (mut j, mut jup) = (0usize, nk - 1);
+                while jup - j > 1 {
+                    let jmid = (jup + j) >> 1;
+                    if xi > xk[jmid] {
+                        j = jmid;
+                    } else {
+                        jup = jmid;
+                    }
+                }
+                let (xj, xj1) = (xk[j], xk[j + 1]);
+                let h = xj1 - xj;
+                let (ajm, ajp) = (xj1 - xi, xi - xj);
+                let cjm = (ajm * (ajm * ajm / h - h)) / 6.0;
+                let cjp = (ajp * (ajp * ajp / h - h)) / 6.0;
+                for k in 0..nk {
+                    row[k] = cjm * f[[j, k]] + cjp * f[[j + 1, k]];
+                }
+                row[j] += ajm / h;
+                row[j + 1] += ajp / h;
+            }
+        }
+        design
+    }
+}
+
+impl CrSpline {
+    /// mgcv's cr penalty: `getFS`'s S, then `(S + S')/2` as the constructor does.
+    pub(crate) fn penalty_mgcv(&self) -> Array2<f64> {
+        let (_, s) = mgcv_fs(self.knots.view());
+        Array2::from_shape_fn(s.dim(), |(i, j)| (s[[i, j]] + s[[j, i]]) / 2.0)
+    }
+}
+
+/// mgcv `getFS`: F (row i maps knot values to the second derivative at knot i)
+/// and the penalty S, solving B F = D with LAPACK `dptsv`'s L D L' arithmetic.
+fn mgcv_fs(xk: ArrayView1<f64>) -> (Array2<f64>, Array2<f64>) {
+    let n = xk.len();
+    let n2 = n - 2;
+    let h: Vec<f64> = (1..n).map(|i| xk[i] - xk[i - 1]).collect();
+    let mut d = vec![0.0; n2];
+    let mut e = vec![0.0; n2.saturating_sub(1)];
+    for i in 0..n2 {
+        d[i] = (h[i] + h[i + 1]) / 3.0;
+    }
+    for i in 1..n2 {
+        e[i - 1] = h[i] / 6.0;
+    }
+    for i in 0..n2.saturating_sub(1) {
+        let ei = e[i];
+        e[i] = ei / d[i];
+        d[i + 1] -= e[i] * ei;
+    }
+    let mut bd = Array2::<f64>::zeros((n2, n));
+    for col in 0..n {
+        let mut b = vec![0.0; n2];
+        for i in 0..n2 {
+            let (a, c) = (1.0 / h[i], 1.0 / h[i + 1]);
+            b[i] = match col {
+                c0 if c0 == i => a,
+                c0 if c0 == i + 1 => -a - c,
+                c0 if c0 == i + 2 => c,
+                _ => 0.0,
+            };
+        }
+        for i in 1..n2 {
+            b[i] -= b[i - 1] * e[i - 1];
+        }
+        // dptts2 scales a 1-row system by the reciprocal.
+        if n2 == 1 {
+            b[0] *= 1.0 / d[0];
+        } else {
+            b[n2 - 1] /= d[n2 - 1];
+        }
+        for i in (0..n2 - 1).rev() {
+            b[i] = b[i] / d[i] - b[i + 1] * e[i];
+        }
+        for i in 0..n2 {
+            bd[[i, col]] = b[i];
+        }
+    }
+    let mut f = Array2::<f64>::zeros((n, n));
+    f.slice_mut(ndarray::s![1..n - 1, ..]).assign(&bd);
+    let mut s = Array2::<f64>::zeros((n, n));
+    for i in 0..n {
+        s[[0, i]] = bd[[0, i]] * (1.0 / h[0]);
+        if n > 3 {
+            let (a, b) = (-1.0 / h[0] - 1.0 / h[1], 1.0 / h[1]);
+            s[[1, i]] = bd[[0, i]] * a + bd[[1, i]] * b;
+            for j in 2..n2 {
+                let (a, c) = (1.0 / h[j - 1], 1.0 / h[j]);
+                let b = -a - c;
+                s[[j, i]] = bd[[j - 2, i]] * a + bd[[j - 1, i]] * b + bd[[j, i]] * c;
+            }
+            let (a, b) = (1.0 / h[n2 - 1], -1.0 / h[n2 - 1] - 1.0 / h[n2]);
+            s[[n2, i]] = bd[[n2 - 2, i]] * a + bd[[n2 - 1, i]] * b;
+        } else {
+            s[[1, i]] = bd[[0, i]] * (-1.0 / h[0] - 1.0 / h[1]);
+        }
+        s[[n - 1, i]] = bd[[n2 - 1, i]] * (1.0 / h[n2]);
+    }
+    (f, s)
+}
+
 fn find_interval(knots: &Array1<f64>, xi: f64, num_int: usize) -> usize {
     let mut lo = 0usize;
     let mut hi = num_int;

@@ -7,7 +7,6 @@
 //! the penalised deviance, and re-estimate θ between steps (`estimate.theta`).
 
 use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2, Axis};
-use ndarray_linalg::{Eigh, UPLO};
 
 use crate::design::{Additive, Centring, PreparedDesign, TermSpec};
 use crate::error::{GamrsError, Result};
@@ -16,7 +15,7 @@ use crate::family::Family;
 use crate::inner::{CholeskySolver, DesignMatrix, LinearSolver};
 use crate::outer::fast_reml::FastRemlNewton;
 use crate::r_rng::RRng;
-use crate::score::fast_reml::FastRemlGaussianScore;
+use crate::score::fast_reml::{r_eigen, FastRemlGaussianScore};
 use crate::stats::FitStatsSnapshot;
 use crate::traits::{Link, Loss, OuterFit, VarianceFn};
 
@@ -266,6 +265,29 @@ fn fit_working(
             t
         }
     };
+    // With nothing to smooth bam fits each working model by unpenalised least
+    // squares (gam's REML with no λ), and its scale optimum rss/(n − p).
+    if m == 0 {
+        let rho = Array1::zeros(0);
+        let fit = score.fit_at(rho.view())?;
+        let n = z.len() as f64;
+        let log_phi = known_scale.map_or_else(|| (fit.rss / (n - prep.mp as f64)).ln(), f64::ln);
+        return Ok(WorkingFit {
+            beta: fit.beta,
+            reml_pen: score.reml_penalty(rho.view(), log_phi.exp())?,
+            log_phi,
+            rho,
+            h_inv: fit.h_inv,
+            rss: fit.rss,
+            outer: OuterFit {
+                theta: Array1::zeros(0),
+                value: f64::NAN,
+                grad_norm: 0.0,
+                iterations: 0,
+                converged: true,
+            },
+        });
+    }
     let outer = FastRemlNewton::default().minimize(&score, theta0)?;
     let rho = outer.theta.slice(s![..m]).to_owned();
     let fit = score.fit_at(rho.view())?;
@@ -309,11 +331,6 @@ fn fit_pirls_bam<F: BamFamily>(
     y: ArrayView1<f64>,
     prior_weights: Option<ArrayView1<f64>>,
 ) -> Result<FittedGam> {
-    if prep.s_list.is_empty() {
-        return Err(GamrsError::InvalidParameter(
-            "bam with no smooth terms is only implemented for gaussian".into(),
-        ));
-    }
     let n = y.len();
     let x: &DesignMatrix = &prep.x_design;
     let pw = prior_weights.map_or_else(|| Array1::ones(n), |w| w.to_owned());
@@ -499,7 +516,7 @@ fn estimate_theta<F: BamFamily>(
         let k = idx.len();
         let h = Array2::from_shape_fn((k, k), |(a, b)| nll.hess[[idx[a], idx[b]]]);
         let g = Array1::from_shape_fn(k, |a| nll.grad[idx[a]]);
-        let (mut vals, vecs) = match h.eigh(UPLO::Lower) {
+        let (mut vals, vecs) = match r_eigen(h) {
             Ok(e) => e,
             Err(_) => break,
         };
