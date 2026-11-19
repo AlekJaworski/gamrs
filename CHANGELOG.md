@@ -9,46 +9,37 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ### Performance
 
-- **Newton-weight families factor `X'W_newton X + λS` once per gradient
-  evaluation, not twice.** The REML value took `log|H|` from its own Cholesky
-  of the same matrix the gradient had just factored; it now reads it off the
-  gradient's factor. The gradient also stops inverting the PIRLS factor for
-  traces it does not use (the Newton gradient takes them from `A_newton⁻¹`).
-  Results are bit-identical.
-- **Tweedie's finite-difference Hessian probes skip the REML value they
-  discarded**, whose saturated log-likelihood cost as much as the gradient, and
-  the shape `log|H|` chain reuses `A_newton⁻¹` instead of an LU inverse plus one
-  LU solve per shape axis. Fits move at rounding level (REML 7e-15 relative,
-  λ ≤ 5e-10 relative on the parity fixtures).
+- **Inverse Gaussian and Tweedie fits are 4–7× faster.** The outer Newton's
+  Hessian is now computed exactly from the one converged inner fit instead of
+  by finite differences, which re-ran the inner fit 2 to 10 times per outer
+  step. Outer iteration counts are unchanged.
+- **Newton-weight families factor `X'W_newton X + λS` once per evaluation,
+  not twice.** The REML value reads `log|H|` off the factor the gradient (and
+  now the Hessian) uses, the gradient stops inverting the PIRLS factor for
+  traces it does not use, and the Tweedie shape `log|H|` chain reuses
+  `A_newton⁻¹` instead of an LU inverse plus one LU solve per shape axis.
 - **The combined penalty `Σ exp(ρ_j)·S_j` is built in one cache-friendly pass**
-  (4.5 ms instead of 9 ms per inner fit at p = 1,037). Bit-identical.
+  (4.5 ms instead of 9 ms per inner fit at p = 1,037).
 
 One thread, n = 20,000, a random effect plus four smooths, wall time per fit:
 
 | family | levels | before | after |
 |---|---|---|---|
-| Tweedie | 50 | 13.5 s | 7.7 s |
-| Tweedie | 1,000 | 60.5 s | 26.3 s |
-| negative binomial | 1,000 | 8.38 s | 7.92 s |
-| Gamma | 1,000 | 4.81 s | 4.64 s |
-| Gamma | 50 | 0.68 s | 0.62 s |
+| inverse Gaussian | 50 | 13.0 s | 2.2 s |
+| inverse Gaussian | 1,000 | 64.9 s | 13.8 s |
+| Tweedie, p estimated | 50 | 13.5 s | 3.5 s |
+| Tweedie, p estimated | 1,000 | 51.6 s | 7.8 s |
+| Tweedie, p = 1.5 | 50 | 10.9 s | 2.5 s |
+| Tweedie, p = 1.5 | 1,000 | 47.9 s | 7.4 s |
+| negative binomial | 1,000 | 7.75 s | 7.16 s |
+| Gamma | 1,000 | 4.42 s | 4.03 s |
 
-scat and the 50-level negative binomial cell are unchanged within noise.
-### Changed
-
-- **Inverse Gaussian and Tweedie fits are 4–5× faster.** The outer Newton's
-  Hessian is now computed exactly from the one converged inner fit instead of
-  by finite differences, which re-ran the inner fit 2 to 10 times per outer
-  step. Single thread, 20,000 rows, a random effect plus four smooths:
-  - inverse Gaussian: 11.1 s → 2.3 s at 50 levels, 63.2 s → 14.2 s at 1,000;
-  - Tweedie, p estimated: 14.1 s → 3.2 s and 59.2 s → 11.4 s;
-  - Tweedie, p fixed at 1.5: 13.9 s → 3.4 s and 53.0 s → 10.6 s.
-
-  Outer iteration counts are unchanged (8–11). REML scores agree to 1e-7
-  (inverse Gaussian, fixed-p Tweedie) and 3e-5 (Tweedie with p estimated);
-  log λ moves only on smooths of pure noise, where λ is past e¹⁴ and the score
-  is flat (at most 0.011); fitted values agree to 2e-6. On the small Tweedie
-  test fixtures the outer Newton now needs 3 iterations where it took 5.
+Negative binomial and Gamma results are bit-identical; scat is unchanged in
+time. For inverse Gaussian and fixed-p Tweedie the REML score moves by at most
+1e-7; for Tweedie with p estimated by at most 3e-5 (log λ 2e-6 on the
+informative smooths; only smooths of pure noise, where λ is past e¹⁴ and the
+score is flat, move further, by at most 0.011). On the small Tweedie test
+fixtures the outer Newton now needs 3 iterations where it took 5.
 
 ### Fixed
 
