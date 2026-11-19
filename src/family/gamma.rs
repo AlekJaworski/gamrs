@@ -175,7 +175,7 @@ impl Loss for Gamma {
         true
     }
 
-    fn analytic_hessian_with_newton_chain(&self) -> bool {
+    fn envelope_hessian_with_newton_chain(&self) -> bool {
         true
     }
 

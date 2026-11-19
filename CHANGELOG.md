@@ -34,6 +34,29 @@ One thread, n = 20,000, a random effect plus four smooths, wall time per fit:
 | Gamma | 50 | 0.68 s | 0.62 s |
 
 scat and the 50-level negative binomial cell are unchanged within noise.
+### Changed
+
+- **Inverse Gaussian and Tweedie fits are 4–5× faster.** The outer Newton's
+  Hessian is now computed exactly from the one converged inner fit instead of
+  by finite differences, which re-ran the inner fit 2 to 10 times per outer
+  step. Single thread, 20,000 rows, a random effect plus four smooths:
+  - inverse Gaussian: 11.1 s → 2.3 s at 50 levels, 63.2 s → 14.2 s at 1,000;
+  - Tweedie, p estimated: 14.1 s → 3.2 s and 59.2 s → 11.4 s;
+  - Tweedie, p fixed at 1.5: 13.9 s → 3.4 s and 53.0 s → 10.6 s.
+
+  Outer iteration counts are unchanged (8–11). REML scores agree to 1e-7
+  (inverse Gaussian, fixed-p Tweedie) and 3e-5 (Tweedie with p estimated);
+  log λ moves only on smooths of pure noise, where λ is past e¹⁴ and the score
+  is flat (at most 0.011); fitted values agree to 2e-6. On the small Tweedie
+  test fixtures the outer Newton now needs 3 iterations where it took 5.
+
+### Fixed
+
+- **scat's outer Hessian had a wrong cross term.** The second derivative of β̂
+  with respect to a shape parameter used ∂²D/∂η∂θ where ∂³D/∂η²∂θ belongs,
+  so the Hessian was 2.2e-3 off its own gradient's derivative; it is now
+  7e-10 off. Fits stop at the same point (REML within 7e-6, same iteration
+  counts).
 
 ## [0.17.4] — 2026-11-19
 

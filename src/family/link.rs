@@ -68,6 +68,11 @@ impl Link for LogLink {
         let m = mu.max(eps);
         2.0 / (m * m * m).max(eps)
     }
+    fn d4_link_dmu(&self, mu: f64) -> f64 {
+        let eps = 1e-300;
+        let m = mu.max(eps);
+        -6.0 / (m * m * m * m).max(eps)
+    }
     fn is_canonical(&self) -> bool {
         // log IS the canonical link for Poisson.
         true
@@ -150,6 +155,11 @@ impl Link for InverseLink {
         let eps = 1e-300;
         let m = mu.max(eps);
         -6.0 / (m * m * m * m).max(eps)
+    }
+    fn d4_link_dmu(&self, mu: f64) -> f64 {
+        let eps = 1e-300;
+        let m = mu.max(eps);
+        24.0 / (m * m * m * m * m).max(eps)
     }
     fn is_canonical(&self) -> bool {
         // Reciprocal IS the canonical link for Gamma.

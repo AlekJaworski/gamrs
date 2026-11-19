@@ -293,6 +293,7 @@ where
     // a1[i]: v0.x `src/reml/mod.rs:2392-2415`. Newton branch uses
     // w_newton[i] (signed).
     let mut a1 = Array1::<f64>::zeros(n);
+    let mut a2 = Array1::<f64>::zeros(n);
     for i in 0..n {
         let mu_i = mu[i];
         let var_i = family.variance.variance(mu_i).max(1e-300);
@@ -317,6 +318,20 @@ where
         let xx = v2n - v1n * v1n + g3n - g2n * g2n;
         let dalpha_dmu = -(v1n + g2n) + c_resid * xx;
         a1[i] = prior_w[i] * wf * (alpha * (-v1n - 2.0 * g2n) + dalpha_dmu) * g_prime_mu.recip();
+
+        // d²(wf·α)/dη² = [f'' − f'·g''/g'] / g'², f = wf·α, with wf' = q·wf.
+        let v3n = family.variance.d3_variance(mu_i) / var_i;
+        let g4n = family.link.d4_link_dmu(mu_i) / g_prime_mu;
+        let q = -v1n - 2.0 * g2n;
+        let dv1n = v2n - v1n * v1n;
+        let dg2n = g3n - g2n * g2n;
+        let dq = -dv1n - 2.0 * dg2n;
+        let d2v1n = v3n - 3.0 * v1n * v2n + 2.0 * v1n * v1n * v1n;
+        let d2g2n = g4n - 3.0 * g2n * g3n + 2.0 * g2n * g2n * g2n;
+        let d2alpha = -2.0 * (dv1n + dg2n) + c_resid * (d2v1n + d2g2n);
+        let f1 = alpha * q + dalpha_dmu;
+        let f2 = (q * q + dq) * alpha + 2.0 * q * dalpha_dmu + d2alpha;
+        a2[i] = prior_w[i] * wf * (f2 - f1 * g2n) / (g_prime_mu * g_prime_mu);
     }
 
     let lev_uw = xs.leverage(a_inv.view());
@@ -347,6 +362,7 @@ where
     let sign_w = Array1::<f64>::ones(n);
     Some(super::TkKKTInputs {
         a1,
+        a2,
         lev_uw,
         eta1_per_term,
         tr_a_newton_inv_s_per_term,
@@ -354,6 +370,61 @@ where
         log_det,
         working_weights_sign: sign_w,
     })
+}
+
+/// `∂²log|A|/∂ρ_j∂ρ_k` for `A = X'W(η̂)X + Σλ_jS_j` with Newton weights, β̂
+/// and `W` moving with ρ: `δ_jk·λ_j·tr(A⁻¹S_j) − tr(A⁻¹A_j·A⁻¹A_k)
+/// + tr(A⁻¹X'diag(W_ηη·η_j·η_k + W_η·η_jk)X)`, where `A_j = X'diag(W_η·η_j)X
+/// + λ_jS_j` and `η_jk = X·∂²β̂/∂ρ_j∂ρ_k` from differentiating `A·∂β̂/∂ρ_j =
+/// −λ_jS_jβ̂` once more.
+pub(crate) fn newton_log_det_rho_hessian(
+    x_design: &super::DesignMatrix,
+    s_list: &[Array2<f64>],
+    s_blocks: &[crate::design::PenaltyBlock],
+    rho: &Array1<f64>,
+    beta: &Array1<f64>,
+    tk: &super::TkKKTInputs,
+) -> Array2<f64> {
+    let xs = x_design.split();
+    let m = s_list.len();
+    let a_inv = &tk.a_newton_inv;
+    let lambda: Vec<f64> = rho.iter().map(|r| r.exp()).collect();
+    let b1: Vec<Array1<f64>> = (0..m)
+        .map(|j| {
+            let sb = s_blocks[j].s_dot(s_list[j].view(), beta.view());
+            a_inv.dot(&sb) * (-lambda[j])
+        })
+        .collect();
+    let ai_aj: Vec<Array2<f64>> = (0..m)
+        .map(|j| {
+            let mut a_j = xs.xtwx((&tk.a1 * &tk.eta1_per_term[j]).view());
+            let r = s_blocks[j].range.clone();
+            a_j.slice_mut(s![r.clone(), r.clone()])
+                .scaled_add(lambda[j], &s_list[j].slice(s![r.clone(), r]));
+            super::split::dot_sparse_cols(a_inv.view(), a_j.view())
+        })
+        .collect();
+    let z = a_inv.dot(&xs.t_dot_vec((&tk.a1 * &tk.lev_uw).view()));
+    let row_w = &tk.lev_uw * &tk.a2 - &(&xs.dot_vec(z.view()) * &tk.a1);
+    let mut h = Array2::<f64>::zeros((m, m));
+    for j in 0..m {
+        for k in j..m {
+            let tr_jk = ndarray::Zip::from(&ai_aj[j])
+                .and(ai_aj[k].t())
+                .fold(0.0, |acc, &a, &b| acc + a * b);
+            let rows = (&row_w * &tk.eta1_per_term[j] * &tk.eta1_per_term[k]).sum();
+            let skbj = s_blocks[k].s_dot(s_list[k].view(), b1[j].view());
+            let sjbk = s_blocks[j].s_dot(s_list[j].view(), b1[k].view());
+            let mut v = rows - tr_jk - z.dot(&(skbj * lambda[k] + sjbk * lambda[j]));
+            if j == k {
+                v += lambda[j] * tk.tr_a_newton_inv_s_per_term[j]
+                    + (&tk.a1 * &tk.lev_uw * &tk.eta1_per_term[j]).sum();
+            }
+            h[[j, k]] = v;
+            h[[k, j]] = v;
+        }
+    }
+    h
 }
 
 /// `crate::traits::InnerSolver` impl for any `Family<L, K, V>` via PIRLS.
@@ -597,6 +668,23 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver> I
 
     fn prior_weights(&self) -> Option<&Array1<f64>> {
         self.prior_weights.as_ref()
+    }
+
+    fn newton_log_det_hessian(
+        &self,
+        fit: &Self::Fit,
+        rho: &Array1<f64>,
+        s_blocks: &[crate::design::PenaltyBlock],
+        tk: &super::TkKKTInputs,
+    ) -> Option<Array2<f64>> {
+        Some(newton_log_det_rho_hessian(
+            &self.x_design,
+            &self.s_list,
+            s_blocks,
+            rho,
+            &fit.beta,
+            tk,
+        ))
     }
 
     fn lazy_tk_kkt_inputs(

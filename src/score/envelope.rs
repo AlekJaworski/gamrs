@@ -311,9 +311,9 @@ pub(crate) struct HessInputs {
     sigma2: f64,
     /// `∂σ²/∂ρ_i` per term, or `None` when no closed form exists (→ FD).
     dsigma2_drho: Option<Vec<f64>>,
-    /// Whether the gradient carried a Tk·KK' (non-canonical-link) term — the
-    /// analytic Hessian does not differentiate that yet, so we fall back.
-    has_tk_kkt: bool,
+    /// Newton-weight inputs when the gradient differentiated the Newton
+    /// `log|H|` (non-canonical link).
+    tk: Option<crate::inner::TkKKTInputs>,
     /// Dense `A⁻¹` (p × p), materialised once in
     /// [`EnvelopeScore::compute_value_grad_from_fit`] and forwarded to
     /// [`EnvelopeScore::hess_analytic`] so neither layer re-inverts. Empty
@@ -414,7 +414,7 @@ where
                 tr_hinv_s_per_term: vec![0.0; n_terms],
                 sigma2: 1.0,
                 dsigma2_drho: None,
-                has_tk_kkt: false,
+                tk: None,
                 a_inv: Array2::<f64>::zeros((0, 0)),
                 log_det_s_hess: Array2::<f64>::zeros((0, 0)),
             };
@@ -502,7 +502,7 @@ where
             tr_hinv_s_per_term,
             sigma2: score_sigma2,
             dsigma2_drho,
-            has_tk_kkt,
+            tk: lazy_tk_kkt,
             a_inv,
             log_det_s_hess: log_det_s.hess,
         };
@@ -665,21 +665,21 @@ where
     /// The `log|λS|+` term is linear in ρ for penalties that overlap no
     /// other; overlapping ones (a tensor's margins) add its curvature.
     ///
-    /// Returns `None` when the gradient carried a Tk·KK' non-canonical-link
-    /// term (not yet differentiated analytically) or when `∂σ²/∂ρ` has no
-    /// closed form — the caller then keeps the FD Hessian.
+    /// A gradient that differentiated the Newton `log|H|` (non-canonical
+    /// link) gets the exact [`Self::hess_newton`] instead, unless the loss
+    /// keeps this envelope form (`envelope_hessian_with_newton_chain`). Returns `None`
+    /// when `∂σ²/∂ρ` has no closed form — the caller then keeps the FD Hessian.
     pub(crate) fn hess_analytic(
         &self,
         inner: &GaussianInnerFit<S>,
         hin: &HessInputs,
     ) -> Option<Array2<f64>> {
-        // The Tk·KK' gradient term is not differentiated here; only losses
-        // that measured the envelope Hessian as good enough keep it.
-        if hin.has_tk_kkt && !self.loss.analytic_hessian_with_newton_chain() {
-            return None;
-        }
-        // No closed-form σ² derivative (e.g. Gamma) → FD fallback.
         let dsigma2 = hin.dsigma2_drho.as_ref()?;
+        if let Some(tk) = hin.tk.as_ref() {
+            if !self.loss.envelope_hessian_with_newton_chain() {
+                return self.hess_newton(inner, hin, tk, dsigma2);
+            }
+        }
 
         let m = self.s_list.len();
         let sigma2 = hin.sigma2;
@@ -822,6 +822,46 @@ where
             }
         }
 
+        Some(h)
+    }
+
+    /// Exact `∂g/∂ρ` when the gradient differentiates the Newton
+    /// `log|X'W_newton X + λS|`: the data-fit and σ² pieces of
+    /// [`Self::hess_analytic`] with `A_newton`, plus the full second
+    /// derivative of `log|H|` from the inner solver.
+    fn hess_newton(
+        &self,
+        inner: &GaussianInnerFit<S>,
+        hin: &HessInputs,
+        tk: &crate::inner::TkKKTInputs,
+        dsigma2: &[f64],
+    ) -> Option<Array2<f64>> {
+        let m = self.s_list.len();
+        let rho = Array1::from_iter(hin.lambda_j.iter().map(|l| l.ln()));
+        let log_det_h2 = self
+            .inner
+            .newton_log_det_hessian(inner, &rho, &self.s_blocks, tk)?;
+        let (sigma2, lambda, bsb) = (hin.sigma2, &hin.lambda_j, &hin.bsb_per_term);
+        let s_beta: Vec<Array1<f64>> = (0..m)
+            .map(|j| self.s_blocks[j].s_dot(self.s_list[j].view(), inner.beta.view()))
+            .collect();
+        let ainv_s_beta: Vec<Array1<f64>> =
+            s_beta.iter().map(|sb| tk.a_newton_inv.dot(sb)).collect();
+        let mut h = Array2::<f64>::zeros((m, m));
+        for i in 0..m {
+            for j in i..m {
+                let mut d_bj = -2.0 * lambda[i] * lambda[j] * s_beta[i].dot(&ainv_s_beta[j]);
+                if i == j {
+                    d_bj += lambda[j] * bsb[j];
+                }
+                let val = d_bj / (2.0 * sigma2)
+                    - lambda[j] * bsb[j] / (2.0 * sigma2 * sigma2) * dsigma2[i]
+                    + 0.5 * log_det_h2[[i, j]]
+                    - 0.5 * hin.log_det_s_hess[[i, j]];
+                h[[i, j]] = val;
+                h[[j, i]] = val;
+            }
+        }
         Some(h)
     }
 
