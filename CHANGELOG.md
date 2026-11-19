@@ -5,7 +5,7 @@ based on [Keep a Changelog](https://keepachangelog.com/); this project is in
 beta (`0.x`), so minor bumps may carry breaking changes until the 1.0 surface
 is locked. Versions correspond to the published PyPI wheels.
 
-## [Unreleased]
+## [0.17.4] — 2026-11-19
 
 ### Fixed
 
@@ -39,6 +39,9 @@ is locked. Versions correspond to the published PyPI wheels.
   scat, whose per-term edf disagreed with its own total: 7.7974 → 7.7850 on the
   unweighted fixture (mgcv 7.7850). Smoothing parameters and fitted values are
   unchanged.
+- Rust API: `Loss::profile_score_sigma2`, `Loss::profile_sigma2_drho_factor`,
+  `Profile::dispersion` and `Profile::dispersion_drho` take the prior weights;
+  new `Loss::weighted_saturated_log_lik` and `InnerSolver::prior_weights`.
 
 ## [0.17.3] — 2026-11-18
 
