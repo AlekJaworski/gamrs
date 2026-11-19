@@ -152,7 +152,16 @@ where
             self.hess_via_fd_on_value(theta)?
         } else if let (Some(lv1), Some(lv2)) = (level1_cached.as_ref(), level2.as_ref()) {
             // Closed-form joint Hessian (mgcv `gdi2`): TDist, Tweedie.
-            self.hess_via_ift_level2(theta, &fit, &family, lv1, lv2, n_shape, &ctx)?
+            self.hess_via_ift_level2(
+                theta,
+                &fit,
+                &family,
+                lv1,
+                lv2,
+                n_shape,
+                &ctx,
+                newton_tk.as_ref(),
+            )?
         } else if has_analytic_shape_grad {
             // 2·M PIRLS + 0 shape solves.
             self.hess_via_fd_frozen_beta(theta, &fit, &ctx)?
@@ -810,6 +819,7 @@ where
         lv2: &crate::traits::Level2ShapeDerivs,
         n_shape: usize,
         ctx: &FrozenBetaCtx,
+        newton_tk: Option<&crate::inner::TkKKTInputs>,
     ) -> Result<Array2<f64>> {
         use ndarray::s;
         let n_terms = self.s_list.len();
@@ -825,31 +835,13 @@ where
         let rho_slice: Vec<f64> = theta.slice(s![..n_terms]).to_vec();
         let lambda: Vec<f64> = rho_slice.iter().map(|&r| r.exp()).collect();
         let phi = ctx.phi_center;
-        let use_newton = family.loss.use_newton_irls();
-        let lazy_tk = if use_newton {
-            let prior_w = self
-                .prior_weights
-                .clone()
-                .unwrap_or_else(|| Array1::ones(n));
-            let rho_arr = Array1::from(rho_slice.clone());
-            crate::inner::pirls::lazy_tk_kkt_inputs(
-                family,
-                &self.y,
-                &fit.mu,
-                &fit.beta,
-                &prior_w,
-                &self.x_design,
-                &self.s_list,
-                self.penalty_blocks(),
-                &rho_arr,
-            )
-        } else {
-            None
-        };
-        let a_inv: Array2<f64> = if let Some(ref tk) = lazy_tk {
-            tk.a_newton_inv.clone()
-        } else {
-            fit.a_inv()
+        let a_inv_fisher;
+        let a_inv: &Array2<f64> = match newton_tk {
+            Some(tk) => &tk.a_newton_inv,
+            None => {
+                a_inv_fisher = fit.a_inv();
+                &a_inv_fisher
+            }
         };
 
         // ---- Level-1/2 arrays to η coordinates (mgcv `gam.fit4` `dDeta`):
@@ -1032,7 +1024,7 @@ where
         let tr_ainv_s: Vec<f64> = self
             .s_list
             .iter()
-            .map(|s_j| (&a_inv * &s_j.t()).sum())
+            .map(|s_j| (a_inv * &s_j.t()).sum())
             .collect();
         let mut hess = Array2::<f64>::zeros((ntot, ntot));
         for i in 0..ntot {
