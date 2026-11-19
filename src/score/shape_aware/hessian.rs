@@ -435,8 +435,8 @@ where
             let mut t_minus = theta.clone();
             t_plus[i] += eps_rho;
             t_minus[i] -= eps_rho;
-            let (_, g_plus_rho) = self.compute_value_grad(&t_plus)?;
-            let (_, g_minus_rho) = self.compute_value_grad(&t_minus)?;
+            let g_plus_rho = self.compute_grad(&t_plus)?;
+            let g_minus_rho = self.compute_grad(&t_minus)?;
             for j in 0..d {
                 hess[[j, i]] = (g_plus_rho[j] - g_minus_rho[j]) / (2.0 * eps_rho);
             }
@@ -543,8 +543,8 @@ where
             let mut t_minus = theta.clone();
             t_plus[i] += eps;
             t_minus[i] -= eps;
-            let (_, g_plus) = self.compute_value_grad(&t_plus)?;
-            let (_, g_minus) = self.compute_value_grad(&t_minus)?;
+            let g_plus = self.compute_grad(&t_plus)?;
+            let g_minus = self.compute_grad(&t_minus)?;
             for j in 0..d {
                 h[[j, i]] = (g_plus[j] - g_minus[j]) / (2.0 * eps);
             }

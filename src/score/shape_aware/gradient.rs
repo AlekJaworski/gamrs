@@ -69,6 +69,7 @@ where
         fit: &GaussianInnerFit<S>,
         family: &Family<L, K, V>,
         rho_slice: &[f64],
+        newton_tk: Option<&crate::inner::TkKKTInputs>,
     ) -> Option<Vec<f64>> {
         use ndarray_linalg::Solve;
         let prior_v = self.prior_weights.as_ref().map(|w| w.view());
@@ -80,13 +81,27 @@ where
             family
                 .loss
                 .shape_score_residual_derivs(self.y.view(), fit.eta.view(), prior_v)?;
+        let xs = self.x_design.split();
+        let chain_k = |db: Array1<f64>, k: usize, h: &Array1<f64>| {
+            let eta_k = xs.dot_vec(db.view());
+            ((&dw_dtheta.column(k).to_owned() + &(&dw_deta * &eta_k)) * h).sum()
+        };
+        if let Some(tk) = newton_tk {
+            return Some(
+                (0..dr_dtheta.ncols())
+                    .map(|k| {
+                        let rhs = xs.t_dot_vec(dr_dtheta.column(k));
+                        chain_k(tk.a_newton_inv.dot(&rhs), k, &tk.lev_uw)
+                    })
+                    .collect(),
+            );
+        }
         let n = fit.n;
         let prior = self
             .prior_weights
             .clone()
             .unwrap_or_else(|| Array1::ones(n));
         let w_obs = crate::inner::pirls::newton_score_weights(family, &self.y, &fit.mu, &prior);
-        let xs = self.x_design.split();
         let rho_arr = Array1::from(rho_slice.to_vec());
         let a_obs = xs.xtwx(w_obs.view())
             + crate::design::combined_s(&self.s_list, &rho_arr, self.x_design.ncols());
@@ -103,8 +118,7 @@ where
             let db = a_obs
                 .solve(&self.x_design.t().dot(&dr_dtheta.column(k)))
                 .ok()?;
-            let eta_k = self.x_design.dot(&db);
-            out.push(((&dw_dtheta.column(k).to_owned() + &(&dw_deta * &eta_k)) * &h).sum());
+            out.push(chain_k(db, k, &h));
         }
         Some(out)
     }
@@ -657,12 +671,27 @@ where
     }
 
     pub(super) fn compute_value_grad(&self, theta: &Array1<f64>) -> Result<(f64, Array1<f64>)> {
+        let (v, g) = self.value_grad(theta, true)?;
+        Ok((v.unwrap_or(f64::NAN), g))
+    }
+
+    /// The gradient alone, for FD-Hessian probes that discard the value (Tweedie's
+    /// saturated log-likelihood makes the value cost as much as the gradient).
+    pub(super) fn compute_grad(&self, theta: &Array1<f64>) -> Result<Array1<f64>> {
+        Ok(self.value_grad(theta, false)?.1)
+    }
+
+    fn value_grad(
+        &self,
+        theta: &Array1<f64>,
+        with_value: bool,
+    ) -> Result<(Option<f64>, Array1<f64>)> {
         let (fit, family) = self.fit_inner_at(theta)?;
         let n_terms = self.s_list.len();
         let n_shape = family.n_shape_params();
         let rho_slice: Vec<f64> = theta.slice(ndarray::s![..n_terms]).to_vec();
         let tk = self.newton_tk(&fit, &family, &rho_slice);
-        let v = self.score_value(&fit, &family, &rho_slice, tk.as_ref());
+        let v = with_value.then(|| self.score_value(&fit, &family, &rho_slice, tk.as_ref()));
 
         // Per-term bsb_j, tr_hinv_s_j → envelope ∂REML/∂ρ_j.
         let mut bsb_per_term: Vec<f64> = Vec::with_capacity(n_terms);
@@ -726,7 +755,9 @@ where
                 for k in 0..n_shape {
                     g[n_terms + k] = analytic[k];
                 }
-                if let Some(chain) = self.shape_log_det_chain(&fit, &family, &rho_slice) {
+                if let Some(chain) =
+                    self.shape_log_det_chain(&fit, &family, &rho_slice, tk.as_ref())
+                {
                     for k in 0..n_shape {
                         g[n_terms + k] += 0.5 * chain[k];
                     }
@@ -800,8 +831,7 @@ where
         // builds Newton-A pieces at gradient time, not in PIRLS) — port
         // of v0.x's `compute_tk_kkt_inputs` moved out of `pirls::fit()`
         // so value-FD probes don't pay the O(p³) eigh cost.
-        let newton_a_inv: Option<&ndarray::Array2<f64>> =
-            newton_tk.map(|t| &t.a_newton_inv);
+        let newton_a_inv: Option<&ndarray::Array2<f64>> = newton_tk.map(|t| &t.a_newton_inv);
 
         // η-coord conversion of the μ-coord Level-1 derivatives. mgcv R's
         // `gam.fit4.r::dDeta()` (lines 5-78) converts via the link-Jacobian
@@ -1061,7 +1091,7 @@ where
                 for k in 0..n_shape {
                     g[n_terms + k] = analytic[k];
                 }
-                if let Some(chain) = self.shape_log_det_chain(fit, family, &rho_slice) {
+                if let Some(chain) = self.shape_log_det_chain(fit, family, &rho_slice, newton_tk) {
                     for k in 0..n_shape {
                         g[n_terms + k] += 0.5 * chain[k];
                     }
@@ -1210,7 +1240,8 @@ where
                 for k in 0..n_shape {
                     g[n_terms + k] = analytic[k];
                 }
-                if let Some(chain) = self.shape_log_det_chain(fit, &family, &rho_slice) {
+                if let Some(chain) = self.shape_log_det_chain(fit, &family, &rho_slice, tk.as_ref())
+                {
                     for k in 0..n_shape {
                         g[n_terms + k] += 0.5 * chain[k];
                     }
