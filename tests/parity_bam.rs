@@ -86,7 +86,10 @@ where
     .unwrap();
     let r = fx.bam;
 
-    let pred = fit.predict(x.view()).unwrap();
+    let pred = fit
+        .predict(x.view())
+        .unwrap()
+        .mapv(|e| fit.link_kind.inverse(e));
     let fitted = pred
         .iter()
         .zip(&r.predictions_train)
@@ -126,7 +129,7 @@ where
     assert!(sp < tol.sp, "{report}");
     assert!(edf_term < tol.fitted, "{report}");
     assert!(rel(fit.edf_total, r.edf_total) < tol.fitted, "{report}");
-    assert!(rel(fit.reml_value, r.reml) < 1e-10, "{report}");
+    assert!(rel(fit.reml_value, r.reml) < 1e-9, "{report}");
     assert!(rel(fit.scale, r.scale) < 1e-9, "{report}");
     assert!(th < tol.fitted, "{report} theta {th:.2e}");
     assert_eq!(fit.n_iters, r.iter, "{report}");
@@ -138,7 +141,9 @@ where
     }
 }
 
-/// Bars ~10× above the measured worst (fitted/edf/θ, then λ).
+/// Bars ~10× above the measured worst (fitted/edf/θ, then λ). The nb bars
+/// cover multi-threaded BLAS: its different rounding moves the flat-ridge λ
+/// by 8e-7 (fitted 8e-8), against 1e-10 with one thread.
 struct Tol {
     fitted: f64,
     sp: f64,
@@ -149,8 +154,8 @@ const GAUSSIAN: Tol = Tol {
     sp: 1e-7,
 };
 const PIRLS: Tol = Tol {
-    fitted: 1e-8,
-    sp: 1e-6,
+    fitted: 1e-6,
+    sp: 1e-5,
 };
 
 #[test]
