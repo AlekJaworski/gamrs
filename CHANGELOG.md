@@ -5,7 +5,7 @@ based on [Keep a Changelog](https://keepachangelog.com/); this project is in
 beta (`0.x`), so minor bumps may carry breaking changes until the 1.0 surface
 is locked. Versions correspond to the published PyPI wheels.
 
-## [Unreleased]
+## [0.17.5] — 2026-11-19
 
 ### Performance
 
@@ -48,6 +48,13 @@ fixtures the outer Newton now needs 3 iterations where it took 5.
   so the Hessian was 2.2e-3 off its own gradient's derivative; it is now
   7e-10 off. Fits stop at the same point (REML within 7e-6, same iteration
   counts).
+
+### Changed
+
+- Rust API: `Loss::analytic_hessian_with_newton_chain` is renamed
+  `envelope_hessian_with_newton_chain`; new `Link::d4_link_dmu`,
+  `VarianceFn::d3_variance` and `Loss::log_scale_shape_axis`; `TkKKTInputs`
+  carries `log_det` and `a2`.
 
 ## [0.17.4] — 2026-11-19
 
