@@ -18,6 +18,7 @@ use crate::outer::NewtonWithHalving;
 use crate::score::{EnvelopeScore, MgcvTwoSigmaProfile};
 use crate::traits::{InnerSolver, OuterFit, OuterSolver, ScoreDerivatives};
 
+use super::driver::{LambdaInit, MgcvInit};
 use super::{compute_edf, compute_edf_per_term, compute_vcov, FittedGam, LinkKind};
 
 /// Gaussian closed-form REML driver. Generic over `S: LinearSolver` so
@@ -35,6 +36,10 @@ pub(crate) fn fit_gaussian_from_prep<S: LinearSolver>(
     let n = x.nrows();
     let n_terms = prep.s_list.len();
 
+    let rho0 = MgcvInit {
+        weights: weights.map(|w| w.to_owned()),
+    }
+    .init(y, &prep.x_design, &prep.s_list);
     let (score, outer) = gaussian_reml::<S>(
         &prep.x_design,
         &prep.s_list,
@@ -43,7 +48,7 @@ pub(crate) fn fit_gaussian_from_prep<S: LinearSolver>(
         &prep.log_pseudo_det_s_list,
         y,
         weights,
-        Array1::zeros(n_terms),
+        rho0,
     )?;
 
     let rho_hat = outer.theta.clone();

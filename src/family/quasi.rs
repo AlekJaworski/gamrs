@@ -19,6 +19,13 @@ impl Loss for QuasiPoisson {
     fn initial_mu(&self, y: ndarray::ArrayView1<f64>) -> ndarray::Array1<f64> {
         Poisson.initial_mu(y)
     }
+    fn mgcv_mustart(
+        &self,
+        y: ndarray::ArrayView1<f64>,
+        prior_weights: Option<ndarray::ArrayView1<f64>>,
+    ) -> ndarray::Array1<f64> {
+        Poisson.mgcv_mustart(y, prior_weights)
+    }
     fn deviance_per_obs(&self, y: f64, mu: f64) -> f64 {
         Poisson.deviance_per_obs(y, mu)
     }
@@ -62,6 +69,13 @@ pub struct QuasiBinomial;
 impl Loss for QuasiBinomial {
     fn initial_mu(&self, y: ndarray::ArrayView1<f64>) -> ndarray::Array1<f64> {
         Bernoulli.initial_mu(y)
+    }
+    fn mgcv_mustart(
+        &self,
+        y: ndarray::ArrayView1<f64>,
+        prior_weights: Option<ndarray::ArrayView1<f64>>,
+    ) -> ndarray::Array1<f64> {
+        Bernoulli.mgcv_mustart(y, prior_weights)
     }
     fn deviance_per_obs(&self, y: f64, mu: f64) -> f64 {
         Bernoulli.deviance_per_obs(y, mu)

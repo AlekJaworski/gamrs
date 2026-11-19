@@ -177,6 +177,34 @@ impl LambdaInit for MgcvInit {
     }
 }
 
+impl MgcvInit {
+    /// `initial.spg`'s weights for an exponential family:
+    /// `prior·μ'(η)²/V(μ)` at the R family's `mustart`.
+    pub fn glm<L, K, V>(
+        family: &Family<L, K, V>,
+        y: ArrayView1<f64>,
+        prior_weights: Option<ArrayView1<f64>>,
+    ) -> Self
+    where
+        L: Loss + Clone,
+        K: Link + Clone,
+        V: VarianceFn + Clone,
+    {
+        let mu = family.loss.mgcv_mustart(y, prior_weights);
+        let weights = mu
+            .iter()
+            .enumerate()
+            .map(|(i, &m)| {
+                let d = family.link.d_inverse_link(family.link.link(m));
+                prior_weights.map_or(1.0, |w| w[i]) * d * d / family.variance.variance(m)
+            })
+            .collect();
+        Self {
+            weights: Some(weights),
+        }
+    }
+}
+
 /// Caller-supplied ρ vector (e.g. from a pickled warm-restart or a
 /// hand-tuned starting point). The vector's length must equal the
 /// `s_list.len()` of the surrounding fit (debug-asserted).
@@ -233,6 +261,7 @@ where
     let prior = prior_weights.map(|w| w.to_owned());
     let n = x.nrows();
     let n_terms = prep.s_list.len();
+    let rho0 = MgcvInit::glm(&family, y, prior_weights).init(y, &prep.x_design, &prep.s_list);
     let pirls: PirlsInner<L, K, V, S> = PirlsInner {
         x_design: prep.x_design.clone(),
         y: y.to_owned(),
@@ -256,7 +285,7 @@ where
         crate::outer::OuterAlgorithm::Newton => {
             let solver =
                 NewtonWithHalving::new(crate::outer::resolve_tuning(&score.loss).to_newton_opts());
-            solver.minimize(&score, Array1::zeros(n_terms))?
+            solver.minimize(&score, rho0)?
         }
         crate::outer::OuterAlgorithm::FellnerSchall => {
             let mut fs = crate::outer::fellner_schall_minimize(

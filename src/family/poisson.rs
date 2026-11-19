@@ -27,6 +27,14 @@ impl Loss for Poisson {
         y.iter().map(|&yi| yi.max(0.1)).collect()
     }
 
+    fn mgcv_mustart(
+        &self,
+        y: ndarray::ArrayView1<f64>,
+        _prior_weights: Option<ndarray::ArrayView1<f64>>,
+    ) -> ndarray::Array1<f64> {
+        y.mapv(|yi| yi + 0.1)
+    }
+
     fn deviance_per_obs(&self, y: f64, mu: f64) -> f64 {
         // Clamp μ away from 0 — at μ=0 the log diverges. ε is mgcv's
         // `poisson()$validmu` floor.

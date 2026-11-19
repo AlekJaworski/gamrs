@@ -704,6 +704,17 @@ pub trait Loss {
         let y_bar: f64 = y.iter().sum::<f64>() / (n.max(1) as f64);
         y.iter().map(|&yi| (yi + y_bar) * 0.5).collect()
     }
+
+    /// `mustart` as the R family's `initialize` sets it, where mgcv's
+    /// `initial.spg` takes the working weights for the starting smoothing
+    /// parameters. Default `μ = y` (gaussian, Gamma, inverse Gaussian).
+    fn mgcv_mustart(
+        &self,
+        y: ndarray::ArrayView1<f64>,
+        _prior_weights: Option<ndarray::ArrayView1<f64>>,
+    ) -> ndarray::Array1<f64> {
+        y.to_owned()
+    }
 }
 
 /// Layer 2b — link function `g` with `η = g(μ)`.
