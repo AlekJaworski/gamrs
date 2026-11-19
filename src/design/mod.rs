@@ -51,6 +51,18 @@ pub use sc::{ConstraintBlock, ScPredictor, Shape, ShapeConstraints};
 pub use tensor::{TensorMultiPredictor, TensorPredictor};
 pub use tps::TpsPredictor;
 
+/// How a centred smooth absorbs its sum-to-zero constraint. Both span the
+/// same functions; they differ in the coefficients, hence in mgcv's REML
+/// constant and starting smoothing parameters.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Centring {
+    /// mgcv `gam`: a Householder basis for the constraint's null space.
+    #[default]
+    Householder,
+    /// mgcv `bam`: drop the lowest-variance column, centre the others.
+    SweepDrop,
+}
+
 // =============================================================================
 // Predictor — predict-time design rebuilder. Closed-set `enum`, NOT
 // `Box<dyn>`: zero-cost match dispatch. New basis types extend the enum

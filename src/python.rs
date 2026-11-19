@@ -1587,6 +1587,7 @@ where
     tau=None,
     elf_sigma=None,
     elf_lambda=None,
+    bam=false,
 ))]
 fn fit_additive<'py>(
     py: Python<'py>,
@@ -1604,6 +1605,7 @@ fn fit_additive<'py>(
     tau: Option<f64>,
     elf_sigma: Option<f64>,
     elf_lambda: Option<f64>,
+    bam: bool,
 ) -> PyResult<PyFittedGam> {
     // Own the numpy inputs so the dispatch can release the GIL during the solve
     // (see `fit_dispatch_design`). `term_specs` is built under the GIL (it reads
@@ -1615,6 +1617,19 @@ fn fit_additive<'py>(
     let y_view: ArrayView1<f64> = y_owned.view();
     let w_view: Option<ArrayView1<f64>> = w_owned.as_ref().map(|a| a.view());
     let term_specs = build_term_specs(&terms)?;
+
+    if bam {
+        if family_name != "gaussian" {
+            return Err(PyValueError::new_err(format!(
+                "bam fREML is implemented for family='gaussian' only; got {family_name:?}"
+            )));
+        }
+        let design = Additive { terms: term_specs };
+        let fitted = py
+            .detach(|| crate::fit::fit_bam(gaussian_identity(), &design, x_view, y_view, w_view))
+            .map_err(map_err)?;
+        return Ok(PyFittedGam { inner: fitted });
+    }
 
     let fitted: FittedGam = match family_name {
         "gaussian" => {

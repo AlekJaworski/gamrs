@@ -40,6 +40,7 @@ use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
 use crate::design::Predictor;
 use crate::error::{GamrsError, Result};
 
+mod bam;
 pub mod canonical;
 pub mod driver;
 mod family_impls;
@@ -58,6 +59,7 @@ pub mod quantile;
 pub mod shape_constrained;
 pub mod shash;
 
+pub use bam::fit_bam;
 pub use canonical::{
     fit, fit_with, fit_with_design, fit_with_solver, FamilyFit, FamilyFitWithSolver, FitWithProfile,
 };

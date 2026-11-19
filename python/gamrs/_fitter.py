@@ -39,6 +39,9 @@ from ._stubs import GamSummary, TermContributions  # noqa: F401
 # refusal into the warned REML fallback in `Gam.fit`.
 FS_UNAVAILABLE_MARKER = "method='fREML' (Fellner-Schall) is not implemented for the"
 
+# Reproduces mgcv `bam(method = "fREML")`.
+BAM = "bam"
+
 ArrayLike = Any  # avoid hard dep on pandas/polars typing
 
 
@@ -572,20 +575,22 @@ class Gam:
         as in mgcv's ``gam(optimizer="efs")`` (cheaper per iteration, wins
         on GLM families at large n). On a fit path with no
         Fellner-Schall branch, ``"fREML"`` warns and fits on REML.
+        ``"bam"`` reproduces mgcv's
+        ``bam(method="fREML")``; gaussian family, one penalty per term.
         """
         # Set/restore the outer-algorithm override for this fit only.
         # Only touches the thread-local when method != "REML" (gamrs's
         # default) — `"REML"` is what an unspecified method becomes via
         # the constructor default and shouldn't clobber any external
         # override (e.g. set by the bench / sweep scripts).
-        wants_override = self.method is not None and self.method != "REML"
+        wants_override = self.method not in (None, "REML", BAM)
         if wants_override:
             try:
                 _gamrs_native.set_outer_algorithm(self.method)
             except ValueError as e:
                 raise ValueError(
                     f"method={self.method!r} not recognised; "
-                    f"supported: 'REML' (default), 'fREML'"
+                    f"supported: 'REML' (default), 'fREML', {BAM!r}"
                 ) from e
         try:
             try:
@@ -839,6 +844,17 @@ class Gam:
             (t.k[0] * t.k[1] if isinstance(t, (TeTerm, TeScTerm)) else 0)
             for t in term_objs
         ]
+        if self.method == BAM:
+            self._fitted = _gamrs_native.fit_additive(
+                self._gamrs_family,
+                x_2d,
+                y_arr,
+                [_term_to_tuple(t) for t in term_objs],
+                weights=self.sample_weight,
+                bam=True,
+                **family_kw,
+            )
+            return
         # Single-smooth → fast path (preserves byte-equivalence with
         # pre-multi-smooth fits + the existing parity tests). A point
         # constraint only travels on the additive term tuples, so a pc'd

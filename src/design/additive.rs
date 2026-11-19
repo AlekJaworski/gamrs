@@ -24,8 +24,8 @@ use super::re::RePredictor;
 use super::sc::{ConstraintBlock, ScPredictor, Shape, ShapeConstraints, TermConstraints};
 use super::tensor::TensorTermFit;
 use super::{
-    prepend_intercept, prepend_zero_column, rank_and_log_pseudo_det, DesignStrategy, Predictor,
-    PreparedDesign,
+    prepend_intercept, prepend_zero_column, rank_and_log_pseudo_det, Centring, DesignStrategy,
+    Predictor, PreparedDesign,
 };
 
 /// Kind of marginal basis used inside a tensor product. Closed-set —
@@ -320,6 +320,14 @@ pub struct Additive {
 
 impl DesignStrategy for Additive {
     fn prepare(&self, x: ArrayView2<f64>) -> Result<PreparedDesign> {
+        self.prepare_with(x, Centring::Householder)
+    }
+}
+
+impl Additive {
+    /// [`DesignStrategy::prepare`] with an explicit choice of how centred CR
+    /// terms absorb their constraint.
+    pub fn prepare_with(&self, x: ArrayView2<f64>, centring: Centring) -> Result<PreparedDesign> {
         if self.terms.is_empty() {
             return Err(GamrsError::InvalidParameter(
                 "Additive: terms list must be non-empty".into(),
@@ -356,7 +364,7 @@ impl DesignStrategy for Additive {
             let mut term_constraints = None;
             match *t {
                 TermSpec::Cr { col, k, pc, by } => {
-                    let fit = CrPredictor::fit_centred(x, col, k, pc, by)?;
+                    let fit = CrPredictor::fit_centred(x, col, k, pc, by, centring)?;
                     per_term_dim.push(fit.centred.ncols());
                     per_term_centred.push(fit.centred);
                     per_term_s_smooth.push(vec![fit.s_smooth]);

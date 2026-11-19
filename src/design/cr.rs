@@ -15,16 +15,22 @@ use crate::transform::{descending_eigh, SumToZero};
 
 use super::by::{scale_rows, varies};
 use super::{
-    matrix_inf_norm, prepend_intercept, prepend_zero_column, rank_and_log_pseudo_det,
+    matrix_inf_norm, prepend_intercept, prepend_zero_column, rank_and_log_pseudo_det, Centring,
     DesignStrategy, Predictor, PreparedDesign,
 };
 
 /// Absorb the identifiability constraint into a CR basis: the fit-time
 /// centering row by default, or mgcv's point constraint when `pc` is set.
-fn constrain(cr: CrSpline, raw_design: ArrayView2<f64>, pc: Option<f64>) -> SumToZero<CrSpline> {
-    match pc {
-        Some(v) => SumToZero::from_point_constraint(cr, Array2::from_elem((1, 1), v).view()),
-        None => SumToZero::from_fit_design(cr, raw_design),
+fn constrain(
+    cr: CrSpline,
+    raw_design: ArrayView2<f64>,
+    pc: Option<f64>,
+    centring: Centring,
+) -> SumToZero<CrSpline> {
+    match (pc, centring) {
+        (Some(v), _) => SumToZero::from_point_constraint(cr, Array2::from_elem((1, 1), v).view()),
+        (None, Centring::Householder) => SumToZero::from_fit_design(cr, raw_design),
+        (None, Centring::SweepDrop) => SumToZero::sweep_drop(cr, raw_design),
     }
 }
 
@@ -38,6 +44,7 @@ fn constraint_map(
     raw_design: ArrayView2<f64>,
     pc: Option<f64>,
     by: Option<ArrayView1<f64>>,
+    centring: Centring,
 ) -> Result<Array2<f64>> {
     if pc.is_some() && by.is_some() {
         return Err(GamrsError::InvalidParameter(
@@ -49,7 +56,7 @@ fn constraint_map(
     if by.is_some_and(varies) {
         return Ok(Array2::eye(cr.dim()));
     }
-    Ok(constrain(cr, raw_design, pc).matrix().to_owned())
+    Ok(constrain(cr, raw_design, pc, centring).matrix().to_owned())
 }
 
 // -----------------------------------------------------------------------------
@@ -90,6 +97,7 @@ impl CrPredictor {
         k: usize,
         pc: Option<f64>,
         by: Option<usize>,
+        centring: Centring,
     ) -> Result<CenteredCrFit> {
         let x_col = x.column(x_col_idx);
         let cr = CrSpline::with_quantile_knots(x_col, k)?;
@@ -108,7 +116,7 @@ impl CrPredictor {
         let s_raw_rescaled = &s_raw * rescale;
 
         let w = by.map(|b| x.column(b));
-        let centring = constraint_map(cr, raw_design.view(), pc, w)?;
+        let centring = constraint_map(cr, raw_design.view(), pc, w, centring)?;
         let mut centred = raw_design.dot(&centring);
         // After the penalty rescale: mgcv sizes it on the unscaled basis.
         scale_rows(&mut centred, w);
@@ -140,7 +148,7 @@ pub struct Cr {
 
 impl DesignStrategy for Cr {
     fn prepare(&self, x: ArrayView2<f64>) -> Result<PreparedDesign> {
-        let fit = CrPredictor::fit_centred(x, 0, self.k, None, None)?;
+        let fit = CrPredictor::fit_centred(x, 0, self.k, None, None, Centring::Householder)?;
         let x_design = prepend_intercept(fit.centred.view());
         let p = x_design.ncols();
         let k_smooth = fit.centred.ncols();
@@ -225,7 +233,7 @@ impl CrStablePredictor {
         let s_raw_rescaled = &s_raw * rescale;
 
         let w = by.map(|b| x.column(b));
-        let centring = constraint_map(cr, raw_design.view(), pc, w)?;
+        let centring = constraint_map(cr, raw_design.view(), pc, w, Centring::Householder)?;
         let s_centred_rescaled = centring.t().dot(&s_raw_rescaled).dot(&centring);
 
         let (_, reparam_v) = descending_eigh(s_centred_rescaled.view())?;

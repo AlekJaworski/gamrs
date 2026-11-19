@@ -71,6 +71,35 @@ impl<B: Basis> SumToZero<B> {
         Self::from_constraint_row(inner, t.row(0))
     }
 
+    /// mgcv `bam`'s "sweep and drop" absorption (`smoothCon(sparse.cons = -1)`):
+    /// drop the lowest-variance column of the fit-time basis and centre the
+    /// rest over the fit rows. Same model space as [`Self::from_fit_design`],
+    /// different coefficients, so the REML constant and `initial.sp` differ.
+    ///
+    /// The centring is written as the linear map `A − 1·m'` (`A` keeps every
+    /// column but the dropped one, `m` their means), which equals mgcv's
+    /// `X[, -drop] − m'` only because the basis rows sum to one (true of CR).
+    pub fn sweep_drop(inner: B, x_fit_design: ArrayView2<f64>) -> Self {
+        let (n, k) = x_fit_design.dim();
+        let mean = x_fit_design.sum_axis(Axis(0)) / n as f64;
+        let var: Vec<f64> = (0..k)
+            .map(|j| {
+                let col = x_fit_design.column(j);
+                col.iter().map(|&v| (v - mean[j]).powi(2)).sum::<f64>() / (n as f64 - 1.0)
+            })
+            .collect();
+        let min = var.iter().cloned().fold(f64::INFINITY, f64::min);
+        let drop = var.iter().position(|&v| v == min).unwrap_or(0);
+        let mut c = Array2::<f64>::zeros((k, k - 1));
+        for (out, j) in (0..k).filter(|&j| j != drop).enumerate() {
+            c[[j, out]] = 1.0;
+            for i in 0..k {
+                c[[i, out]] -= mean[j];
+            }
+        }
+        Self { inner, c }
+    }
+
     /// Absorb the single linear constraint `t' · β = 0` into the basis.
     fn from_constraint_row(inner: B, t: ArrayView1<f64>) -> Self {
         let c = nullspace_householder(t);

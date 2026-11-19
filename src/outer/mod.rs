@@ -13,6 +13,7 @@
 use ndarray::{Array1, Array2};
 use ndarray_linalg::{Eigh, UPLO};
 
+pub mod fast_reml;
 mod step;
 
 use step::inf_norm;

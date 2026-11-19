@@ -5,6 +5,21 @@ based on [Keep a Changelog](https://keepachangelog.com/); this project is in
 beta (`0.x`), so minor bumps may carry breaking changes until the 1.0 surface
 is locked. Versions correspond to the published PyPI wheels.
 
+## [Unreleased]
+
+### Added
+
+- **`method="bam"` reproduces mgcv's `bam(method = "fREML")` for gaussian
+  fits.** It uses bam's sweep-and-drop
+  constraint, bam's starting λ and φ, and `fast.REML.fit`'s Newton loop over
+  (ρ, log φ), with bam's stopping rule. On synthetic fixtures, with and
+  without weights, fitted values, λ, edf, REML and scale agree with bam to
+  ≤ 2e-11, and the iteration counts are the same. That includes a λ on a
+  flat REML ridge: there `method="REML"` lands on a different λ (log λ off
+  by 1.9). Other families and tensor terms raise an error for now.
+  `method="REML"` and `"fREML"` are unchanged. Rust: `gamrs::fit_bam`,
+  `Additive::prepare_with`, `Centring`.
+
 ## [0.17.5] — 2026-11-19
 
 ### Performance
