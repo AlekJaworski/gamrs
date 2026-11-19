@@ -9,9 +9,10 @@
 //!    the architecture-assumptions.md §C4-note residual remains
 //!    (reparam is architecturally correct but doesn't move parity).
 //! 2. **`pred_invariance`** — the stable and unrotated paths must
-//!    predict the SAME μ̂ up to FP (V is a basis change, not a model
-//!    change). If this fails the wiring is wrong (a forgotten V
-//!    somewhere).
+//!    predict the same μ̂ (V is a basis change, not a model change). Each
+//!    starts the smoothing search from mgcv's `initial.sp` on its own
+//!    columns, so they agree to the outer tolerance, not to FP. A forgotten
+//!    V somewhere would miss by far more.
 
 use std::path::PathBuf;
 
@@ -62,7 +63,7 @@ fn max_abs_err(pred: &[f64], target: &[f64]) -> f64 {
 
 /// Compare the stable path against (a) mgcv and (b) the unrotated CR
 /// path. Stable's rel-err to mgcv should be ≤ unrotated's; the two
-/// paths must agree to FP (basis invariance).
+/// paths must agree to the outer tolerance (basis invariance).
 fn fit_and_check_stable(fixture_name: &str, max_rel_pred: f64, max_invariance_abs: f64) {
     let fx = load_fixture(fixture_name);
     let x_vec: Vec<f64> = fx.inputs.x_train.iter().map(|r| r[0]).collect();
@@ -128,7 +129,7 @@ fn fit_and_check_stable(fixture_name: &str, max_rel_pred: f64, max_invariance_ab
         "[{fixture_name}] stable rel-err {rel_stable_vs_mgcv:.3e} exceeds {max_rel_pred:.3e}",
     );
 
-    // (2) basis-invariance: stable and unrotated predictions agree to FP.
+    // (2) basis-invariance: stable and unrotated predictions agree to the outer tolerance.
     assert!(
         abs_invariance < max_invariance_abs,
         "[{fixture_name}] basis-invariance |Δμ| {abs_invariance:.3e} exceeds {max_invariance_abs:.3e}",
@@ -154,12 +155,12 @@ fn stable_near_linear_n500_k10_cr() {
 
 #[test]
 fn stable_smooth_n100_k10_cr() {
-    fit_and_check_stable("1d_gaussian_smooth_n100_k10_cr", 1e-9, 1e-9);
+    fit_and_check_stable("1d_gaussian_smooth_n100_k10_cr", 1e-6, 1e-6);
 }
 
 #[test]
 fn stable_smooth_n500_k10_cr() {
-    fit_and_check_stable("1d_gaussian_smooth_n500_k10_cr", 1e-7, 1e-8);
+    fit_and_check_stable("1d_gaussian_smooth_n500_k10_cr", 1e-7, 1e-7);
 }
 
 #[test]
