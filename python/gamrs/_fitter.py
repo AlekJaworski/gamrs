@@ -575,8 +575,8 @@ class Gam:
         as in mgcv's ``gam(optimizer="efs")`` (cheaper per iteration, wins
         on GLM families at large n). On a fit path with no
         Fellner-Schall branch, ``"fREML"`` warns and fits on REML.
-        ``"bam"`` reproduces mgcv's
-        ``bam(method="fREML")``; gaussian family, one penalty per term.
+        ``"bam"`` reproduces mgcv's ``bam(method="fREML")`` (gaussian,
+        poisson, binomial, gamma, negbin, scat; one penalty per term).
         """
         # Set/restore the outer-algorithm override for this fit only.
         # Only touches the thread-local when method != "REML" (gamrs's

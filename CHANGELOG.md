@@ -9,15 +9,33 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ### Added
 
-- **`method="bam"` reproduces mgcv's `bam(method = "fREML")` for gaussian
-  fits.** It uses bam's sweep-and-drop
-  constraint, bam's starting λ and φ, and `fast.REML.fit`'s Newton loop over
-  (ρ, log φ), with bam's stopping rule. On synthetic fixtures, with and
-  without weights, fitted values, λ, edf, REML and scale agree with bam to
-  ≤ 2e-11, and the iteration counts are the same. That includes a λ on a
-  flat REML ridge: there `method="REML"` lands on a different λ (log λ off
-  by 1.9). Other families and tensor terms raise an error for now.
-  `method="REML"` and `"fREML"` are unchanged. Rust: `gamrs::fit_bam`,
+- **`method="bam"` reproduces mgcv's `bam(method = "fREML")`** for gaussian,
+  poisson, binomial, Gamma, negative binomial (θ estimated, as `nb()`) and
+  scat (ν and σ estimated, as `scat()`). It reproduces each part of bam:
+  - bam's sweep-and-drop constraint;
+  - its starting λ and φ;
+  - `fast.REML.fit`'s Newton loop with bam's stopping rule;
+  - for the non-gaussian families, `bgam.fit`'s performance iteration: the
+    working model is refitted at each IRLS step, with `estimate.theta`
+    between steps.
+
+  On synthetic fixtures and a 30-fit sweep (n 500–8000, k 5–15, prior
+  weights, a random effect), gamrs agrees with bam to the following worst
+  relative differences, with the same Newton and IRLS iteration counts:
+  - fitted values 7e-11;
+  - λ 6e-9 (including a λ on a flat REML ridge, where `method="REML"` is
+    1.9 off in log λ);
+  - θ 4e-9;
+  - REML 2e-12.
+
+  At n = 20,000, one thread, three k=10 smooths, it fits in 17/83/87 ms
+  (gaussian/nb/weighted scat). mgcv's bam takes 88/665/930 ms with
+  `chunk.size = n`; `method="REML"` takes 24/536/514 ms. Above 10,000 rows
+  bam builds its bases from a 10,000-row sample unless `chunk.size` is
+  raised; gamrs always uses every row.
+
+  Tensor terms raise an error for now. `method="REML"` and `"fREML"` are
+  unchanged. Rust: `gamrs::fit_bam`, `family::bam::BamFamily`,
   `Additive::prepare_with`, `Centring`.
 
 ## [0.17.5] — 2026-11-19
