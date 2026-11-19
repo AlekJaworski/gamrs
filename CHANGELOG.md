@@ -5,6 +5,36 @@ based on [Keep a Changelog](https://keepachangelog.com/); this project is in
 beta (`0.x`), so minor bumps may carry breaking changes until the 1.0 surface
 is locked. Versions correspond to the published PyPI wheels.
 
+## [Unreleased]
+
+### Performance
+
+- **Newton-weight families factor `X'W_newton X + λS` once per gradient
+  evaluation, not twice.** The REML value took `log|H|` from its own Cholesky
+  of the same matrix the gradient had just factored; it now reads it off the
+  gradient's factor. The gradient also stops inverting the PIRLS factor for
+  traces it does not use (the Newton gradient takes them from `A_newton⁻¹`).
+  Results are bit-identical.
+- **Tweedie's finite-difference Hessian probes skip the REML value they
+  discarded**, whose saturated log-likelihood cost as much as the gradient, and
+  the shape `log|H|` chain reuses `A_newton⁻¹` instead of an LU inverse plus one
+  LU solve per shape axis. Fits move at rounding level (REML 7e-15 relative,
+  λ ≤ 5e-10 relative on the parity fixtures).
+- **The combined penalty `Σ exp(ρ_j)·S_j` is built in one cache-friendly pass**
+  (4.5 ms instead of 9 ms per inner fit at p = 1,037). Bit-identical.
+
+One thread, n = 20,000, a random effect plus four smooths, wall time per fit:
+
+| family | levels | before | after |
+|---|---|---|---|
+| Tweedie | 50 | 13.5 s | 7.7 s |
+| Tweedie | 1,000 | 60.5 s | 26.3 s |
+| negative binomial | 1,000 | 8.38 s | 7.92 s |
+| Gamma | 1,000 | 4.81 s | 4.64 s |
+| Gamma | 50 | 0.68 s | 0.62 s |
+
+scat and the 50-level negative binomial cell are unchanged within noise.
+
 ## [0.17.4] — 2026-11-19
 
 ### Fixed
