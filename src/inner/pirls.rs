@@ -590,6 +590,10 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver> I
         self.fisher_beta_chain(fit, rho, s_blocks)
     }
 
+    fn prior_weights(&self) -> Option<&Array1<f64>> {
+        self.prior_weights.as_ref()
+    }
+
     fn lazy_tk_kkt_inputs(
         &self,
         fit: &Self::Fit,

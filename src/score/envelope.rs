@@ -493,6 +493,7 @@ where
             &bsb_per_term,
             &lambda_j,
             self.mp,
+            self.inner.prior_weights().map(|w| w.view()),
         );
 
         let hess_inputs = HessInputs {
@@ -573,14 +574,18 @@ where
         // and scalar `bsb`; here we pass `lambda = 1` and the pre-computed
         // `bsb_total = Σ_j λ_j β'S_jβ` so `dp = D + 1·bsb_total` matches
         // the multi-smooth Dp.
-        let score_sigma2 =
-            match self
-                .profile
-                .dispersion(&self.loss, inner, 1.0, bsb_total, tr_hinv_xtwx, self.mp)
-            {
-                Some(phi) => phi,
-                None => return Ok(None),
-            };
+        let score_sigma2 = match self.profile.dispersion(
+            &self.loss,
+            inner,
+            1.0,
+            bsb_total,
+            tr_hinv_xtwx,
+            self.mp,
+            self.inner.prior_weights().map(|w| w.view()),
+        ) {
+            Some(phi) => phi,
+            None => return Ok(None),
+        };
 
         // `Dp = D + Σ_j λ_j·β'S_jβ`.
         let dp = inner.deviance + bsb_total;
@@ -588,11 +593,12 @@ where
         // Σ ls(y_i; σ²) — saturated log-likelihood sum at the score's σ².
         // Gamma/InverseGaussian's sat_lik depend on σ² via the φ-term that
         // Phase-2b v0.2 port reinstated; other families ignore the scale arg.
-        let ls_sum: f64 = self
-            .y
-            .iter()
-            .map(|&yi| self.loss.saturated_log_lik(yi, score_sigma2))
-            .sum();
+        let ls_sum = crate::score::weighted_saturated_log_lik(
+            &self.loss,
+            &self.y,
+            score_sigma2,
+            self.inner.prior_weights(),
+        );
 
         // GamFit3 form (mgcv `gam.fit3.r:616-617`, v0.x
         // `src/pirls/mod.rs::ScoreFormula::GamFit3`):

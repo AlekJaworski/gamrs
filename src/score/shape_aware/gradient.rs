@@ -677,7 +677,15 @@ where
         let tr_hinv_xtwx = fit.p as f64;
         let phi = self
             .profile
-            .dispersion(&family.loss, &fit, 1.0, bsb_total, tr_hinv_xtwx, self.mp)
+            .dispersion(
+                &family.loss,
+                &fit,
+                1.0,
+                bsb_total,
+                tr_hinv_xtwx,
+                self.mp,
+                self.prior_weights.as_ref().map(|w| w.view()),
+            )
             .unwrap_or(1.0);
         let rho_grad = self.compute_rho_envelope_gradient(
             &fit,
@@ -1015,7 +1023,15 @@ where
         let tr_hinv_xtwx = fit.p as f64;
         let phi_center = self
             .profile
-            .dispersion(&family.loss, fit, 1.0, bsb_total, tr_hinv_xtwx, self.mp)
+            .dispersion(
+                &family.loss,
+                fit,
+                1.0,
+                bsb_total,
+                tr_hinv_xtwx,
+                self.mp,
+                self.prior_weights.as_ref().map(|w| w.view()),
+            )
             .unwrap_or(1.0);
 
         let rho_grad = self.compute_rho_envelope_gradient(
@@ -1164,7 +1180,15 @@ where
         // frozen-fit handles (bsb_per_term, tr_hinv_s_per_term) are reused.
         let phi = self
             .profile
-            .dispersion(&family.loss, fit, 1.0, bsb_total, fit.p as f64, self.mp)
+            .dispersion(
+                &family.loss,
+                fit,
+                1.0,
+                bsb_total,
+                fit.p as f64,
+                self.mp,
+                self.prior_weights.as_ref().map(|w| w.view()),
+            )
             .unwrap_or(ctx.phi_center);
 
         // Reuse the same envelope ρ-gradient helper so the formula stays

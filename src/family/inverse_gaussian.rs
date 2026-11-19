@@ -42,6 +42,16 @@ impl Loss for InverseGaussian {
         -0.5 * (two_pi * scale).ln() - 1.5 * y.max(1e-300).ln()
     }
 
+    /// mgcv's `inverse.gaussian()$ls`: row `i` at scale `φ/wᵢ`, zero-weight
+    /// rows dropped.
+    fn weighted_saturated_log_lik(&self, y: f64, w: f64, scale: f64) -> f64 {
+        if w > 0.0 {
+            self.saturated_log_lik(y, scale / w)
+        } else {
+            0.0
+        }
+    }
+
     fn d_loss_dmu(&self, y: f64, mu: f64) -> f64 {
         let mu = mu.max(1e-300);
         2.0 * (mu - y) / (mu * mu * mu)

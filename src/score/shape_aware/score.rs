@@ -360,14 +360,18 @@ where
         let tr_hinv_xtwx = fit.p as f64;
         // Profile sees aggregated `bsb_total` with `lambda = 1` (matches
         // EnvelopeScore convention — envelope.rs:266-273).
-        let phi =
-            match self
-                .profile
-                .dispersion(&family.loss, fit, 1.0, bsb_total, tr_hinv_xtwx, self.mp)
-            {
-                Some(p) => p,
-                None => return 1e12,
-            };
+        let phi = match self.profile.dispersion(
+            &family.loss,
+            fit,
+            1.0,
+            bsb_total,
+            tr_hinv_xtwx,
+            self.mp,
+            self.prior_weights.as_ref().map(|w| w.view()),
+        ) {
+            Some(p) => p,
+            None => return 1e12,
+        };
         // Use the Newton-W `log|H|` when the family opts into
         // `Loss::use_newton_irls()` (NegBin / InverseGaussian / similar
         // non-canonical-link). Computed **lazily** here — not inside

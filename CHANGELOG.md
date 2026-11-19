@@ -5,6 +5,18 @@ based on [Keep a Changelog](https://keepachangelog.com/); this project is in
 beta (`0.x`), so minor bumps may carry breaking changes until the 1.0 surface
 is locked. Versions correspond to the published PyPI wheels.
 
+## [Unreleased]
+
+### Fixed
+
+- **Weighted Gamma and inverse Gaussian fits now use mgcv's REML score.** With
+  `sample_weight`, mgcv evaluates each row's saturated log-likelihood at scale
+  φ/wᵢ; gamrs used φ for every row. For Gamma that moved the profiled scale and
+  left λ 1.3e-3 off mgcv in log λ; it is now 2e-5 off, and the REML score
+  matches mgcv's to 1e-6. For inverse Gaussian only the reported REML score
+  moved (by Σ log wᵢ / 2); it now matches mgcv's. Unweighted fits are
+  unchanged.
+
 ## [0.17.3] — 2026-11-18
 
 ### Fixed

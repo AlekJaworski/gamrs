@@ -63,9 +63,10 @@ pub(crate) fn reml_score_from_parts(
         - ls_sum
 }
 
-/// `Σ wᵢ·ls(yᵢ)` — the extended-family convention (mgcv `nb()`, `tw()`,
-/// `scat()`: `ls <- sum(w * ls_i)`), so the θ-gradient's weighted
-/// `Σ wᵢ·∂lsᵢ/∂θ` differentiates the value.
+/// `Σ ls(yᵢ; wᵢ)` under prior weights, per [`Loss::weighted_saturated_log_lik`];
+/// unweighted, the plain sum.
+///
+/// [`Loss::weighted_saturated_log_lik`]: crate::traits::Loss::weighted_saturated_log_lik
 pub(crate) fn weighted_saturated_log_lik<L: crate::traits::Loss>(
     loss: &L,
     y: &ndarray::Array1<f64>,
@@ -76,7 +77,7 @@ pub(crate) fn weighted_saturated_log_lik<L: crate::traits::Loss>(
         Some(w) => y
             .iter()
             .zip(w.iter())
-            .map(|(&yi, &wi)| wi * loss.saturated_log_lik(yi, scale))
+            .map(|(&yi, &wi)| loss.weighted_saturated_log_lik(yi, wi, scale))
             .sum(),
         None => y.iter().map(|&yi| loss.saturated_log_lik(yi, scale)).sum(),
     }

@@ -113,6 +113,13 @@ pub trait Loss {
     /// Tweedie all depend on σ² via lgamma / log terms; those impls
     /// MUST read it (v0.2 port, 2026-05-24).
     fn saturated_log_lik(&self, y: f64, scale: f64) -> f64;
+
+    /// One observation's saturated log-likelihood under prior weight `w`.
+    /// mgcv's extended families take `w · ls(y)`; a family whose scale enters
+    /// the density evaluates each row at scale `φ / w` instead.
+    fn weighted_saturated_log_lik(&self, y: f64, w: f64, scale: f64) -> f64 {
+        w * self.saturated_log_lik(y, scale)
+    }
     /// `∂D/∂μ` per observation. Used inside the PIRLS working response.
     /// Default returns `2(y - μ)` for the Gaussian squared-error case.
     fn d_loss_dmu(&self, y: f64, mu: f64) -> f64 {
@@ -142,7 +149,14 @@ pub trait Loss {
     ///
     /// `phi_init` is a warm-start hint (typically the previous outer
     /// iteration's φ̂).
-    fn profile_score_sigma2(&self, dp: f64, _n_obs: usize, n_minus_mp: f64, _phi_init: f64) -> f64 {
+    fn profile_score_sigma2(
+        &self,
+        dp: f64,
+        _n_obs: usize,
+        n_minus_mp: f64,
+        _phi_init: f64,
+        _prior_w: Option<ndarray::ArrayView1<f64>>,
+    ) -> f64 {
         (dp / n_minus_mp.max(1.0)).max(1e-8)
     }
 
@@ -175,7 +189,13 @@ pub trait Loss {
     ///
     /// Default `None` — closed-form profiles handle the chain via the
     /// closed-form path in `MgcvTwoSigmaProfile::dispersion_drho`.
-    fn profile_sigma2_drho_factor(&self, _sigma2: f64, _n_obs: usize, _mp: usize) -> Option<f64> {
+    fn profile_sigma2_drho_factor(
+        &self,
+        _sigma2: f64,
+        _n_obs: usize,
+        _mp: usize,
+        _prior_w: Option<ndarray::ArrayView1<f64>>,
+    ) -> Option<f64> {
         None
     }
 
@@ -761,6 +781,11 @@ pub trait InnerSolver {
 
     /// Solve the penalised inner system at the given log-λ vector.
     /// `rho.len() == 1` in Phase 0 (single smoothing parameter).
+    /// Prior weights, when the solver has any.
+    fn prior_weights(&self) -> Option<&Array1<f64>> {
+        None
+    }
+
     fn fit(&self, rho: &Array1<f64>) -> Result<Self::Fit>;
 
     /// Solve with an optional warm-start β. The default implementation

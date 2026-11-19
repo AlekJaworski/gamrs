@@ -51,6 +51,15 @@ impl Loss for Gamma {
         k - y.max(1e-300).ln()
     }
 
+    /// mgcv's `Gamma()$ls`: row `i` at scale `φ/wᵢ`, zero-weight rows dropped.
+    fn weighted_saturated_log_lik(&self, y: f64, w: f64, scale: f64) -> f64 {
+        if w > 0.0 {
+            self.saturated_log_lik(y, scale / w)
+        } else {
+            0.0
+        }
+    }
+
     /// `∂D/∂μ = 2(μ - y) / μ²`.
     fn d_loss_dmu(&self, y: f64, mu: f64) -> f64 {
         let mu = mu.max(1e-300);
@@ -78,18 +87,25 @@ impl Loss for Gamma {
     /// Verbatim port from v0.x `src/pirls/mod.rs::Family::estimate_phi_mgcv`
     /// Gamma branch (lines 847-883). Triple guard: per-step relative damping
     /// `max(*0.1).min(*10)`, absolute floor `1e-8`, NaN trap.
-    fn profile_score_sigma2(&self, dp: f64, n_obs: usize, n_minus_mp: f64, phi_init: f64) -> f64 {
+    fn profile_score_sigma2(
+        &self,
+        dp: f64,
+        n_obs: usize,
+        n_minus_mp: f64,
+        phi_init: f64,
+        prior_w: Option<ndarray::ArrayView1<f64>>,
+    ) -> f64 {
         let n = n_obs as f64;
         let mp_f = n - n_minus_mp;
         let mut phi = phi_init.max(1e-8);
         let tol_abs = 1e-10 * (dp.abs() + mp_f + 1.0);
         for _ in 0..30 {
-            let inv_phi = 1.0 / phi;
-            let f = dp + 2.0 * n * (crate::special::digamma(inv_phi) + phi.ln()) + mp_f * phi;
+            let (ls_term, ls_term_dphi) = scale_terms(phi, n, prior_w);
+            let f = dp + ls_term + mp_f * phi;
             if f.abs() < tol_abs {
                 break;
             }
-            let fp = (2.0 * n / phi) * (1.0 - crate::special::trigamma(inv_phi) * inv_phi) + mp_f;
+            let fp = ls_term_dphi + mp_f;
             // Guard against zero / near-zero derivative.
             if fp.abs() < 1e-15 {
                 break;
@@ -132,12 +148,15 @@ impl Loss for Gamma {
     /// strictly tighter Hessian (the σ² chain is real off-optimum).
     /// Closes the `1 + 2d` FD inner-fits per outer Newton step that the
     /// previous FD-Hessian fallback cost.
-    fn profile_sigma2_drho_factor(&self, sigma2: f64, n_obs: usize, mp: usize) -> Option<f64> {
+    fn profile_sigma2_drho_factor(
+        &self,
+        sigma2: f64,
+        n_obs: usize,
+        mp: usize,
+        prior_w: Option<ndarray::ArrayView1<f64>>,
+    ) -> Option<f64> {
         let phi = sigma2.max(1e-8);
-        let inv_phi = 1.0 / phi;
-        let n = n_obs as f64;
-        let mp_f = mp as f64;
-        let fp = (2.0 * n / phi) * (1.0 - crate::special::trigamma(inv_phi) * inv_phi) + mp_f;
+        let fp = scale_terms(phi, n_obs as f64, prior_w).1 + mp as f64;
         if fp.abs() < 1e-15 {
             return None;
         }
@@ -189,6 +208,31 @@ impl VarianceFn for GammaVariance {
     }
     fn d2_variance(&self, _mu: f64) -> f64 {
         2.0
+    }
+}
+
+/// `2·φ²·∂ls/∂φ` of the profile equation and its φ-derivative, with each row
+/// at scale `φ/wᵢ`: `2 Σ wᵢ[ψ(wᵢ/φ) + log(φ/wᵢ)]`, `n` unit rows when unweighted.
+fn scale_terms(phi: f64, n: f64, prior_w: Option<ndarray::ArrayView1<f64>>) -> (f64, f64) {
+    use crate::special::{digamma, trigamma};
+    match prior_w {
+        None => {
+            let inv_phi = 1.0 / phi;
+            (
+                2.0 * n * (digamma(inv_phi) + phi.ln()),
+                (2.0 * n / phi) * (1.0 - trigamma(inv_phi) * inv_phi),
+            )
+        }
+        Some(w) => w
+            .iter()
+            .filter(|&&wi| wi > 0.0)
+            .fold((0.0, 0.0), |(f, fp), &wi| {
+                let r = wi / phi;
+                (
+                    f + 2.0 * wi * (digamma(r) + (phi / wi).ln()),
+                    fp + (2.0 * wi / phi) * (1.0 - trigamma(r) * r),
+                )
+            }),
     }
 }
 

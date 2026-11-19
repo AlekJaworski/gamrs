@@ -53,6 +53,7 @@ pub trait Profile<L: Loss> {
         bsb: f64,
         tr_hinv_xtwx: f64,
         mp: usize,
+        prior_w: Option<ndarray::ArrayView1<f64>>,
     ) -> Option<f64>;
 
     /// Analytic `∂σ²_score/∂ρ_i` for the outer-Newton Hessian.
@@ -78,6 +79,7 @@ pub trait Profile<L: Loss> {
         _bsb_per_term: &[f64],
         _lambda_j: &[f64],
         _mp: usize,
+        _prior_w: Option<ndarray::ArrayView1<f64>>,
     ) -> Option<Vec<f64>> {
         None
     }
@@ -106,6 +108,7 @@ impl<L: Loss> Profile<L> for MgcvTwoSigmaProfile {
         bsb: f64,
         tr_hinv_xtwx: f64,
         mp: usize,
+        prior_w: Option<ndarray::ArrayView1<f64>>,
     ) -> Option<f64> {
         let n_minus_mp = (inner.n as f64) - (mp as f64);
         let n_eff = (inner.n as f64) - tr_hinv_xtwx;
@@ -116,7 +119,7 @@ impl<L: Loss> Profile<L> for MgcvTwoSigmaProfile {
         // Family-specific profile σ̂² (Gamma → Newton-on-φ, others → closed
         // form). Warm-start with the simple closed-form value.
         let phi_init = dp / n_minus_mp;
-        let score_sigma2 = loss.profile_score_sigma2(dp, inner.n, n_minus_mp, phi_init);
+        let score_sigma2 = loss.profile_score_sigma2(dp, inner.n, n_minus_mp, phi_init, prior_w);
         Some(score_sigma2.max(1e-8))
     }
 
@@ -128,6 +131,7 @@ impl<L: Loss> Profile<L> for MgcvTwoSigmaProfile {
         bsb_per_term: &[f64],
         lambda_j: &[f64],
         mp: usize,
+        prior_w: Option<ndarray::ArrayView1<f64>>,
     ) -> Option<Vec<f64>> {
         let n_minus_mp = (inner.n as f64) - (mp as f64);
         if n_minus_mp <= 0.0 {
@@ -154,7 +158,7 @@ impl<L: Loss> Profile<L> for MgcvTwoSigmaProfile {
         // FD inner-fits per outer Newton step that the previous FD-Hessian
         // fallback cost. Falls back to "treat as constant" (zeros) if the
         // family declines to provide a factor (e.g. degenerate `F'(φ̂)≈0`).
-        let factor = loss.profile_sigma2_drho_factor(_sigma2, inner.n, mp);
+        let factor = loss.profile_sigma2_drho_factor(_sigma2, inner.n, mp, prior_w);
         let factor = match factor {
             Some(f) => f,
             None => return Some(vec![0.0; bsb_per_term.len()]),
@@ -186,6 +190,7 @@ impl<L: Loss> Profile<L> for FixedAtOneProfile {
         _bsb: f64,
         _tr_hinv_xtwx: f64,
         _mp: usize,
+        _prior_w: Option<ndarray::ArrayView1<f64>>,
     ) -> Option<f64> {
         Some(1.0)
     }
@@ -198,6 +203,7 @@ impl<L: Loss> Profile<L> for FixedAtOneProfile {
         bsb_per_term: &[f64],
         _lambda_j: &[f64],
         _mp: usize,
+        _prior_w: Option<ndarray::ArrayView1<f64>>,
     ) -> Option<Vec<f64>> {
         // σ² ≡ 1 is constant in ρ — no chain term.
         Some(vec![0.0; bsb_per_term.len()])
@@ -228,6 +234,7 @@ impl<L: Loss> Profile<L> for OwnedByLossProfile {
         _bsb: f64,
         _tr_hinv_xtwx: f64,
         _mp: usize,
+        _prior_w: Option<ndarray::ArrayView1<f64>>,
     ) -> Option<f64> {
         Some(loss.fixed_dispersion().unwrap_or(1.0))
     }

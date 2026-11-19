@@ -32,6 +32,7 @@ def _fit(stem, family, **kwargs):
 @pytest.mark.parametrize(
     "stem,family",
     [
+        ("2d_gamma_log_weighted_n400_k8_cr", "gamma"),
         ("2d_invgauss_log_weighted_n400_k8_cr", "inverse_gaussian"),
         ("2d_nb_log_weighted_n400_k8_cr", "nb"),
         ("2d_tw_log_weighted_n400_k8_cr", "tw"),
@@ -44,13 +45,5 @@ def test_weighted_parity(stem, family):
     if family == "nb":
         theta = float(np.exp(fitted.shape_params[0]))
         assert abs(theta / fx["inputs"]["nb_theta_hat"] - 1) < 1e-4, theta
-    if family != "inverse_gaussian":
-        assert abs(fitted.reml_value - fx["mgcv_output"]["reml"]) < 1e-5
+    assert abs(fitted.reml_value - fx["mgcv_output"]["reml"]) < 1e-5
 
-
-def test_weighted_gamma_parity():
-    """mgcv's Gamma saturated log-likelihood takes each row at scale φ/wᵢ;
-    gamrs's at φ. That moves the profiled φ slightly, hence the looser bar."""
-    _, _, rel, drho = _fit("2d_gamma_log_weighted_n400_k8_cr", "gamma")
-    assert rel < 2e-4, f"μ rel {rel:.3e}"
-    assert drho < 1e-2, f"max |Δρ| {drho:.3e}"

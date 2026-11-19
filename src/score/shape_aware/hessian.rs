@@ -262,7 +262,15 @@ where
         let tr_hinv_xtwx = fit.p as f64;
         let phi = self
             .profile
-            .dispersion(&family.loss, &fit, 1.0, bsb_total, tr_hinv_xtwx, self.mp)
+            .dispersion(
+                &family.loss,
+                &fit,
+                1.0,
+                bsb_total,
+                tr_hinv_xtwx,
+                self.mp,
+                self.prior_weights.as_ref().map(|w| w.view()),
+            )
             .unwrap_or(1.0);
         let rho_grad = match &lazy_tk {
             Some(tk) => self.newton_rho_gradient(tk, &family, &rho_slice, &bsb_per_term, phi),
@@ -608,7 +616,15 @@ where
         }
         let sigma2 = self
             .profile
-            .dispersion(&family.loss, fit, 1.0, bsb_total, fit.p as f64, self.mp)
+            .dispersion(
+                &family.loss,
+                fit,
+                1.0,
+                bsb_total,
+                fit.p as f64,
+                self.mp,
+                self.prior_weights.as_ref().map(|w| w.view()),
+            )
             .unwrap_or(1.0);
 
         // Newton-A path for `use_newton_irls()` families (NegBin, TDist).
