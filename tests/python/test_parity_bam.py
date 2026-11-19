@@ -59,3 +59,44 @@ def test_bam_refuses_unported_families():
         gamrs.Gam(
             terms=[gamrs.CrTerm(i, k=10) for i in range(3)], family="tweedie", method="bam"
         ).fit(x_train_2d(fx), y_train(fx))
+
+
+def lattice(n):
+    """The integer lattice ``gen_bam_freml_fixtures.R`` fits above bam's chunk.size."""
+    i = np.arange(1, n + 1, dtype=float)
+
+    def u(a, m):
+        return np.mod(i * a, m) / m
+
+    x0, x1, x2 = u(7919, 10007), u(6037, 10009), u(4001, 10037)
+    e1, e2, e3 = u(7907, 10039) - 0.5, u(5003, 10061) - 0.5, u(3001, 10067)
+    s = 4 * x0 * (1 - x0) - 2 * (x1 - 0.5) * (x1 - 0.5) + 0.4 * x2
+    return np.column_stack([x0, x1, x2]), {
+        "gaussian": 2 + s + 0.8 * e1,
+        "negbin": np.floor((1.5 + 3 * s) * 2 * (0.5 + e1) * (0.5 + e2) * 2),
+        "scat": 10 + 3 * s + 0.3 * e1 / (0.05 + np.abs(e2)),
+    }, 0.5 + 1.5 * e3
+
+
+@pytest.mark.parametrize("n", [12000, 25000])
+@pytest.mark.parametrize(
+    "stem,family",
+    [
+        ("3d_gaussian_bam_freml_n{n}_lattice", "gaussian"),
+        ("3d_nb_log_bam_freml_n{n}_lattice", "negbin"),
+        ("3d_scat_identity_weighted_bam_freml_n{n}_lattice", "scat"),
+    ],
+)
+def test_bam_above_chunk_size_matches_default_bam(stem, family, n):
+    """Above 10,000 rows bam builds its bases from mgcv's seeded row sample."""
+    ref = load_fixture(stem.format(n=n))["bam"]
+    x, ys, w = lattice(n)
+    g = gamrs.Gam(
+        terms=[gamrs.CrTerm(i, k=10) for i in range(3)], family=family, method="bam"
+    ).fit(x, ys[family], sample_weight=w if family == "scat" else None)
+    rows = np.asarray(ref["rows"]) - 1
+    fitted = np.max(np.abs(g.predict(x)[rows] / np.asarray(ref["predictions_rows"]) - 1))
+    sp = np.max(np.abs(np.asarray(g.lambda_) / np.asarray(ref["sp"]) - 1))
+    assert fitted < 1e-6, f"fitted rel {fitted:.3e}"
+    assert sp < 1e-5, f"sp rel {sp:.3e}"
+    assert abs(g.reml_value_ / ref["reml"] - 1) < 1e-9

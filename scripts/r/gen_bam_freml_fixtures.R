@@ -88,3 +88,45 @@ emit("3d_gamma_log_bam_freml_n2000_k10_cr.json", "3-D additive Gamma(log), bam f
      "gamma", "log", d,
      bam(f3, data = d, family = Gamma(link = "log"), method = "fREML"),
      gam(f3, data = d, family = Gamma(link = "log"), method = "REML"))
+
+# Above chunk.size (10,000) bam builds its bases from a seeded row sample.
+# These inputs are an integer lattice, not drawn from R's RNG, so the tests
+# rebuild them bit for bit from n alone; only outputs are stored (fitted
+# values at every 100th row).
+lattice <- function(n) {
+  i <- seq_len(n)
+  u <- function(a, m) ((i * a) %% m) / m
+  x0 <- u(7919, 10007); x1 <- u(6037, 10009); x2 <- u(4001, 10037)
+  e1 <- u(7907, 10039) - 0.5; e2 <- u(5003, 10061) - 0.5; e3 <- u(3001, 10067)
+  s <- 4 * x0 * (1 - x0) - 2 * (x1 - 0.5) * (x1 - 0.5) + 0.4 * x2
+  data.frame(x0 = x0, x1 = x1, x2 = x2,
+             yg = 2 + s + 0.8 * e1,
+             ynb = floor((1.5 + 3 * s) * 2 * (0.5 + e1) * (0.5 + e2) * 2),
+             ys = 10 + 3 * s + 0.3 * e1 / (0.05 + abs(e2)),
+             w = 0.5 + 1.5 * e3)
+}
+emit_large <- function(path, desc, family, d, fit) {
+  every <- seq(100, nrow(d), by = 100)
+  out <- summarise(fit)
+  out$predictions_train <- NULL; out$linear_predictors <- NULL; out$beta <- NULL
+  out$rows <- every; out$predictions_rows <- as.numeric(fitted(fit))[every]
+  obj <- list(schema_version = 1L, name = sub("\\.json$", "", path), description = desc,
+              metadata = list(mgcv_version = as.character(packageVersion("mgcv"))),
+              inputs = list(n = nrow(d), k = rep(k, 3), bs = rep("cr", 3), family = family,
+                            lattice = "scripts/r/gen_bam_freml_fixtures.R lattice()"),
+              bam = out)
+  cat(toJSON(obj, auto_unbox = TRUE, digits = 17), file = file.path(FIX, path))
+  cat(sprintf("  %-46s edf=%.4f log sp %s iter %d irls %d\n", obj$name, sum(fit$edf),
+              paste(round(log(fit$sp), 4), collapse = ","), fit$outer.info$iter, fit$iter))
+}
+fx <- function(y) as.formula(sprintf("%s ~ s(x0, k = %d, bs = 'cr') + s(x1, k = %d, bs = 'cr') + s(x2, k = %d, bs = 'cr')", y, k, k, k))
+for (n in c(12000L, 25000L)) {
+  d <- lattice(n)
+  emit_large(sprintf("3d_gaussian_bam_freml_n%d_lattice.json", n), "lattice gaussian, default chunk.size",
+             "gaussian", d, bam(fx("yg"), data = d, method = "fREML"))
+  emit_large(sprintf("3d_nb_log_bam_freml_n%d_lattice.json", n), "lattice nb(log), default chunk.size",
+             "negbin", d, bam(fx("ynb"), data = d, family = nb(), method = "fREML"))
+  emit_large(sprintf("3d_scat_identity_weighted_bam_freml_n%d_lattice.json", n),
+             "lattice scat(identity), prior weights, default chunk.size", "scat", d,
+             bam(fx("ys"), data = d, weights = w, family = scat(link = "identity"), method = "fREML"))
+}

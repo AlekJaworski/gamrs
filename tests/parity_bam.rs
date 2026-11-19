@@ -207,3 +207,139 @@ fn bam_gamma_estimated_scale() {
         PIRLS,
     );
 }
+
+/// The integer lattice `gen_bam_freml_fixtures.R` fits above bam's
+/// `chunk.size`: x columns, the gaussian / nb / scat responses and weights.
+fn lattice(n: usize) -> (Array2<f64>, [Array1<f64>; 3], Array1<f64>) {
+    let i = Array1::from_iter((1..=n).map(|v| v as f64));
+    let u = |a: f64, m: f64| i.mapv(|v| (v * a).rem_euclid(m) / m);
+    let (x0, x1, x2) = (u(7919.0, 10007.0), u(6037.0, 10009.0), u(4001.0, 10037.0));
+    let e1 = u(7907.0, 10039.0) - 0.5;
+    let e2 = u(5003.0, 10061.0) - 0.5;
+    let e3 = u(3001.0, 10067.0);
+    let s = 4.0 * &x0 * &(1.0 - &x0) - 2.0 * &(&x1 - 0.5) * &(&x1 - 0.5) + 0.4 * &x2;
+    let yg = 2.0 + &s + 0.8 * &e1;
+    let ynb = ((1.5 + 3.0 * &s) * 2.0 * &(0.5 + &e1) * &(0.5 + &e2) * 2.0).mapv(f64::floor);
+    let ys = 10.0 + 3.0 * &s + 0.3 * &e1 / &(0.05 + e2.mapv(f64::abs));
+    let w = 0.5 + 1.5 * &e3;
+    let mut x = Array2::zeros((n, 3));
+    x.column_mut(0).assign(&x0);
+    x.column_mut(1).assign(&x1);
+    x.column_mut(2).assign(&x2);
+    (x, [yg, ynb, ys], w)
+}
+
+#[derive(Deserialize)]
+struct LatticeFixture {
+    inputs: LatticeInputs,
+    bam: LatticeReference,
+}
+
+#[derive(Deserialize)]
+struct LatticeInputs {
+    n: usize,
+}
+
+#[derive(Deserialize)]
+struct LatticeReference {
+    sp: Vec<f64>,
+    edf_total: f64,
+    reml: f64,
+    iter: usize,
+    irls_iter: usize,
+    rows: Vec<usize>,
+    predictions_rows: Vec<f64>,
+}
+
+fn check_lattice<L, K, V>(
+    name: &str,
+    family: Family<L, K, V>,
+    response: usize,
+    weighted: bool,
+    tol: Tol,
+) where
+    L: Loss + Clone,
+    K: Link + Clone,
+    V: VarianceFn + Clone,
+    Family<L, K, V>: BamFamily,
+{
+    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    p.push(format!("tests/fixtures/{name}.json"));
+    let fx: LatticeFixture = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+    let (x, ys, w) = lattice(fx.inputs.n);
+    let terms = (0..3)
+        .map(|col| TermSpec::Cr {
+            col,
+            k: 10,
+            pc: None,
+            by: None,
+        })
+        .collect();
+    let fit = fit_bam(
+        family,
+        &Additive { terms },
+        x.view(),
+        ys[response].view(),
+        weighted.then(|| w.view()),
+    )
+    .unwrap();
+    let r = fx.bam;
+    let pred = fit
+        .predict(x.view())
+        .unwrap()
+        .mapv(|e| fit.link_kind.inverse(e));
+    let fitted = r
+        .rows
+        .iter()
+        .zip(&r.predictions_rows)
+        .map(|(&i, b)| rel(pred[i - 1], *b))
+        .fold(0.0, f64::max);
+    let sp = fit
+        .lambda
+        .iter()
+        .zip(&r.sp)
+        .map(|(a, b)| rel(*a, *b))
+        .fold(0.0, f64::max);
+    let report = format!(
+        "{name}: fitted {fitted:.2e} sp {sp:.2e} edf {:.2e} reml {:.2e} iter {}/{} irls {}/{}",
+        rel(fit.edf_total, r.edf_total),
+        rel(fit.reml_value, r.reml),
+        fit.n_iters,
+        r.iter,
+        fit.stats.inner_pirls_iterations_total,
+        r.irls_iter
+    );
+    eprintln!("{report}");
+    assert!(fitted < tol.fitted, "{report}");
+    assert!(sp < tol.sp, "{report}");
+    assert!(rel(fit.edf_total, r.edf_total) < tol.fitted, "{report}");
+    assert!(rel(fit.reml_value, r.reml) < 1e-9, "{report}");
+    assert_eq!(fit.n_iters, r.iter, "{report}");
+}
+
+#[test]
+fn bam_above_chunk_size_uses_mgcvs_row_sample() {
+    for n in [12000, 25000] {
+        check_lattice(
+            &format!("3d_gaussian_bam_freml_n{n}_lattice"),
+            gaussian_identity(),
+            0,
+            false,
+            GAUSSIAN,
+        );
+        check_lattice(
+            &format!("3d_nb_log_bam_freml_n{n}_lattice"),
+            negbin_log(1.0),
+            1,
+            false,
+            PIRLS,
+        );
+        check_lattice(
+            &format!("3d_scat_identity_weighted_bam_freml_n{n}_lattice"),
+            tdist_identity(5.0, 1.0),
+            2,
+            true,
+            PIRLS,
+        );
+    }
+}

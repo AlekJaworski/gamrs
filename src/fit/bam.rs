@@ -6,15 +6,16 @@
 //! performance iteration: refit the working model at each IRLS step, halve on
 //! the penalised deviance, and re-estimate θ between steps (`estimate.theta`).
 
-use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2};
+use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2, Axis};
 use ndarray_linalg::{Eigh, UPLO};
 
-use crate::design::{Additive, Centring, PreparedDesign};
+use crate::design::{Additive, Centring, PreparedDesign, TermSpec};
 use crate::error::{GamrsError, Result};
 use crate::family::bam::BamFamily;
 use crate::family::Family;
 use crate::inner::{CholeskySolver, DesignMatrix, LinearSolver};
 use crate::outer::fast_reml::FastRemlNewton;
+use crate::r_rng::RRng;
 use crate::score::fast_reml::FastRemlGaussianScore;
 use crate::stats::FitStatsSnapshot;
 use crate::traits::{Link, Loss, OuterFit, VarianceFn};
@@ -23,6 +24,8 @@ use super::driver::{LambdaInit, MgcvInit};
 use super::FittedGam;
 
 const MAX_IRLS: usize = 200;
+/// bam's default `chunk.size`: above it, bases are built from a row sample.
+const CHUNK_SIZE: usize = 10_000;
 const IRLS_EPSILON: f64 = 1e-7;
 
 /// Fit `design` the way `mgcv::bam(method = "fREML")` does.
@@ -40,7 +43,16 @@ where
     Family<L, K, V>: BamFamily,
 {
     super::check_lengths(x, y, prior_weights)?;
-    let prep = design.prepare_with(x, Centring::SweepDrop)?;
+    let w_view = prior_weights.as_ref().map(|w| w.view());
+    let prep = match setup_rows(design, x.view(), y.view(), w_view, CHUNK_SIZE) {
+        None => design.prepare_with(x, Centring::SweepDrop)?,
+        Some(rows) => {
+            let mut prep =
+                design.prepare_with(x.select(Axis(0), &rows).view(), Centring::SweepDrop)?;
+            prep.x_design = DesignMatrix::new(prep.predictor.design(x)?);
+            prep
+        }
+    };
     if prep.constraints.is_some() {
         return Err(GamrsError::InvalidParameter(
             "bam does not support shape-constrained terms".into(),
@@ -108,6 +120,101 @@ fn fit_gaussian_bam<S: LinearSolver>(
         shape_params: Array1::zeros(0),
         stats: Default::default(),
     })
+}
+
+/// One column of bam's model frame, as `mini.mf` sees it.
+enum MfColumn<'a> {
+    Numeric(ArrayView1<'a, f64>),
+    /// Integer-coded factor; levels in increasing code order.
+    Factor(ArrayView1<'a, f64>),
+}
+
+/// The model frame's columns: response, each variable the terms read (random
+/// effects as factors), then the prior weights.
+fn model_frame<'a>(
+    design: &Additive,
+    x: ArrayView2<'a, f64>,
+    y: ArrayView1<'a, f64>,
+    w: Option<ArrayView1<'a, f64>>,
+) -> Vec<MfColumn<'a>> {
+    let mut cols = vec![MfColumn::Numeric(y)];
+    let mut seen = Vec::new();
+    for t in &design.terms {
+        for c in t.cols() {
+            if seen.contains(&c) {
+                continue;
+            }
+            seen.push(c);
+            let factor = matches!(t, TermSpec::Re { col, .. } if *col == c);
+            cols.push(if factor {
+                MfColumn::Factor(x.index_axis_move(Axis(1), c))
+            } else {
+                MfColumn::Numeric(x.index_axis_move(Axis(1), c))
+            });
+        }
+    }
+    cols.extend(w.map(MfColumn::Numeric));
+    cols
+}
+
+/// mgcv's `mini.mf`: the rows bam builds its bases from when there are more
+/// than `chunk_size` of them, or `None` to use every row. A sample drawn under
+/// `set.seed(66)`, with its first rows overwritten by each numeric column's
+/// first minimum and maximum and one row per factor level.
+fn setup_rows<'a>(
+    design: &Additive,
+    x: ArrayView2<'a, f64>,
+    y: ArrayView1<'a, f64>,
+    w: Option<ArrayView1<'a, f64>>,
+    chunk_size: usize,
+) -> Option<Vec<usize>> {
+    mini_mf_rows(&model_frame(design, x, y, w), y.len(), chunk_size)
+}
+
+fn levels(f: ArrayView1<f64>) -> Vec<f64> {
+    let mut l: Vec<f64> = f.to_vec();
+    l.sort_by(|a, b| a.total_cmp(b));
+    l.dedup();
+    l
+}
+
+fn mini_mf_rows(cols: &[MfColumn], n: usize, chunk_size: usize) -> Option<Vec<usize>> {
+    let min_size: usize = cols
+        .iter()
+        .map(|c| match c {
+            MfColumn::Numeric(_) => 2,
+            MfColumn::Factor(f) => levels(*f).len(),
+        })
+        .sum();
+    let chunk_size = chunk_size.max(min_size);
+    if n <= chunk_size {
+        return None;
+    }
+    let mut rng = RRng::set_seed(66);
+    let mut rows = rng.sample(n, chunk_size);
+    let perm = rng.sample(n, n);
+    let mut k = 0;
+    let first = |v: ArrayView1<f64>, target: f64| v.iter().position(|&a| a == target).unwrap_or(0);
+    for c in cols {
+        match c {
+            MfColumn::Numeric(v) => {
+                let lo = v.iter().cloned().fold(f64::INFINITY, f64::min);
+                let hi = v.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                rows[k] = first(*v, lo);
+                rows[k + 1] = first(*v, hi);
+                k += 2;
+            }
+            MfColumn::Factor(f) => {
+                for level in levels(*f) {
+                    if let Some(&i) = perm.iter().find(|&&i| f[i] == level) {
+                        rows[k] = i;
+                        k += 1;
+                    }
+                }
+            }
+        }
+    }
+    Some(rows)
 }
 
 /// `var(y)` as R computes it (n − 1 denominator).
@@ -435,4 +542,52 @@ fn estimate_theta<F: BamFamily>(
         }
     }
     theta
+}
+
+#[cfg(test)]
+mod tests {
+    use ndarray::Array1;
+
+    use super::{mini_mf_rows, MfColumn};
+
+    #[derive(serde::Deserialize)]
+    struct MiniMf {
+        y: Vec<f64>,
+        x0: Vec<f64>,
+        g: Vec<f64>,
+        x1: Vec<f64>,
+        w: Vec<f64>,
+        chunk_size: usize,
+        x0_of_rows: Vec<f64>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct Fixture {
+        mini_mf: MiniMf,
+    }
+
+    #[test]
+    fn mini_mf_picks_mgcvs_rows() {
+        let fx: Fixture =
+            serde_json::from_str(include_str!("../../tests/fixtures/r_rng_and_mini_mf.json"))
+                .unwrap();
+        let m = fx.mini_mf;
+        let (y, x0, g, x1, w) = (
+            Array1::from(m.y),
+            Array1::from(m.x0),
+            Array1::from(m.g),
+            Array1::from(m.x1),
+            Array1::from(m.w),
+        );
+        let cols = [
+            MfColumn::Numeric(y.view()),
+            MfColumn::Numeric(x0.view()),
+            MfColumn::Factor(g.view()),
+            MfColumn::Numeric(x1.view()),
+            MfColumn::Numeric(w.view()),
+        ];
+        let rows = mini_mf_rows(&cols, y.len(), m.chunk_size).unwrap();
+        let got: Vec<f64> = rows.iter().map(|&i| x0[i]).collect();
+        assert_eq!(got, m.x0_of_rows);
+    }
 }

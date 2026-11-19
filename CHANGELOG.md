@@ -28,11 +28,17 @@ is locked. Versions correspond to the published PyPI wheels.
   - θ 4e-9;
   - REML 2e-12.
 
-  At n = 20,000, one thread, three k=10 smooths, it fits in 17/83/87 ms
-  (gaussian/nb/weighted scat). mgcv's bam takes 88/665/930 ms with
-  `chunk.size = n`; `method="REML"` takes 24/536/514 ms. Above 10,000 rows
-  bam builds its bases from a 10,000-row sample unless `chunk.size` is
-  raised; gamrs always uses every row.
+  Above 10,000 rows, bam builds its bases from a sample of 10,000 rows. The
+  sample is drawn with R's own random number generator under seed 66, plus
+  rows that are always included (each column's extremes and one row per
+  factor level). gamrs reproduces that draw exactly, so `method="bam"`
+  matches default `bam()` at any n: at n = 12,000 and 25,000, fitted values
+  agree to 7e-8 or better (2e-12 for nb) and λ to 5e-7 or better. The
+  sampling applies only under `method="bam"`.
+
+  At n = 20,000, one thread, three k=10 smooths, it is 5–7× faster than
+  default mgcv `bam()` (gaussian, nb, weighted scat) and about 6× faster than
+  `method="REML"` on nb and scat.
 
   Tensor terms raise an error for now. `method="REML"` and `"fREML"` are
   unchanged. Rust: `gamrs::fit_bam`, `family::bam::BamFamily`,

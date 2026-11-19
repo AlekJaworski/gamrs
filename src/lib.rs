@@ -51,6 +51,7 @@ pub mod gamlss;
 pub mod inner;
 pub mod outer;
 pub mod profile;
+pub(crate) mod r_rng;
 pub mod score;
 pub mod special;
 pub mod stats;
