@@ -399,11 +399,12 @@ where
         // version for the σ²-grad denominator (mgcv convention).
         let tr_hinv_xtwx = (inner.p as f64) - tr_hinv_s_lambda_total;
 
+        let lazy_tk_kkt = self.inner.lazy_tk_kkt_inputs(inner, theta, &self.s_blocks);
         let Some(ValueParts {
             reml,
             sigma2: score_sigma2,
             log_det_s,
-        }) = self.value_parts(theta, inner, bsb_total, tr_hinv_xtwx)?
+        }) = self.value_parts(theta, inner, bsb_total, tr_hinv_xtwx, lazy_tk_kkt.as_ref())?
         else {
             // Unphysical probe — sentinel score, zero grad, and a benign
             // HessInputs that makes `hess_analytic` bail to FD.
@@ -437,7 +438,6 @@ where
         // (PIRLS supplies `eta1_per_term[k]`). The trace contribution also
         // switches to the per-term Newton-A trace so the gradient stays
         // internally consistent (uses one A everywhere).
-        let lazy_tk_kkt = self.inner.lazy_tk_kkt_inputs(inner, theta, &self.s_blocks);
         let has_tk_kkt = lazy_tk_kkt.is_some();
         // Fisher-weight families: `W` still depends on β through μ (Poisson:
         // W = μ), so `log|A|` has a β-chain even with a canonical link. The
@@ -533,7 +533,7 @@ where
                 .sum();
             bsb_total += theta[j].exp() * bsb_j;
         }
-        let parts = self.value_parts(theta, inner, bsb_total, inner.p as f64)?;
+        let parts = self.value_parts(theta, inner, bsb_total, inner.p as f64, None)?;
         Ok(parts.map_or(UNPHYSICAL_SCORE, |v| v.reml))
     }
 
@@ -545,6 +545,7 @@ where
         inner: &GaussianInnerFit<S>,
         bsb_total: f64,
         tr_hinv_xtwx: f64,
+        newton_tk: Option<&crate::inner::TkKKTInputs>,
     ) -> Result<Option<ValueParts>> {
         // `log|H|` — defaults to the backend's `log|A|` off the Fisher
         // factor; lazily compute the Newton-W `Σ log|λ_i|` via the
@@ -560,10 +561,14 @@ where
         // per `src/pirls/mod.rs::fit_pirls_cached` shape — the score
         // body computes them on demand here, once per probe.
         let log_det_h_fisher = inner.log_det_a();
-        let log_det_h = self
-            .inner
-            .lazy_newton_log_det_h(inner, theta, &self.s_blocks)
-            .unwrap_or(log_det_h_fisher);
+        // A gradient evaluation hands in the A_newton it factored; reuse its log-det.
+        let log_det_h = match newton_tk {
+            Some(tk) => tk.log_det,
+            None => self
+                .inner
+                .lazy_newton_log_det_h(inner, theta, &self.s_blocks),
+        }
+        .unwrap_or(log_det_h_fisher);
         let log_det_s = self.log_det_s.eval(theta)?;
         let log_det_lambda_s = log_det_s.value;
 

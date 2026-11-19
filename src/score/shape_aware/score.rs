@@ -336,6 +336,7 @@ where
         fit: &GaussianInnerFit<S>,
         family: &Family<L, K, V>,
         rho_slice: &[f64],
+        newton_tk: Option<&crate::inner::TkKKTInputs>,
     ) -> f64 {
         let n_terms = self.s_list.len();
         debug_assert_eq!(rho_slice.len(), n_terms);
@@ -386,7 +387,10 @@ where
         // One definition of the `log|H|` precedence — see
         // `pirls::score_log_det_h`. The gate keeps the fast path free: no
         // `log|H|` built when neither the observed nor the Newton path applies.
-        let log_det_h = if crate::inner::pirls::score_log_det_h_applies(&family.loss) {
+        // A gradient evaluation at this θ already factored A_newton; its log-det is this one.
+        let log_det_h = if let Some(tk) = newton_tk {
+            tk.log_det.unwrap_or_else(|| fit.log_det_a())
+        } else if crate::inner::pirls::score_log_det_h_applies(&family.loss) {
             let prior_w = self
                 .prior_weights
                 .clone()

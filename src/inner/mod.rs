@@ -246,6 +246,8 @@ pub struct TkKKTInputs {
     /// by `compute_tk_kkt_inputs` via the same eigendecomposition that
     /// builds `a1` / `lev_uw`.
     pub a_newton_inv: ndarray::Array2<f64>,
+    /// `log|A_newton|` off the same factorisation — the score's Newton `log|H|`.
+    pub log_det: Option<f64>,
     /// Unused now (kept for backward compat with the field name); will
     /// drop on v0.3 alongside any other `sign(w)` traces.
     pub working_weights_sign: ndarray::Array1<f64>,

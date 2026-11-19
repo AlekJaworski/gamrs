@@ -178,44 +178,62 @@ where
     V: VarianceFn + Clone,
 {
     use ndarray_linalg::{Cholesky, Eigh, UPLO};
-    let p = x_design.ncols();
-
-    let w_newton = newton_score_weights(family, y, mu, prior_w);
-    for &w in w_newton.iter() {
-        if !w.is_finite() {
-            return None;
-        }
+    let a_score = newton_a(family, y, mu, prior_w, x_design, s_list, s_blocks, rho)?;
+    if let Ok(l) = a_score.cholesky(UPLO::Lower) {
+        return cholesky_log_det(&l);
     }
+    let (eigs, _) = a_score.eigh(UPLO::Lower).ok()?;
+    eigen_log_det(&eigs)
+}
 
-    let mut a_score = x_design.split().xtwx(w_newton.view());
-    crate::design::add_penalties(&mut a_score, s_list, s_blocks, rho);
-    // Symmetrise defensively before factor.
+/// `X' diag(w_newton) X + λS`, symmetrised; `None` on a non-finite weight.
+#[allow(clippy::too_many_arguments)]
+fn newton_a<L, K, V>(
+    family: &Family<L, K, V>,
+    y: &Array1<f64>,
+    mu: &Array1<f64>,
+    prior_w: &Array1<f64>,
+    x_design: &super::DesignMatrix,
+    s_list: &[Array2<f64>],
+    s_blocks: &[crate::design::PenaltyBlock],
+    rho: &Array1<f64>,
+) -> Option<Array2<f64>>
+where
+    L: Loss + Clone,
+    K: Link + Clone,
+    V: VarianceFn + Clone,
+{
+    let p = x_design.ncols();
+    let w_newton = newton_score_weights(family, y, mu, prior_w);
+    if w_newton.iter().any(|w| !w.is_finite()) {
+        return None;
+    }
+    let mut a = x_design.split().xtwx(w_newton.view());
+    crate::design::add_penalties(&mut a, s_list, s_blocks, rho);
     for j in 0..p {
         for l in (j + 1)..p {
-            let avg = 0.5 * (a_score[[j, l]] + a_score[[l, j]]);
-            a_score[[j, l]] = avg;
-            a_score[[l, j]] = avg;
+            let avg = 0.5 * (a[[j, l]] + a[[l, j]]);
+            a[[j, l]] = avg;
+            a[[l, j]] = avg;
         }
     }
+    Some(a)
+}
 
-    // PSD-fast path: Cholesky. Cheap log|H| = 2·Σ log L_ii.
-    if let Ok(l) = a_score.cholesky(UPLO::Lower) {
-        let mut log_det = 0.0_f64;
-        for i in 0..p {
-            let lii = l[[i, i]];
-            if !lii.is_finite() || lii.abs() < 1e-300 {
-                return None;
-            }
-            log_det += lii.ln();
+/// `2·Σ log L_ii`; `None` on a vanishing or non-finite pivot.
+fn cholesky_log_det(l: &Array2<f64>) -> Option<f64> {
+    let mut log_det = 0.0_f64;
+    for &lii in l.diag() {
+        if !lii.is_finite() || lii.abs() < 1e-300 {
+            return None;
         }
-        return Some(2.0 * log_det);
+        log_det += lii.ln();
     }
+    Some(2.0 * log_det)
+}
 
-    // Indefinite-A fallback — eigh.
-    let eigs = match a_score.eigh(UPLO::Lower) {
-        Ok((eigs, _)) => eigs,
-        Err(_) => return None,
-    };
+/// `Σ log|λ_i|` of an indefinite spectrum; `None` on a zero or non-finite eigenvalue.
+fn eigen_log_det(eigs: &Array1<f64>) -> Option<f64> {
     let mut log_det = 0.0_f64;
     for e in eigs.iter() {
         let ae = e.abs();
@@ -252,29 +270,15 @@ where
 {
     use ndarray_linalg::{Cholesky, Eigh, UPLO};
     let n = x_design.nrows();
-    let p = x_design.ncols();
 
-    let w_newton = newton_score_weights(family, y, mu, prior_w);
-    if w_newton.iter().any(|w| !w.is_finite()) {
-        return None;
-    }
-
+    let a_newton = newton_a(family, y, mu, prior_w, x_design, s_list, s_blocks, rho)?;
     let xs = x_design.split();
-    let mut a_newton = xs.xtwx(w_newton.view());
-    crate::design::add_penalties(&mut a_newton, s_list, s_blocks, rho);
-    // Symmetrise.
-    for j in 0..p {
-        for l in (j + 1)..p {
-            let avg = 0.5 * (a_newton[[j, l]] + a_newton[[l, j]]);
-            a_newton[[j, l]] = avg;
-            a_newton[[l, j]] = avg;
-        }
-    }
 
     // A_newton⁻¹ — Cholesky-first (PSD common case for NegBin α>0); eigh
     // fallback for indefinite spectra (IG + log ~43% negative-α path).
-    let a_inv: Array2<f64> = if let Ok(l) = a_newton.cholesky(UPLO::Lower) {
-        CholeskySolver::invert(&l)
+    let (a_inv, log_det): (Array2<f64>, Option<f64>) = if let Ok(l) = a_newton.cholesky(UPLO::Lower)
+    {
+        (CholeskySolver::invert(&l), cholesky_log_det(&l))
     } else {
         let (eigs, eigvecs) = match a_newton.eigh(UPLO::Lower) {
             Ok(p) => p,
@@ -283,7 +287,7 @@ where
         if eigs.iter().any(|l| !l.is_finite() || l.abs() < 1e-300) {
             return None;
         }
-        (&eigvecs / &eigs).dot(&eigvecs.t())
+        ((&eigvecs / &eigs).dot(&eigvecs.t()), eigen_log_det(&eigs))
     };
 
     // a1[i]: v0.x `src/reml/mod.rs:2392-2415`. Newton branch uses
@@ -347,6 +351,7 @@ where
         eta1_per_term,
         tr_a_newton_inv_s_per_term,
         a_newton_inv: a_inv,
+        log_det,
         working_weights_sign: sign_w,
     })
 }

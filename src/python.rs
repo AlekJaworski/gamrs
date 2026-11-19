@@ -331,6 +331,7 @@ impl PyFittedGam {
             &bsb_per_term,
             &tr_hinv_s_per_term,
             1.0,
+            None,
         );
 
         let dict = pyo3::types::PyDict::new(py);

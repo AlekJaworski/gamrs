@@ -169,6 +169,7 @@ where
         bsb_per_term: &[f64],
         tr_hinv_s_per_term: &[f64],
         phi: f64,
+        newton_tk: Option<&crate::inner::TkKKTInputs>,
     ) -> Vec<f64> {
         let n_terms = self.s_list.len();
         let rank_adj = family.loss.score_rank_adjustment();
@@ -241,8 +242,8 @@ where
         // Level-1 route below is μ-coordinate ½·Dμμμ against the PIRLS factor:
         // right for identity-link scat/ocat, not for a log-link Newton score
         // (NegBin stopped with a true gradient of 0.01–0.04 against a 8e-5 bar).
-        if let Some(tk) = self.newton_tk(fit, family, rho_slice) {
-            return self.newton_rho_gradient(&tk, family, rho_slice, bsb_per_term, phi);
+        if let Some(tk) = newton_tk {
+            return self.newton_rho_gradient(tk, family, rho_slice, bsb_per_term, phi);
         }
         let ift_rows = family
             .loss
@@ -347,7 +348,7 @@ where
         let n_terms = self.s_list.len();
         let (fit, family) = self.fit_inner_at(theta)?;
         let rho_slice = theta.slice(ndarray::s![..n_terms]).to_vec();
-        Ok(self.score_value(&fit, &family, &rho_slice))
+        Ok(self.score_value(&fit, &family, &rho_slice, None))
     }
 
     /// **NoRefresh IFT line-search shortcut** — mgcv_rust port of
@@ -660,7 +661,8 @@ where
         let n_terms = self.s_list.len();
         let n_shape = family.n_shape_params();
         let rho_slice: Vec<f64> = theta.slice(ndarray::s![..n_terms]).to_vec();
-        let v = self.score_value(&fit, &family, &rho_slice);
+        let tk = self.newton_tk(&fit, &family, &rho_slice);
+        let v = self.score_value(&fit, &family, &rho_slice, tk.as_ref());
 
         // Per-term bsb_j, tr_hinv_s_j → envelope ∂REML/∂ρ_j.
         let mut bsb_per_term: Vec<f64> = Vec::with_capacity(n_terms);
@@ -669,9 +671,11 @@ where
         for j in 0..n_terms {
             let s_beta = self.s_list[j].dot(&fit.beta);
             let bsb_j: f64 = fit.beta.iter().zip(s_beta.iter()).map(|(a, b)| a * b).sum();
-            let tr_hinv_s_j = fit.trace_a_inv(self.s_list[j].view());
+            // The Newton gradient takes its traces from A_newton⁻¹; don't invert the PIRLS factor.
+            if tk.is_none() {
+                tr_hinv_s_per_term.push(fit.trace_a_inv(self.s_list[j].view()));
+            }
             bsb_per_term.push(bsb_j);
-            tr_hinv_s_per_term.push(tr_hinv_s_j);
             bsb_total += rho_slice[j].exp() * bsb_j;
         }
         let tr_hinv_xtwx = fit.p as f64;
@@ -694,6 +698,7 @@ where
             &bsb_per_term,
             &tr_hinv_s_per_term,
             phi,
+            tk.as_ref(),
         );
         let mut g = Array1::<f64>::zeros(n_terms + n_shape);
         for j in 0..n_terms {
@@ -735,7 +740,7 @@ where
                 // `reml_grad_ocat_theta_block_analytic` (ocat_joint.rs:123-236)
                 // generalised to any Loss that supplies Level-1 derivatives.
                 let shape_grad =
-                    self.analytic_shape_grad_via_ift(&fit, &family, &level1, n_terms, &rho_slice)?;
+                    self.analytic_shape_grad_via_ift(&fit, &family, &level1, n_terms, tk.as_ref())?;
                 debug_assert_eq!(shape_grad.len(), n_shape);
                 for k in 0..n_shape {
                     g[n_terms + k] = shape_grad[k];
@@ -772,7 +777,7 @@ where
         family: &Family<L, K, V>,
         level1: &Level1ShapeDerivs,
         _n_terms_for_layout: usize,
-        rho_slice: &[f64],
+        newton_tk: Option<&crate::inner::TkKKTInputs>,
     ) -> Result<Array1<f64>> {
         let n = fit.n;
         let p = fit.p;
@@ -795,28 +800,8 @@ where
         // builds Newton-A pieces at gradient time, not in PIRLS) — port
         // of v0.x's `compute_tk_kkt_inputs` moved out of `pirls::fit()`
         // so value-FD probes don't pay the O(p³) eigh cost.
-        let lazy_tk_kkt = if family.loss.use_newton_irls() {
-            let prior_w = self
-                .prior_weights
-                .clone()
-                .unwrap_or_else(|| Array1::ones(fit.n));
-            let rho_arr = Array1::from(rho_slice.to_vec());
-            crate::inner::pirls::lazy_tk_kkt_inputs(
-                family,
-                &self.y,
-                &fit.mu,
-                &fit.beta,
-                &prior_w,
-                &self.x_design,
-                &self.s_list,
-                self.penalty_blocks(),
-                &rho_arr,
-            )
-        } else {
-            None
-        };
         let newton_a_inv: Option<&ndarray::Array2<f64>> =
-            lazy_tk_kkt.as_ref().map(|t| &t.a_newton_inv);
+            newton_tk.map(|t| &t.a_newton_inv);
 
         // η-coord conversion of the μ-coord Level-1 derivatives. mgcv R's
         // `gam.fit4.r::dDeta()` (lines 5-78) converts via the link-Jacobian
@@ -907,7 +892,7 @@ where
         // `lev_uw` from the lazy TkKKTInputs above (`lazy_tk_kkt_inputs`
         // computed it as `x_iᵀ · A_newton⁻¹ · x_i` — port of v0.x
         // `compute_tk_kkt_inputs`).
-        let h_diag: Array1<f64> = if let Some(tk) = lazy_tk_kkt.as_ref() {
+        let h_diag: Array1<f64> = if let Some(tk) = newton_tk {
             tk.lev_uw.clone()
         } else {
             xs.leverage(fit.a_inv_ref().view())
@@ -989,7 +974,9 @@ where
         fit: &GaussianInnerFit<S>,
         family: &Family<L, K, V>,
     ) -> Result<(Array1<f64>, FrozenBetaCtx)> {
-        self.eval_grad_with_fit_cached(theta, fit, family, None)
+        let rho_slice: Vec<f64> = theta.iter().take(self.s_list.len()).copied().collect();
+        let tk = self.newton_tk(fit, family, &rho_slice);
+        self.eval_grad_with_fit_cached(theta, fit, family, None, tk.as_ref())
     }
 
     /// Cached variant of [`Self::eval_grad_with_fit`] — accepts a
@@ -1004,6 +991,7 @@ where
         fit: &GaussianInnerFit<S>,
         family: &Family<L, K, V>,
         level1_cached: Option<&Level1ShapeDerivs>,
+        newton_tk: Option<&crate::inner::TkKKTInputs>,
     ) -> Result<(Array1<f64>, FrozenBetaCtx)> {
         let n_terms = self.s_list.len();
         let n_shape = family.n_shape_params();
@@ -1041,6 +1029,7 @@ where
             &bsb_per_term,
             &tr_hinv_s_per_term,
             phi_center,
+            newton_tk,
         );
         let mut g = Array1::<f64>::zeros(n_terms + n_shape);
         for j in 0..n_terms {
@@ -1100,7 +1089,7 @@ where
                 };
                 if let Some(level1) = level1_ref {
                     let shape_grad =
-                        self.analytic_shape_grad_via_ift(fit, family, level1, n_terms, &rho_slice)?;
+                        self.analytic_shape_grad_via_ift(fit, family, level1, n_terms, newton_tk)?;
                     debug_assert_eq!(shape_grad.len(), n_shape);
                     for k in 0..n_shape {
                         g[n_terms + k] = shape_grad[k];
@@ -1193,6 +1182,7 @@ where
 
         // Reuse the same envelope ρ-gradient helper so the formula stays
         // in one place (commit message: DRY).
+        let tk = self.newton_tk(fit, &family, &rho_slice);
         let rho_grad = self.compute_rho_envelope_gradient(
             fit,
             &family,
@@ -1200,6 +1190,7 @@ where
             &ctx.bsb_per_term,
             &ctx.tr_hinv_s_per_term,
             phi,
+            tk.as_ref(),
         );
         let mut g = Array1::<f64>::zeros(n_terms + n_shape);
         for j in 0..n_terms {
@@ -1237,7 +1228,7 @@ where
                 // `compute_value_grad`'s IFT path but without re-running
                 // PIRLS at θ ± h.
                 let shape_grad =
-                    self.analytic_shape_grad_via_ift(fit, &family, &level1, n_terms, &rho_slice)?;
+                    self.analytic_shape_grad_via_ift(fit, &family, &level1, n_terms, tk.as_ref())?;
                 debug_assert_eq!(shape_grad.len(), n_shape);
                 for k in 0..n_shape {
                     g[n_terms + k] = shape_grad[k];

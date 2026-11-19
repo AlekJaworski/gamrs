@@ -79,9 +79,10 @@ where
         };
         let n_terms = self.s_list.len();
         let rho_slice: Vec<f64> = theta.slice(ndarray::s![..n_terms]).to_vec();
+        let newton_tk = self.newton_tk(&fit, &family, &rho_slice);
         let value = {
             let _t = crate::profile::scoped("score_value");
-            self.score_value(&fit, &family, &rho_slice)
+            self.score_value(&fit, &family, &rho_slice, newton_tk.as_ref())
         };
 
         // **Tier 1a cache**: compute Level-1 derivatives ONCE here and
@@ -103,7 +104,13 @@ where
 
         let (g_center, ctx) = {
             let _t = crate::profile::scoped("eval_grad_with_fit");
-            self.eval_grad_with_fit_cached(theta, &fit, &family, level1_cached.as_ref())?
+            self.eval_grad_with_fit_cached(
+                theta,
+                &fit,
+                &family,
+                level1_cached.as_ref(),
+                newton_tk.as_ref(),
+            )?
         };
 
         let has_analytic_shape_grad = n_shape == 0
@@ -241,12 +248,11 @@ where
         let (fit, family) = self.fit_inner_at(theta)?;
         let n_terms = self.s_list.len();
         let rho_slice: Vec<f64> = theta.slice(ndarray::s![..n_terms]).to_vec();
-        let value = self.score_value(&fit, &family, &rho_slice);
-
         // Newton-A inputs for `use_newton_irls()` families (NegBin here),
-        // shared by the gradient and the Hessian below: both differentiate
-        // the score's Newton `log|H|`, not the Fisher one.
+        // shared by the value, the gradient and the Hessian below: all three
+        // take the score's Newton `log|H|`, not the Fisher one.
         let lazy_tk = self.newton_tk(&fit, &family, &rho_slice);
+        let value = self.score_value(&fit, &family, &rho_slice, lazy_tk.as_ref());
 
         // ρ-gradient via the shared envelope helper. Per-term `bsb_j`
         // and `tr(H⁻¹·S_j)` are computed here; φ comes from the active
@@ -286,6 +292,7 @@ where
                     &bsb_per_term,
                     &tr_hinv_s_per_term,
                     phi,
+                    None,
                 )
             }
         };
