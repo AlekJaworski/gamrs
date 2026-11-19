@@ -5,6 +5,33 @@ based on [Keep a Changelog](https://keepachangelog.com/); this project is in
 beta (`0.x`), so minor bumps may carry breaking changes until the 1.0 surface
 is locked. Versions correspond to the published PyPI wheels.
 
+## [Unreleased]
+
+### Changed
+
+- **Gaussian and GLM `method="REML"` fits start the smoothing-parameter
+  search where mgcv's `gam()` does,** at `initial.sp` on `√w·X` with mgcv's
+  working weights (`prior·μ'(η)²/V(μ)` at the family's `mustart`), instead of
+  λ = 1. Covers gaussian, poisson, binomial, Gamma, inverse Gaussian and the
+  quasi families; scat already started there, and `method="fREML"`, negative
+  binomial, Tweedie, ocat and quantile fits are unchanged. Where the REML
+  criterion has more than one local optimum, the fit now lands on the one
+  mgcv finds. A 6,000-sale gaussian fit with nine smooths ended with lot size
+  at edf 4.03 against mgcv's 1.007, REML 0.33 worse, fitted values up to
+  $185,000 apart; it now has edf 1.004, REML 0.001 below mgcv's, fitted
+  values within $215. On eight synthetic fits with two optima (n = 1,500 and
+  3,000, nine smooths) the old start disagreed with mgcv by 0.3 to 5.1 REML
+  units; all eight now land on mgcv's optimum (within 0.006), including one
+  where mgcv's optimum is the worse of the two.
+- Elsewhere fits move at the optimiser's tolerance: on the Python test
+  battery (215 fits) fitted values move by at most 1.1e-4 relative, 37 fits by
+  more than 1e-6; against the mgcv parity fixtures 19 move closer and 17
+  further, the largest move 2.4e-6 → 5.7e-6 relative on a low-signal fit
+  whose λ sits on a near-flat ridge. Outer iterations over the
+  battery 1,462 → 1,380. Random effect plus four smooths, one thread: poisson
+  with 1,000 levels 4.9 → 4.3 s, inverse Gaussian 13.0 → 11.4 s, gaussian
+  with 1,000 levels 1.36 → 1.63 s (one extra Newton step).
+
 ## [0.17.5] — 2026-11-19
 
 ### Performance
