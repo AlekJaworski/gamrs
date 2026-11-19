@@ -526,21 +526,13 @@ pub(crate) fn compute_vcov<S: crate::inner::LinearSolver>(
     fit: &crate::inner::GaussianInnerFit<S>,
     scale: f64,
 ) -> ndarray::Array2<f64> {
-    if let Some((f, _)) = fit.fisher.as_ref() {
-        // The family's dispersion is ALREADY inside the Fisher weight — for
-        // scat, `W_f = (ν+1)/((ν+3)σ²)` — so `A_f⁻¹` is already ∝ σ² and the
-        // caller's `scale` must NOT be applied again. This is why mgcv reports
-        // `scale = 1` for scat: `Vp = rV·rVᵀ·scale` with the dispersion carried
-        // by `wf`, not by the multiplier.
-        //
-        // gamrs's scat driver reports `scale = σ²` (a deliberate divergence —
-        // users want it), and `fit_shape_aware` passes that same value here. So
-        // applying it would double-count: measured on
-        // `1d_scat_saturated_basis_n620_k5_cr`, σ² = 0.686405 and the reported
-        // vcov came out exactly `(1 − 0.686405) = 31.4%` away from mgcv's `Vp`.
-        return S::invert(f);
-    }
-    let mut v = fit.a_inv();
+    // `scale` is the dispersion NOT already inside the weights — mgcv's
+    // `Vp = rV·rVᵀ·scale`. scat's Fisher weight carries σ², so it passes 1
+    // (it reports σ² as its scale, but applying that here double-counts).
+    let mut v = match fit.fisher.as_ref() {
+        Some((f, _)) => S::invert(f),
+        None => fit.a_inv(),
+    };
     // Skip the multiplication if scale==1 — saves a full p² pass on the
     // fixed-φ families which are the majority.
     if (scale - 1.0).abs() > 0.0 {
@@ -624,7 +616,10 @@ pub(crate) fn compute_edf_per_term<S: crate::inner::LinearSolver>(
                 dim_j += 1;
             }
         }
-        let tr_hinv_s_j = fit.trace_a_inv(s_j.view());
+        let tr_hinv_s_j = match fit.fisher.as_ref() {
+            Some((f, _)) => S::trace_a_inv(f, s_j.view()),
+            None => fit.trace_a_inv(s_j.view()),
+        };
         edf_j[j] = (dim_j as f64) - lambda_j * tr_hinv_s_j;
     }
     edf_j

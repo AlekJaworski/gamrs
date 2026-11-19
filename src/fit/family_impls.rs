@@ -35,7 +35,7 @@ use crate::score::{
 use crate::traits::{CoordsKind, InnerSolver, Loss, OuterSolver};
 
 use super::canonical::FamilyFitWithSolver;
-use super::driver::{fit_pirls_envelope, fit_shape_aware, make_pearson_scale_fn};
+use super::driver::{fit_pirls_envelope, fit_shape_aware};
 use super::driver::{LambdaInit, MgcvInit, SmartInit};
 use super::gaussian::fit_gaussian_from_prep;
 use super::profile_shape::fit_shape_aware_profile;
@@ -72,7 +72,7 @@ impl<S: LinearSolver> FamilyFitWithSolver<LogitLink, BinomialVariance, S> for Be
     ) -> Result<FittedGam> {
         check_lengths(x, y, prior_weights)?;
         check_y_in_unit(y, "Bernoulli")?;
-        fit_pirls_envelope::<_, _, _, _, _, S, _>(
+        fit_pirls_envelope::<_, _, _, _, _, S>(
             prep,
             x,
             y,
@@ -80,7 +80,6 @@ impl<S: LinearSolver> FamilyFitWithSolver<LogitLink, BinomialVariance, S> for Be
             bernoulli_logit(),
             Bernoulli,
             FixedAtOneProfile,
-            |_, _| 1.0,
             LinkKind::Logit,
         )
     }
@@ -97,7 +96,7 @@ impl<S: LinearSolver> FamilyFitWithSolver<LogLink, PoissonVariance, S> for Poiss
     ) -> Result<FittedGam> {
         check_lengths(x, y, prior_weights)?;
         check_y_nonneg(y, "Poisson")?;
-        fit_pirls_envelope::<_, _, _, _, _, S, _>(
+        fit_pirls_envelope::<_, _, _, _, _, S>(
             prep,
             x,
             y,
@@ -105,7 +104,6 @@ impl<S: LinearSolver> FamilyFitWithSolver<LogLink, PoissonVariance, S> for Poiss
             poisson_log(),
             Poisson,
             FixedAtOneProfile,
-            |_, _| 1.0,
             LinkKind::Log,
         )
     }
@@ -122,15 +120,7 @@ impl<S: LinearSolver> FamilyFitWithSolver<LogLink, PoissonVariance, S> for Quasi
     ) -> Result<FittedGam> {
         check_lengths(x, y, prior_weights)?;
         check_y_nonneg(y, "QuasiPoisson")?;
-        let n = x.nrows();
-        let scale_fn = make_pearson_scale_fn::<S, _>(
-            y.to_owned(),
-            prior_weights.map(|w| w.to_owned()),
-            n,
-            1e-300,
-            |mu_i| mu_i,
-        );
-        fit_pirls_envelope::<_, _, _, _, _, S, _>(
+        fit_pirls_envelope::<_, _, _, _, _, S>(
             prep,
             x,
             y,
@@ -138,7 +128,6 @@ impl<S: LinearSolver> FamilyFitWithSolver<LogLink, PoissonVariance, S> for Quasi
             quasipoisson_log(),
             QuasiPoisson,
             MgcvTwoSigmaProfile,
-            scale_fn,
             LinkKind::Log,
         )
     }
@@ -155,18 +144,7 @@ impl<S: LinearSolver> FamilyFitWithSolver<LogitLink, BinomialVariance, S> for Qu
     ) -> Result<FittedGam> {
         check_lengths(x, y, prior_weights)?;
         check_y_in_unit(y, "QuasiBinomial")?;
-        let n = x.nrows();
-        let scale_fn = make_pearson_scale_fn::<S, _>(
-            y.to_owned(),
-            prior_weights.map(|w| w.to_owned()),
-            n,
-            1e-15,
-            |mu_i| {
-                let mu = mu_i.min(1.0 - 1e-15);
-                mu * (1.0 - mu)
-            },
-        );
-        fit_pirls_envelope::<_, _, _, _, _, S, _>(
+        fit_pirls_envelope::<_, _, _, _, _, S>(
             prep,
             x,
             y,
@@ -174,7 +152,6 @@ impl<S: LinearSolver> FamilyFitWithSolver<LogitLink, BinomialVariance, S> for Qu
             quasibinomial_logit(),
             QuasiBinomial,
             MgcvTwoSigmaProfile,
-            scale_fn,
             LinkKind::Logit,
         )
     }
@@ -191,15 +168,7 @@ impl<S: LinearSolver> FamilyFitWithSolver<LogLink, GammaVariance, S> for Gamma {
     ) -> Result<FittedGam> {
         check_lengths(x, y, prior_weights)?;
         check_y_positive(y, "Gamma")?;
-        let n = x.nrows();
-        let scale_fn = make_pearson_scale_fn::<S, _>(
-            y.to_owned(),
-            prior_weights.map(|w| w.to_owned()),
-            n,
-            1e-300,
-            |mu_i| mu_i * mu_i,
-        );
-        fit_pirls_envelope::<_, _, _, _, _, S, _>(
+        fit_pirls_envelope::<_, _, _, _, _, S>(
             prep,
             x,
             y,
@@ -207,7 +176,6 @@ impl<S: LinearSolver> FamilyFitWithSolver<LogLink, GammaVariance, S> for Gamma {
             gamma_log(),
             Gamma,
             MgcvTwoSigmaProfile,
-            scale_fn,
             LinkKind::Log,
         )
     }
@@ -227,15 +195,7 @@ impl<S: LinearSolver> FamilyFitWithSolver<InverseLink, GammaVariance, S> for Gam
     ) -> Result<FittedGam> {
         check_lengths(x, y, prior_weights)?;
         check_y_positive(y, "Gamma")?;
-        let n = x.nrows();
-        let scale_fn = make_pearson_scale_fn::<S, _>(
-            y.to_owned(),
-            prior_weights.map(|w| w.to_owned()),
-            n,
-            1e-300,
-            |mu_i| mu_i * mu_i,
-        );
-        fit_pirls_envelope::<_, _, _, _, _, S, _>(
+        fit_pirls_envelope::<_, _, _, _, _, S>(
             prep,
             x,
             y,
@@ -243,7 +203,6 @@ impl<S: LinearSolver> FamilyFitWithSolver<InverseLink, GammaVariance, S> for Gam
             gamma_inverse(),
             Gamma,
             MgcvTwoSigmaProfile,
-            scale_fn,
             LinkKind::Inverse,
         )
     }
@@ -260,15 +219,7 @@ impl<S: LinearSolver> FamilyFitWithSolver<LogLink, InverseGaussianVariance, S> f
     ) -> Result<FittedGam> {
         check_lengths(x, y, prior_weights)?;
         check_y_positive(y, "InverseGaussian")?;
-        let n = x.nrows();
-        let scale_fn = make_pearson_scale_fn::<S, _>(
-            y.to_owned(),
-            prior_weights.map(|w| w.to_owned()),
-            n,
-            1e-300,
-            |mu_i| mu_i * mu_i * mu_i,
-        );
-        fit_pirls_envelope::<_, _, _, _, _, S, _>(
+        fit_pirls_envelope::<_, _, _, _, _, S>(
             prep,
             x,
             y,
@@ -276,7 +227,6 @@ impl<S: LinearSolver> FamilyFitWithSolver<LogLink, InverseGaussianVariance, S> f
             inverse_gaussian_log(),
             InverseGaussian,
             MgcvTwoSigmaProfile,
-            scale_fn,
             LinkKind::Log,
         )
     }

@@ -17,6 +17,29 @@ is locked. Versions correspond to the published PyPI wheels.
   moved (by Σ log wᵢ / 2); it now matches mgcv's. Unweighted fits are
   unchanged.
 
+### Changed
+
+- **edf, scale and coefficient covariance now match mgcv for the
+  non-canonical link families and the estimated-scale families.** mgcv takes
+  edf and `Vp` from the Fisher weights even where the REML score uses Newton
+  weights, and reports the Fletcher scale estimate. gamrs took edf and `vcov`
+  from the Newton weights and reported the plain Pearson scale. At the same λ,
+  against mgcv (unweighted fixtures):
+  - Gamma (log): edf 6.7932 → 6.7700 (mgcv 6.7700); `vcov` 1.5% → 5e-16 off.
+  - Inverse Gaussian: edf 6.5475 → 6.4375 (mgcv 6.4375); scale 0.11896 →
+    0.11743 (mgcv 0.11743); `vcov` 9.5% → 6e-11 off.
+  - Negative binomial: edf 6.6633 → 6.6503 (mgcv 6.6503); `vcov` was multiplied
+    by θ (3.1× too large) and now matches mgcv to 1e-14. `scale_` still
+    reports θ.
+  - Tweedie: edf 5.2260 → 5.2330 (mgcv 5.2330); `vcov` 1.1% → 2e-11 off.
+  - quasipoisson: scale 0.9474 → 0.9514 (mgcv 0.9514); quasibinomial: scale
+    0.9766 → 1.0217 (mgcv 1.0217); `vcov` follows the scale.
+
+  Per-term `edf_` now comes from the same matrix as the total. That also fixes
+  scat, whose per-term edf disagreed with its own total: 7.7974 → 7.7850 on the
+  unweighted fixture (mgcv 7.7850). Smoothing parameters and fitted values are
+  unchanged.
+
 ## [0.17.3] — 2026-11-18
 
 ### Fixed

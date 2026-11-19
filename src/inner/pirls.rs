@@ -952,6 +952,18 @@ impl<L: Loss + Clone, K: Link + Clone, V: VarianceFn + Clone, S: LinearSolver>
             self.family
                 .loss
                 .expected_curvature_weights(self.y.view(), eta.view(), Some(prior_w.view()))
+                .or_else(|| {
+                    // Newton-weight families: mgcv's edf and Vp take the
+                    // Fisher weight `prior / (V g'²)` (gam.fit3's `wf`).
+                    self.family.loss.use_newton_irls().then(|| {
+                        Array1::from_shape_fn(n, |i| {
+                            let mu_i = self.family.link.inverse_link(eta[i]);
+                            let var_i = self.family.variance.variance(mu_i).max(1e-300);
+                            let g1 = self.family.link.d_link_dmu(mu_i);
+                            prior_w[i] / (var_i * g1 * g1)
+                        })
+                    })
+                })
                 .filter(|w| w.iter().all(|v| v.is_finite()))
                 .and_then(|w_f| {
                     let mut a = xs.xtwx(w_f.view());

@@ -200,42 +200,6 @@ impl LambdaInit for ExplicitInit {
     }
 }
 
-/// Build a Pearson-φ̂ `scale_fn` closure for `fit_pirls_envelope`. The
-/// returned closure captures `(y, prior_weights, n, mu_floor, V(μ))` and
-/// computes `Σ wᵢ·(yᵢ-μᵢ)² / V(μᵢ)  /  (n - edf)`. Returns `NaN` if
-/// `n - edf ≤ 0`. Eliminates the boilerplate copy-paste in the four
-/// profiled-φ GLM families (QuasiPoisson, QuasiBinomial, Gamma, IG).
-///
-/// Generic over `S: LinearSolver` so the closure signature lines up
-/// with the `S`-parameterised `GaussianInnerFit<S>` it consumes.
-pub(crate) fn make_pearson_scale_fn<'a, S, F>(
-    y_owned: Array1<f64>,
-    prior_owned: Option<Array1<f64>>,
-    n: usize,
-    mu_floor: f64,
-    variance_fn: F,
-) -> impl FnOnce(&GaussianInnerFit<S>, f64) -> f64 + 'a
-where
-    S: LinearSolver + 'a,
-    F: Fn(f64) -> f64 + 'a,
-{
-    move |fit, edf| {
-        let n_minus_edf = (n as f64) - edf;
-        if n_minus_edf <= 0.0 {
-            return f64::NAN;
-        }
-        let sum: f64 = (0..n)
-            .map(|i| {
-                let mu_i = fit.mu[i].max(mu_floor);
-                let r = y_owned[i] - mu_i;
-                let w_i = prior_owned.as_ref().map(|w| w[i]).unwrap_or(1.0);
-                w_i * r * r / variance_fn(mu_i)
-            })
-            .sum();
-        sum / n_minus_edf
-    }
-}
-
 /// Outer-Newton + final-fit + EDF for the "PIRLS + EnvelopeScore" stack.
 /// Used by every family that fits this pattern (Bernoulli, Poisson,
 /// QuasiPoisson, QuasiBinomial, Gamma, InverseGaussian). The 4 family-
@@ -248,7 +212,7 @@ where
 /// `S: LinearSolver` defaults to `CholeskySolver` — pass an explicit
 /// turbofish (`fit_pirls_envelope::<_, _, _, _, _, LuSolver, _>(...)`) to
 /// switch to LU.
-pub(crate) fn fit_pirls_envelope<L, K, V, M, P, S, SF>(
+pub(crate) fn fit_pirls_envelope<L, K, V, M, P, S>(
     prep: PreparedDesign,
     x: ArrayView2<f64>,
     y: ArrayView1<f64>,
@@ -256,7 +220,6 @@ pub(crate) fn fit_pirls_envelope<L, K, V, M, P, S, SF>(
     family: Family<L, K, V>,
     loss_marker: M,
     profile: P,
-    scale_fn: SF,
     link_kind: LinkKind,
 ) -> Result<FittedGam>
 where
@@ -266,7 +229,6 @@ where
     M: Loss,
     P: Profile<M>,
     S: LinearSolver,
-    SF: FnOnce(&GaussianInnerFit<S>, f64) -> f64,
 {
     let prior = prior_weights.map(|w| w.to_owned());
     let n = x.nrows();
@@ -280,7 +242,7 @@ where
         opts: PirlsOpts::default(),
         _solver: PhantomData,
     };
-    let score = EnvelopeScore::<M, PirlsInner<L, K, V, S>, P, S>::with_inner(
+    let mut score = EnvelopeScore::<M, PirlsInner<L, K, V, S>, P, S>::with_inner(
         pirls,
         loss_marker,
         profile,
@@ -323,6 +285,7 @@ where
     // The search ends on a converged inner fit at these λ, so the final fit starts from its β;
     // one that still stops at the cap carries on from where it stopped.
     let start = score.last_beta.borrow().clone();
+    score.inner.opts.want_fisher = true;
     let first: GaussianInnerFit<S> = score.inner.fit_warm(&outer.theta, start.as_ref())?;
     let final_fit = if first.converged {
         first
@@ -330,7 +293,11 @@ where
         score.inner.fit_warm(&outer.theta, Some(&first.beta))?
     };
     let edf = compute_edf(&prep.x_design, &final_fit.a_weights, &final_fit);
-    let scale = scale_fn(&final_fit, edf);
+    // mgcv reports `scale.est`, the Fletcher estimate, and its `Vp` uses it.
+    let scale = score
+        .loss
+        .fixed_dispersion()
+        .unwrap_or_else(|| fletcher_scale(&score.inner, &final_fit, edf));
     let vcov = compute_vcov(&final_fit, scale);
     let rho_hat = outer.theta.clone();
     let lambda_hat: Array1<f64> = rho_hat.iter().map(|&r| r.exp()).collect();
@@ -392,7 +359,7 @@ where
 /// callers go through this; the explicit-S version exists for the
 /// `gamrs::fit::<_, _, _, LuSolver>(...)` opt-in.
 #[allow(dead_code)]
-pub(crate) fn fit_pirls_envelope_cholesky<L, K, V, M, P, SF>(
+pub(crate) fn fit_pirls_envelope_cholesky<L, K, V, M, P>(
     prep: PreparedDesign,
     x: ArrayView2<f64>,
     y: ArrayView1<f64>,
@@ -400,7 +367,6 @@ pub(crate) fn fit_pirls_envelope_cholesky<L, K, V, M, P, SF>(
     family: Family<L, K, V>,
     loss_marker: M,
     profile: P,
-    scale_fn: SF,
     link_kind: LinkKind,
 ) -> Result<FittedGam>
 where
@@ -409,9 +375,8 @@ where
     V: VarianceFn + Clone,
     M: Loss,
     P: Profile<M>,
-    SF: FnOnce(&GaussianInnerFit<CholeskySolver>, f64) -> f64,
 {
-    fit_pirls_envelope::<L, K, V, M, P, CholeskySolver, SF>(
+    fit_pirls_envelope::<L, K, V, M, P, CholeskySolver>(
         prep,
         x,
         y,
@@ -419,7 +384,6 @@ where
         family,
         loss_marker,
         profile,
-        scale_fn,
         link_kind,
     )
 }
@@ -529,7 +493,10 @@ where
 
     let edf = compute_edf(&prep.x_design, &final_fit.a_weights, &final_fit);
     let scale = scale_fn(&family_final, &final_fit, &outer.theta);
-    let vcov = compute_vcov(&final_fit, scale);
+    let vcov = compute_vcov(
+        &final_fit,
+        family_final.loss.fixed_dispersion().unwrap_or(scale),
+    );
     let lambda_vec: Array1<f64> = rho_hat.iter().map(|&r| r.exp()).collect();
     let edf_per_term =
         compute_edf_per_term(&prep.s_list, &rho_hat, prep.x_design.ncols(), &final_fit);

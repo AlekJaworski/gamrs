@@ -144,7 +144,10 @@ where
 
     let edf = compute_edf(&prep.x_design, &final_fit.a_weights, &final_fit);
     let scale = scale_fn(&family_final, &final_fit, &outer.theta);
-    let vcov = compute_vcov(&final_fit, scale);
+    let vcov = compute_vcov(
+        &final_fit,
+        family_final.loss.fixed_dispersion().unwrap_or(scale),
+    );
     let lambda_vec: Array1<f64> = rho_hat.iter().map(|&r| r.exp()).collect();
     let edf_per_term =
         compute_edf_per_term(&prep.s_list, &rho_hat, prep.x_design.ncols(), &final_fit);
