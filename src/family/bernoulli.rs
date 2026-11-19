@@ -23,6 +23,19 @@ impl Loss for Bernoulli {
         y.iter().map(|&yi| (yi + 0.5) * 0.5).collect()
     }
 
+    fn mgcv_mustart(
+        &self,
+        y: ndarray::ArrayView1<f64>,
+        prior_weights: Option<ndarray::ArrayView1<f64>>,
+    ) -> ndarray::Array1<f64> {
+        match prior_weights {
+            Some(w) => ndarray::Zip::from(y)
+                .and(w)
+                .map_collect(|&yi, &wi| (wi * yi + 0.5) / (wi + 1.0)),
+            None => y.mapv(|yi| (yi + 0.5) * 0.5),
+        }
+    }
+
     /// `D_i = 2[y log(y/μ) + (1-y) log((1-y)/(1-μ))]` with the 0·log(0) = 0
     /// convention. mgcv's `binomial()$dev.resids`.
     fn deviance_per_obs(&self, y: f64, mu: f64) -> f64 {
