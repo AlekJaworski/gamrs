@@ -1,9 +1,9 @@
 //! Hessian paths for `ShapeAwareEnvelopeScore`.
 //!
 //! Entry point is `compute_value_grad_hess_analytical` — one PIRLS solve
-//! at θ produces (value, gradient, FrozenBetaCtx); the Hessian then
-//! comes from a central FD variant chosen by whether the family
-//! supplies `analytic_shape_score_gradient`.
+//! at θ produces (value, gradient, FrozenBetaCtx); the Hessian is then
+//! closed-form when the family supplies Level-1 and Level-2 derivatives,
+//! otherwise a central FD variant.
 //!
 //! `compute_value_grad_hess_rho_only` is the **profile-θ** variant: it
 //! returns just the M×M ρ block of the joint Hessian, the ρ-only gradient,
@@ -43,10 +43,12 @@ where
     /// θ_center → value + gradient. Hessian dispatch then matches the
     /// cheapest correct FD pattern given what the family supplies:
     ///
+    /// 0. **Level-1 + Level-2** derivatives (TDist, Tweedie): closed-form
+    ///    joint Hessian, no extra PIRLS (`hess_via_ift_level2`).
     /// 1. **Closed-form shape-grad** (`Loss::analytic_shape_score_gradient
-    ///    = Some`): Tweedie. Hessian via partial-freeze FD on the
-    ///    analytic gradient — log-λ row re-converges PIRLS (2·M solves);
-    ///    shape rows freeze β̂ (0 solves). Total: 1 + 2·M PIRLS.
+    ///    = Some`) without Level-2: partial-freeze FD on the analytic
+    ///    gradient — log-λ row re-converges PIRLS (2·M solves); shape rows
+    ///    freeze β̂ (0 solves). Total: 1 + 2·M PIRLS.
     /// 2. **Level-1 IFT shape-grad** (`level1_shape_derivatives = Some`):
     ///    NegBin, scat/TDist, Ocat. The shape gradient is analytic via
     ///    the IFT path (`analytic_shape_grad_via_ift` at gradient.rs:278),
@@ -129,43 +131,28 @@ where
         // surface has a near-flat coordinated-shift ridge that the IFT
         // path's sparse off-diagonal Hessian doesn't stabilise.
         let _t_hess = crate::profile::scoped("hess_dispatch");
+        let level2 = match level1_cached.as_ref() {
+            Some(_) if !family.loss.prefers_full_fd_hessian() => {
+                family.loss.level2_shape_derivatives(
+                    self.y.view(),
+                    fit.eta.view(),
+                    self.prior_weights.as_ref().map(|w| w.view()),
+                )
+            }
+            _ => None,
+        };
         let mut hess = if family.loss.prefers_full_fd_hessian() {
             self.hess_via_fd_on_value(theta)?
+        } else if let (Some(lv1), Some(lv2)) = (level1_cached.as_ref(), level2.as_ref()) {
+            // Closed-form joint Hessian (mgcv `gdi2`): TDist, Tweedie.
+            self.hess_via_ift_level2(theta, &fit, &family, lv1, lv2, n_shape, &ctx)?
         } else if has_analytic_shape_grad {
-            // Tweedie path: 2·M PIRLS + 0 shape solves.
+            // 2·M PIRLS + 0 shape solves.
             self.hess_via_fd_frozen_beta(theta, &fit, &ctx)?
         } else if has_ift_shape_grad {
-            // NegBin / scat / Ocat path. Two sub-paths:
-            //
-            //   (i)  **Full Level-2 analytic** when the family supplies
-            //        `level2_shape_derivatives` AND `level1_shape_derivatives`
-            //        — closed-form joint (M+n_shape)×(M+n_shape) Hessian
-            //        via mgcv R's `gdi2` chain rule (port of mgcv_rust
-            //        `tdist_gdi2_native`). Zero PIRLS, zero FD on shape
-            //        axes. Requires the family's PIRLS to use the same A
-            //        the Level-1 / Level-2 derivatives were derived under
-            //        (`W = ½·D_μμ`) — TDist routes through
-            //        `irls_observed_pair` to deliver that.
-            //
-            //   (ii) **Analytic-ρ + frozen-β IFT shape FD** when only
-            //        Level-1 is supplied (NegBin / Ocat today). Same cost
-            //        profile as (i) but the shape rows come from central
-            //        FD of the analytic IFT gradient at frozen β̂
-            //        (introduced in v0.11).
-            // Level-1 is the cached one from above (Tier 1a). Level-2
-            // is family-only and computed fresh here — it's only needed
-            // for the Hessian path and isn't shared.
-            let level2 = family.loss.level2_shape_derivatives(
-                self.y.view(),
-                fit.eta.view(),
-                self.prior_weights.as_ref().map(|w| w.view()),
-            );
-            match (level1_cached.as_ref(), level2) {
-                (Some(lv1), Some(lv2)) => {
-                    self.hess_via_ift_level2(theta, &fit, &family, lv1, &lv2, n_shape)?
-                }
-                _ => self.hess_via_ift_analytic(theta, &fit, &family, n_shape, &ctx)?,
-            }
+            // Analytic ρ block + frozen-β FD of the IFT gradient along the
+            // shape axes (NegBin / Ocat: Level-1 only).
+            self.hess_via_ift_analytic(theta, &fit, &family, n_shape, &ctx)?
         } else {
             // Safety-net path: direct FD on REML value.
             self.hess_via_fd_on_value(theta)?
@@ -815,6 +802,7 @@ where
         lv1: &crate::traits::Level1ShapeDerivs,
         lv2: &crate::traits::Level2ShapeDerivs,
         n_shape: usize,
+        ctx: &FrozenBetaCtx,
     ) -> Result<Array2<f64>> {
         use ndarray::s;
         let n_terms = self.s_list.len();
@@ -829,6 +817,7 @@ where
         // `analytic_shape_grad_via_ift` — keeps grad/Hess consistent.
         let rho_slice: Vec<f64> = theta.slice(s![..n_terms]).to_vec();
         let lambda: Vec<f64> = rho_slice.iter().map(|&r| r.exp()).collect();
+        let phi = ctx.phi_center;
         let use_newton = family.loss.use_newton_irls();
         let lazy_tk = if use_newton {
             let prior_w = self
@@ -856,63 +845,65 @@ where
             fit.a_inv()
         };
 
-        // ---- η-coord (vs μ-coord) Level-1 derivs. For identity link the
-        // factors collapse to identity. We mirror `analytic_shape_grad_via_ift`
-        // verbatim so the same A and the same Level-1 transformations are
-        // shared between grad and Hessian.
-        // mapv-style construction (one trait-method call per row, no
-        // index-into-Array1 bounds-check chain). Compiler specialises
-        // for identity link → constants → autovectorisation friendly.
-        let ig1: Array1<f64> = fit.mu.mapv(|mu_i| {
-            let gp = self.family_base.link.d_link_dmu(mu_i);
-            if gp.abs() < 1e-300 {
-                0.0
-            } else {
-                1.0 / gp
-            }
-        });
-        let g2g: Array1<f64> = fit.mu.mapv(|mu_i| {
-            let gp = self.family_base.link.d_link_dmu(mu_i);
-            if gp.abs() < 1e-300 {
-                0.0
-            } else {
-                self.family_base.link.d2_link_dmu(mu_i) / (gp * gp)
-            }
-        });
-        let g3g: Array1<f64> = fit.mu.mapv(|mu_i| {
-            let gp = self.family_base.link.d_link_dmu(mu_i);
-            if gp.abs() < 1e-300 {
-                0.0
-            } else {
-                self.family_base.link.d3_link_dmu(mu_i) / (gp * gp * gp)
-            }
-        });
+        // ---- Level-1/2 arrays to η coordinates (mgcv `gam.fit4` `dDeta`):
+        // Faà di Bruno with μ_η, μ_ηη, … from the link. Identity: unchanged.
+        let link = &self.family_base.link;
         let prior_w_view = self.prior_weights.as_ref().map(|w| w.view());
-        let dmu_arr: Array1<f64> = Array1::from_shape_fn(n, |i| {
-            let wt_i = prior_w_view.as_ref().map(|w| w[i]).unwrap_or(1.0);
-            wt_i * family.loss.d_loss_dmu(self.y[i], fit.mu[i])
-        });
-        let dmu2_arr: Array1<f64> = Array1::from_shape_fn(n, |i| {
-            let wt_i = prior_w_view.as_ref().map(|w| w[i]).unwrap_or(1.0);
-            wt_i * family.loss.d2_loss_dmu(self.y[i], fit.mu[i])
-        });
-
-        // Identity-link short-circuits — the full η-coord chain reduces to
-        // μ-coord here. Non-identity links would need the `Detath` /
-        // `Deta2th` / `Deta3` / `Deta4` cascade (mgcv R `gam.fit4.r:47-78`);
-        // gamrs's `analytic_shape_grad_via_ift` builds them but TDist
-        // (the only Level-2 family today) is identity-link, so we don't
-        // gate on it yet. When NegBin / Ocat Level-2 ports land, swap the
-        // identity-only forms below for the general η-chain.
-        let is_identity = ig1.iter().all(|&x| (x - 1.0).abs() < 1e-12)
-            && g2g.iter().all(|&x| x.abs() < 1e-12)
-            && g3g.iter().all(|&x| x.abs() < 1e-12);
-        debug_assert!(
-            is_identity,
-            "hess_via_ift_level2 currently assumes identity link \
-             (TDist is the only Level-2 family — wire η-coord chain when \
-             NegBin / Ocat land)."
-        );
+        let mut m = Array2::<f64>::zeros((n, 4));
+        for i in 0..n {
+            let mu_i = fit.mu[i];
+            let g1 = link.d_link_dmu(mu_i);
+            let (g2, g3, g4) = (
+                link.d2_link_dmu(mu_i),
+                link.d3_link_dmu(mu_i),
+                link.d4_link_dmu(mu_i),
+            );
+            m[[i, 0]] = 1.0 / g1;
+            m[[i, 1]] = -g2 / g1.powi(3);
+            m[[i, 2]] = (3.0 * g2 * g2 - g1 * g3) / g1.powi(5);
+            m[[i, 3]] = (10.0 * g1 * g2 * g3 - g1 * g1 * g4 - 15.0 * g2.powi(3)) / g1.powi(7);
+        }
+        let col = |k: usize| m.column(k).to_owned();
+        let (m1, m2, m3, m4) = (col(0), col(1), col(2), col(3));
+        let wt = |i: usize| prior_w_view.as_ref().map_or(1.0, |w| w[i]);
+        let d1 = Array1::from_shape_fn(n, |i| wt(i) * family.loss.d_loss_dmu(self.y[i], fit.mu[i]));
+        let d2 =
+            Array1::from_shape_fn(n, |i| wt(i) * family.loss.d2_loss_dmu(self.y[i], fit.mu[i]));
+        let dmu_arr = &d1 * &m1;
+        let dmu2_arr = &d2 * &m1 * &m1 + &d1 * &m2;
+        let eta3 = |d3: ndarray::ArrayView1<f64>,
+                    d2: ndarray::ArrayView1<f64>,
+                    d1: ndarray::ArrayView1<f64>| {
+            &d3 * &m1 * &m1 * &m1 + 3.0 * &d2 * &m1 * &m2 + &d1 * &m3
+        };
+        let eta_cols = |a: &Array2<f64>, f: &dyn Fn(usize, usize) -> f64| {
+            Array2::from_shape_fn(a.dim(), |(i, k)| f(i, k))
+        };
+        let lv1_eta = crate::traits::Level1ShapeDerivs {
+            dmu3: eta3(lv1.dmu3.view(), d2.view(), d1.view()),
+            dth: lv1.dth.clone(),
+            dmuth: eta_cols(&lv1.dmuth, &|i, k| lv1.dmuth[[i, k]] * m1[i]),
+            dmu2th: eta_cols(&lv1.dmu2th, &|i, k| {
+                lv1.dmu2th[[i, k]] * m1[i] * m1[i] + lv1.dmuth[[i, k]] * m2[i]
+            }),
+        };
+        let lv2_eta = crate::traits::Level2ShapeDerivs {
+            dmu4: &lv2.dmu4 * &m1 * &m1 * &m1 * &m1
+                + 6.0 * &lv1.dmu3 * &m1 * &m1 * &m2
+                + &d2 * &(3.0 * &m2 * &m2 + 4.0 * &m1 * &m3)
+                + &d1 * &m4,
+            dmu3_th: eta_cols(&lv2.dmu3_th, &|i, k| {
+                lv2.dmu3_th[[i, k]] * m1[i].powi(3)
+                    + 3.0 * lv1.dmu2th[[i, k]] * m1[i] * m2[i]
+                    + lv1.dmuth[[i, k]] * m3[i]
+            }),
+            dth2: lv2.dth2.clone(),
+            dmu_th2: eta_cols(&lv2.dmu_th2, &|i, k| lv2.dmu_th2[[i, k]] * m1[i]),
+            dmu2_th2: eta_cols(&lv2.dmu2_th2, &|i, k| {
+                lv2.dmu2_th2[[i, k]] * m1[i] * m1[i] + lv2.dmu_th2[[i, k]] * m2[i]
+            }),
+        };
+        let (lv1, lv2) = (&lv1_eta, &lv2_eta);
 
         // ---- b1[k]:  k=0..M-1 → ρ_k axis,  k=M..M+n_shape-1 → shape (k-M).
         // Layout: b1 is (p × ntot), column k is ∂β/∂axis_k.
@@ -1056,12 +1047,12 @@ where
                 let mut rhs_w: Array1<f64> = (-1.0 * dmu3) * eta1_i * eta1_k;
                 if k >= n_terms {
                     let kk = k - n_terms;
-                    let dmuth_k = lv1.dmuth.column(kk);
+                    let dmuth_k = lv1.dmu2th.column(kk);
                     rhs_w = rhs_w - &dmuth_k * &eta1_i;
                 }
                 if i >= n_terms {
                     let ii = i - n_terms;
-                    let dmuth_i = lv1.dmuth.column(ii);
+                    let dmuth_i = lv1.dmu2th.column(ii);
                     rhs_w = rhs_w - &dmuth_i * &eta1_k;
                 }
                 // rhs (length p) = X' · rhs_w
@@ -1208,16 +1199,31 @@ where
                 let ldet2_ik = tr_term1 - tr_term2;
 
                 // ── Assemble Hessian entry ────────────────────────────
-                let v = 0.5 * (d2_ik + p2_ik) - ls2_full[[i, k]] + 0.5 * ldet2_ik;
+                let v = (d2_ik + p2_ik) / (2.0 * phi) - ls2_full[[i, k]] + 0.5 * ldet2_ik;
                 hess[[i, k]] = v;
                 hess[[k, i]] = v;
             }
         }
 
-        // Suppress unused-warning for `sum_dls` — kept here so the
-        // signature is parallel to the gradient path (future Level-2
-        // families may need a Hessian-side adjustment that references it).
         let _ = sum_dls;
+
+        // `Dp/(2φ)` with φ = e^τ: `∂²/∂τ² = Dp/(2φ)`, `∂²/∂τ∂x = −∂_x Dp/(2φ)`.
+        if let Some(a) = family.loss.log_scale_shape_axis() {
+            let t = n_terms + a;
+            let dp_x = |x: usize| -> f64 {
+                if x < n_terms {
+                    lambda[x] * ctx.bsb_per_term[x]
+                } else {
+                    lv1.dth.column(x - n_terms).sum()
+                }
+            };
+            hess[[t, t]] += (ctx.deviance + ctx.bsb_total) / (2.0 * phi);
+            for x in (0..ntot).filter(|&x| x != t) {
+                let v = -dp_x(x) / (2.0 * phi);
+                hess[[t, x]] += v;
+                hess[[x, t]] += v;
+            }
+        }
 
         Ok(hess)
     }

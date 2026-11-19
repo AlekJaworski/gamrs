@@ -219,20 +219,20 @@ pub trait Loss {
         false
     }
 
-    /// Whether the analytic envelope Hessian may drive the outer Newton when
-    /// the gradient carries the Newton-weight β-chain (Tk·KK'). Default
-    /// `false`: that chain is not differentiated analytically, so the outer
-    /// loop takes an FD Hessian of the exact gradient. The stopping point is
-    /// set by the gradient either way; the Hessian only shapes the steps.
-    ///
-    /// Gamma opts in. Measured on three 2-smooth fits (CPU time, single
-    /// thread): log link 42 ms analytic vs 140 ms FD, inverse link 73 vs
-    /// 230 ms, same iteration counts and the same distance to mgcv.
-    /// InverseGaussian does not: its analytic Hessian carries a Fisher-W
-    /// chain that does not pair with the Newton-W gradient, and it took 6-7
-    /// outer iterations instead of 4-5.
-    fn analytic_hessian_with_newton_chain(&self) -> bool {
+    /// Drive the outer Newton with the envelope Hessian — no curvature from
+    /// the Newton weights' β-chain in `log|H|` — instead of the exact one.
+    /// Gamma opts in: on 20,000 rows with a random effect and four smooths
+    /// both take the same outer iterations, and the exact Hessian's extra
+    /// `X'diag(·)X` products made the fit 34% slower at 1,000 levels.
+    fn envelope_hessian_with_newton_chain(&self) -> bool {
         false
+    }
+
+    /// The shape axis that is `log φ` when the score scales the penalised
+    /// deviance by `1/φ` (Tweedie); its Level-1/2 columns are zero and the
+    /// analytic Hessian adds the `Dp/(2φ)` curvature along it.
+    fn log_scale_shape_axis(&self) -> Option<usize> {
+        None
     }
 
     /// Number of family-shape parameters this loss owns. Zero for
@@ -732,6 +732,11 @@ pub trait Link {
     fn d3_link_dmu(&self, _mu: f64) -> f64 {
         0.0
     }
+    /// `d⁴η/dμ⁴`. Default `0.0`. The exact outer Hessian of a Newton-weight
+    /// `log|H|` needs `∂²W/∂η²`, one order past `d3_link_dmu`.
+    fn d4_link_dmu(&self, _mu: f64) -> f64 {
+        0.0
+    }
     /// `True` when the link is the canonical link for the loss it's paired
     /// with — lets InnerSolver collapse Newton to Fisher. Default `false`
     /// (caller must opt in for each (Loss, Link) pair).
@@ -755,6 +760,10 @@ pub trait VarianceFn {
     /// v0.x `src/reml/mod.rs:2101` is `V''/V - (V'/V)² + g'''/g' -
     /// (g''/g')²`. For Inverse Gaussian (V=μ³): `V'' = 6μ`.
     fn d2_variance(&self, _mu: f64) -> f64 {
+        0.0
+    }
+    /// `d³V/dμ³`. Defaults to `0.0` (zero for every variance up to quadratic).
+    fn d3_variance(&self, _mu: f64) -> f64 {
         0.0
     }
     /// Mirror of `Loss::set_shape_params`. For TDist's `TVariance` the
@@ -858,6 +867,20 @@ pub trait InnerSolver {
         rho: &Array1<f64>,
         s_blocks: &[crate::design::PenaltyBlock],
     ) -> Option<crate::inner::TkKKTInputs> {
+        None
+    }
+
+    /// `∂²log|A_newton|/∂ρ∂ρ'` at the converged fit from the Newton inputs
+    /// `tk`, β̂ and the Newton weights moving with ρ. `None` where the inner
+    /// solver cannot supply it.
+    #[allow(unused_variables)]
+    fn newton_log_det_hessian(
+        &self,
+        fit: &Self::Fit,
+        rho: &Array1<f64>,
+        s_blocks: &[crate::design::PenaltyBlock],
+        tk: &crate::inner::TkKKTInputs,
+    ) -> Option<Array2<f64>> {
         None
     }
 

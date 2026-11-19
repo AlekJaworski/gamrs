@@ -98,6 +98,9 @@ impl VarianceFn for InverseGaussianVariance {
         // d²V/dμ² = 6μ
         6.0 * mu
     }
+    fn d3_variance(&self, _mu: f64) -> f64 {
+        6.0
+    }
 }
 
 /// Phase 8 convenience constructor — InverseGaussian + log link.

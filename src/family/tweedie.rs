@@ -177,6 +177,113 @@ impl Loss for Tweedie {
         Some(self.phi)
     }
 
+    fn log_scale_shape_axis(&self) -> Option<usize> {
+        Some(0)
+    }
+
+    /// The `log φ` column is zero: φ scales the deviance in the score, it is
+    /// not a parameter of `D`.
+    fn level1_shape_derivatives(
+        &self,
+        y: ndarray::ArrayView1<f64>,
+        eta: ndarray::ArrayView1<f64>,
+        prior_w: Option<ndarray::ArrayView1<f64>>,
+    ) -> Option<crate::traits::Level1ShapeDerivs> {
+        use ndarray::{Array1, Array2};
+        let (n, k) = (y.len(), self.n_shape_params());
+        let (dp1, _) = tweedie_dp_dtheta12(self.p);
+        let mut out = crate::traits::Level1ShapeDerivs {
+            dmu3: Array1::zeros(n),
+            dth: Array2::zeros((n, k)),
+            dmuth: Array2::zeros((n, k)),
+            dmu2th: Array2::zeros((n, k)),
+        };
+        for i in 0..n {
+            let w = prior_w.map_or(1.0, |w| w[i]);
+            let d = tweedie_deviance_derivs(y[i], eta[i].exp(), self.p);
+            out.dmu3[i] = w * d[3][0];
+            if self.profile_p {
+                out.dth[[i, 1]] = w * d[0][1] * dp1;
+                out.dmuth[[i, 1]] = w * d[1][1] * dp1;
+                out.dmu2th[[i, 1]] = w * d[2][1] * dp1;
+            }
+        }
+        Some(out)
+    }
+
+    fn level2_shape_derivatives(
+        &self,
+        y: ndarray::ArrayView1<f64>,
+        eta: ndarray::ArrayView1<f64>,
+        prior_w: Option<ndarray::ArrayView1<f64>>,
+    ) -> Option<crate::traits::Level2ShapeDerivs> {
+        use ndarray::{Array1, Array2};
+        let (n, k) = (y.len(), self.n_shape_params());
+        let pairs = k * (k + 1) / 2;
+        let (dp1, dp2) = tweedie_dp_dtheta12(self.p);
+        let mut out = crate::traits::Level2ShapeDerivs {
+            dmu4: Array1::zeros(n),
+            dmu3_th: Array2::zeros((n, k)),
+            dth2: Array2::zeros((n, pairs)),
+            dmu_th2: Array2::zeros((n, pairs)),
+            dmu2_th2: Array2::zeros((n, pairs)),
+        };
+        let pp = crate::traits::shape_pair_index(k - 1, k - 1, k);
+        for i in 0..n {
+            let w = prior_w.map_or(1.0, |w| w[i]);
+            let d = tweedie_deviance_derivs(y[i], eta[i].exp(), self.p);
+            out.dmu4[i] = w * d[4][0];
+            if self.profile_p {
+                let th2 = |a: usize| w * (d[a][2] * dp1 * dp1 + d[a][1] * dp2);
+                out.dmu3_th[[i, 1]] = w * d[3][1] * dp1;
+                out.dth2[[i, pp]] = th2(0);
+                out.dmu_th2[[i, pp]] = th2(1);
+                out.dmu2_th2[[i, pp]] = th2(2);
+            }
+        }
+        Some(out)
+    }
+
+    /// Packed `[ττ, τθ, θθ]` (`τ = log φ`, θ the p-transform), or `[ττ]` with
+    /// p fixed, of `Σ wᵢ·lsᵢ` with `ls = y^(2−p)/((1−p)(2−p)φ) − log y + log W`.
+    fn sum_saturated_log_lik_d2theta(
+        &self,
+        y: ndarray::ArrayView1<f64>,
+        _scale: f64,
+        prior_w: Option<ndarray::ArrayView1<f64>>,
+    ) -> Vec<f64> {
+        let (p, phi) = (self.p, self.phi.max(1e-12));
+        let ys: Vec<f64> = y.to_vec();
+        let ser = crate::special::tweedie_series_d2(&ys, phi, p);
+        let (s, q) = (p - 1.0, 2.0 - p);
+        let u = [
+            1.0 / s + 1.0 / q,
+            -1.0 / (s * s) + 1.0 / (q * q),
+            2.0 / (s * s * s) + 2.0 / (q * q * q),
+        ];
+        let (dp1, dp2) = tweedie_dp_dtheta12(p);
+        let (mut tt, mut tp, mut pp) = (0.0, 0.0, 0.0);
+        for (i, &yi) in ys.iter().enumerate() {
+            if yi <= 0.0 {
+                continue;
+            }
+            let w = prior_w.map_or(1.0, |w| w[i]);
+            let (l, yq) = (yi.ln(), yi.powf(q));
+            // l_base = T/φ with T = −y^q·u(p).
+            let t0 = -yq * u[0];
+            let t1 = yq * (l * u[0] - u[1]);
+            let t2 = -yq * (l * l * u[0] - 2.0 * l * u[1] + u[2]);
+            tt += w * (t0 / phi + ser.d2_rho2[i]);
+            tp += w * (-t1 / phi + ser.d2_rho_p[i]) * dp1;
+            pp += w * ((t2 / phi + ser.d2_p2[i]) * dp1 * dp1 + (t1 / phi + ser.d_p[i]) * dp2);
+        }
+        if self.profile_p {
+            vec![tt, tp, pp]
+        } else {
+            vec![tt]
+        }
+    }
+
     // NOTE on `score_rank_adjustment`: Tweedie INTENTIONALLY keeps the
     // default `0` rank convention, NOT the `-1` ocat uses. Tweedie multi-
     // smooth parity diagnostic 2026-05-28 confirmed:
@@ -412,6 +519,9 @@ impl VarianceFn for TweedieVariance {
     fn d2_variance(&self, mu: f64) -> f64 {
         self.p * (self.p - 1.0) * mu.max(1e-300).powf(self.p - 2.0)
     }
+    fn d3_variance(&self, mu: f64) -> f64 {
+        self.p * (self.p - 1.0) * (self.p - 2.0) * mu.max(1e-300).powf(self.p - 3.0)
+    }
     fn set_shape_params(&mut self, params: &[f64]) {
         if self.profile_p {
             debug_assert_eq!(
@@ -449,6 +559,71 @@ pub(crate) fn tweedie_p_from_theta(theta: f64) -> f64 {
 pub(crate) fn tweedie_theta_from_p(p: f64) -> f64 {
     let s = ((p - TWEEDIE_P_MIN) / (TWEEDIE_P_MAX - TWEEDIE_P_MIN)).clamp(1e-12, 1.0 - 1e-12);
     (s / (1.0 - s)).ln()
+}
+
+/// `(dp/dθ, d²p/dθ²)` at power `p`.
+fn tweedie_dp_dtheta12(p: f64) -> (f64, f64) {
+    let d1 = tweedie_dp_dtheta(p);
+    (
+        d1,
+        d1 * (TWEEDIE_P_MIN + TWEEDIE_P_MAX - 2.0 * p) / (TWEEDIE_P_MAX - TWEEDIE_P_MIN),
+    )
+}
+
+/// `d[k][l] = ∂ᵏ_μ ∂ˡ_p D(y, μ; p)` for `k ≤ 4`, `l ≤ 2`, from
+/// `D/2 = T(y; p) − y·H(1−p) + H(2−p)` with `H(c) = μ^c/c`: then
+/// `∂ᵏ_μ H = P_k(c)·μ^(c−k)`, `P_0 = 1/c`, `P_k = Π_{i<k}(c − i)`, and
+/// `∂_p = −∂_c` on both `H` terms.
+fn tweedie_deviance_derivs(y: f64, mu: f64, p: f64) -> [[f64; 3]; 5] {
+    let lm = mu.max(1e-300).ln();
+    // (P, P', P'') at c for k = 0..=4.
+    let polys = |c: f64| -> [[f64; 3]; 5] {
+        [
+            [1.0 / c, -1.0 / (c * c), 2.0 / (c * c * c)],
+            [1.0, 0.0, 0.0],
+            [c - 1.0, 1.0, 0.0],
+            [c * c - 3.0 * c + 2.0, 2.0 * c - 3.0, 2.0],
+            [
+                ((c - 6.0) * c + 11.0) * c - 6.0,
+                (3.0 * c - 12.0) * c + 11.0,
+                6.0 * c - 12.0,
+            ],
+        ]
+    };
+    // ∂ˡ_c [P_k(c)·μ^(c−k)], signed for ∂ˡ_p.
+    let term = |c: f64, k: usize, l: usize| -> f64 {
+        let pk = polys(c)[k];
+        let e = ((c - k as f64) * lm).exp();
+        let v = match l {
+            0 => pk[0],
+            1 => -(pk[1] + pk[0] * lm),
+            _ => pk[2] + 2.0 * pk[1] * lm + pk[0] * lm * lm,
+        };
+        v * e
+    };
+    let mut d = [[0.0; 3]; 5];
+    for (k, row) in d.iter_mut().enumerate() {
+        for (l, v) in row.iter_mut().enumerate() {
+            let mut e = term(2.0 - p, k, l);
+            if y > 0.0 {
+                e -= y * term(1.0 - p, k, l);
+            }
+            *v = 2.0 * e;
+        }
+    }
+    if y > 0.0 {
+        let (s, q) = (p - 1.0, 2.0 - p);
+        let (l, yq) = (y.ln(), y.powf(q));
+        let u = [
+            1.0 / s + 1.0 / q,
+            -1.0 / (s * s) + 1.0 / (q * q),
+            2.0 / (s * s * s) + 2.0 / (q * q * q),
+        ];
+        d[0][0] += 2.0 * (-yq * u[0]);
+        d[0][1] += 2.0 * yq * (l * u[0] - u[1]);
+        d[0][2] += 2.0 * (-yq * (l * l * u[0] - 2.0 * l * u[1] + u[2]));
+    }
+    d
 }
 
 /// `dp/dθ` at power `p`: `(p − a)(b − p) / (b − a)`.

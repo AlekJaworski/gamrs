@@ -88,11 +88,36 @@ pub fn trigamma(mut x: f64) -> f64 {
 /// Only `1 < p < 2` is supported (compound-Poisson-Gamma region).
 /// Returns zeros for y ≤ 0 (no series needed at the point mass at 0).
 pub fn tweedie_series(y: &[f64], phi: f64, p: f64) -> (Vec<f64>, Vec<f64>, Vec<f64>, Vec<f64>) {
+    let s = tweedie_series_impl(y, phi, p, false);
+    (s.log_w, s.d_rho, s.d2_rho2, s.d_p)
+}
+
+/// Per-observation `log W` and its derivatives in `ρ = log φ` and `p`.
+pub struct TweedieSeries {
+    pub log_w: Vec<f64>,
+    pub d_rho: Vec<f64>,
+    pub d2_rho2: Vec<f64>,
+    pub d_p: Vec<f64>,
+    /// Empty unless asked for.
+    pub d2_rho_p: Vec<f64>,
+    /// Empty unless asked for.
+    pub d2_p2: Vec<f64>,
+}
+
+/// [`tweedie_series`] plus `∂²log W/∂ρ∂p` and `∂²log W/∂p²`.
+pub fn tweedie_series_d2(y: &[f64], phi: f64, p: f64) -> TweedieSeries {
+    tweedie_series_impl(y, phi, p, true)
+}
+
+fn tweedie_series_impl(y: &[f64], phi: f64, p: f64, second: bool) -> TweedieSeries {
     let n = y.len();
     let mut log_w_out = vec![0.0f64; n];
     let mut dlog_w_drho_out = vec![0.0f64; n];
     let mut d2_log_w_drho2_out = vec![0.0f64; n];
     let mut dlog_w_dp_out = vec![0.0f64; n];
+    let n2 = if second { n } else { 0 };
+    let mut d2_rho_p_out = vec![0.0f64; n2];
+    let mut d2_p2_out = vec![0.0f64; n2];
 
     let onep = 1.0 - p;
     let onep2 = onep * onep; // (1-p)^2
@@ -106,6 +131,10 @@ pub fn tweedie_series(y: &[f64], phi: f64, p: f64) -> (Vec<f64>, Vec<f64>, Vec<f
     let w_base = alpha * log_pm1 + rho / onep - twop.ln();
     let wb1_base = -1.0 / onep; // multiply by j to get wb1_j
     let wp_base = (log_pm1 + rho) / onep2 - alpha / onep + 1.0 / twop;
+    let onep3 = onep2 * onep;
+    let wpp_base =
+        1.0 / ((p - 1.0) * onep2) + 2.0 * (log_pm1 + rho) / onep3 - 1.0 / onep3 - alpha / onep2
+            + 1.0 / (twop * twop);
 
     let log_eps = f64::EPSILON * f64::EPSILON; // ~5e-32
     let log_eps_ln = log_eps.ln();
@@ -126,12 +155,28 @@ pub fn tweedie_series(y: &[f64], phi: f64, p: f64) -> (Vec<f64>, Vec<f64>, Vec<f
     let j_cache_size = (j_max_obs + 64).max(64) as usize;
     let mut wj0 = vec![0.0_f64; j_cache_size + 1];
     let mut wp1_const = vec![0.0_f64; j_cache_size + 1];
+    let mut wpp_const = vec![0.0_f64; if second { j_cache_size + 1 } else { 0 }];
+    // ∂²log w_j/∂p², less its `−2j·log y/(1−p)³` row part.
+    let wpp_at_j = |jf: f64| -> f64 {
+        let a = -jf * alpha;
+        jf * wpp_base + jf * (-jf * trigamma(a) / (onep2 * onep2) + 2.0 * digamma(a) / onep3)
+    };
     for j in 1..=j_cache_size {
         let jf = j as f64;
         let neg_j_alpha = -jf * alpha;
         wj0[j] = jf * w_base - log_gamma(jf + 1.0) - log_gamma(neg_j_alpha);
         wp1_const[j] = jf * wp_base + (jf / onep2) * digamma(neg_j_alpha);
+        if second {
+            wpp_const[j] = wpp_at_j(jf);
+        }
     }
+    let wpp_const_at = |j: usize| -> f64 {
+        if j <= j_cache_size {
+            wpp_const[j]
+        } else {
+            wpp_at_j(j as f64)
+        }
+    };
 
     // Closures: fall back to direct evaluation past the cache.
     let wj0_at = |j: usize| -> f64 {
@@ -175,6 +220,8 @@ pub fn tweedie_series(y: &[f64], phi: f64, p: f64) -> (Vec<f64>, Vec<f64>, Vec<f
         let mut w1i = 0.0f64;
         let mut s2i = 0.0f64;
         let mut wdlogwdp = 0.0f64;
+        let (mut s_jp, mut s_p2, mut s_pp) = (0.0f64, 0.0f64, 0.0f64);
+        let logy3 = 2.0 * logy_i / onep3;
 
         // Upsweep from j_max upward.
         let mut j = wmax_j;
@@ -187,6 +234,11 @@ pub fn tweedie_series(y: &[f64], phi: f64, p: f64) -> (Vec<f64>, Vec<f64>, Vec<f
             s2i += wj_scaled * jf * jf;
             let wp1 = wp1_const_at(j) - jf * logy1p2_i;
             wdlogwdp += wj_scaled * wp1;
+            if second {
+                s_jp += wj_scaled * jf * wp1;
+                s_p2 += wj_scaled * wp1 * wp1;
+                s_pp += wj_scaled * (wpp_const_at(j) - jf * logy3);
+            }
             if wj < wmin {
                 break;
             }
@@ -209,6 +261,11 @@ pub fn tweedie_series(y: &[f64], phi: f64, p: f64) -> (Vec<f64>, Vec<f64>, Vec<f
                 s2i += wj_scaled * jf * jf;
                 let wp1 = wp1_const_at(ju) - jf * logy1p2_i;
                 wdlogwdp += wj_scaled * wp1;
+                if second {
+                    s_jp += wj_scaled * jf * wp1;
+                    s_p2 += wj_scaled * wp1 * wp1;
+                    s_pp += wj_scaled * (wpp_const_at(ju) - jf * logy3);
+                }
                 if wj < wmin {
                     break;
                 }
@@ -222,14 +279,23 @@ pub fn tweedie_series(y: &[f64], phi: f64, p: f64) -> (Vec<f64>, Vec<f64>, Vec<f
         let e_j_sq = s2i / wi;
         d2_log_w_drho2_out[i] = inv_onep2 * (e_j_sq - e_j * e_j);
         dlog_w_dp_out[i] = wdlogwdp / wi;
+        if second {
+            // E over the series weights: log W'' = E[ℓ''] + Var/Cov of ℓ'.
+            let e_jj = -w1i / wi * onep;
+            let e_p = wdlogwdp / wi;
+            d2_rho_p_out[i] = e_jj / onep2 + (s_jp / wi - e_jj * e_p) / onep;
+            d2_p2_out[i] = s_pp / wi + s_p2 / wi - e_p * e_p;
+        }
     }
 
-    (
-        log_w_out,
-        dlog_w_drho_out,
-        d2_log_w_drho2_out,
-        dlog_w_dp_out,
-    )
+    TweedieSeries {
+        log_w: log_w_out,
+        d_rho: dlog_w_drho_out,
+        d2_rho2: d2_log_w_drho2_out,
+        d_p: dlog_w_dp_out,
+        d2_rho_p: d2_rho_p_out,
+        d2_p2: d2_p2_out,
+    }
 }
 
 /// Tweedie saturated log-W per observation — `log W(y; φ, p)` summed over
@@ -359,6 +425,34 @@ mod tests {
                         dr[i],
                         fd,
                     );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tweedie_series_second_derivatives_match_fd() {
+        let ys = [0.3_f64, 1.2, 5.0, 12.5];
+        for &phi in &[0.5_f64, 1.0, 2.0] {
+            for &p in &[1.1_f64, 1.5, 1.9] {
+                // Five-point stencil: a narrow step amplifies the series' ~1e-9 noise.
+                let h = 1e-3;
+                let c = tweedie_series_d2(&ys, phi, p);
+                let at = |k: f64| tweedie_series_d2(&ys, phi, p + k * h);
+                let (m2, m1, p1, p2) = (at(-2.0), at(-1.0), at(1.0), at(2.0));
+                let fd = |f: &dyn Fn(&TweedieSeries) -> f64| {
+                    (f(&m2) - f(&p2) + 8.0 * (f(&p1) - f(&m1))) / (12.0 * h)
+                };
+                for i in 0..ys.len() {
+                    let fd_rp = fd(&|s| s.d_rho[i]);
+                    let fd_pp = fd(&|s| s.d_p[i]);
+                    for (got, fd) in [(c.d2_rho_p[i], fd_rp), (c.d2_p2[i], fd_pp)] {
+                        assert!(
+                            (got - fd).abs() / (fd.abs() + 1.0) < 1e-6,
+                            "y={} phi={phi} p={p}: analytic={got} fd={fd}",
+                            ys[i]
+                        );
+                    }
                 }
             }
         }

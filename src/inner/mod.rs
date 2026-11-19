@@ -225,6 +225,8 @@ pub struct TkKKTInputs {
     /// Newton-mode IFT weight derivative — mgcv `gdi.c:2556`. Uses
     /// `w_newton[i] = wf · α` (no Fisher fallback).
     pub a1: ndarray::Array1<f64>,
+    /// `∂²w_newton/∂η²`, prior weight included — for the exact outer Hessian.
+    pub a2: ndarray::Array1<f64>,
     /// Unweighted leverage `x_iᵀ A_newton⁻¹ x_i`.
     pub lev_uw: ndarray::Array1<f64>,
     /// Per-term `η₁_k = ∂η/∂ρ_k = -λ_k · X · A_newton⁻¹ · S_k · β` (each
