@@ -36,6 +36,8 @@ pub struct FastRemlGaussianScore {
     blocks: Vec<Range<usize>>,
     mp: usize,
     n: usize,
+    /// A known scale takes `log φ` out of θ.
+    known_scale: Option<f64>,
 }
 
 /// The fit at one θ, in the original coefficient basis.
@@ -121,7 +123,14 @@ impl FastRemlGaussianScore {
             blocks,
             mp,
             n,
+            known_scale: None,
         })
+    }
+
+    /// Hold φ fixed (mgcv's `phi.fixed`): θ is then `ρ` alone.
+    pub fn with_known_scale(mut self, phi: Option<f64>) -> Self {
+        self.known_scale = phi;
+        self
     }
 
     fn solve(&self, rho: ArrayView1<f64>) -> Result<Solve> {
@@ -153,6 +162,23 @@ impl FastRemlGaussianScore {
             log_det_h,
             rss,
         })
+    }
+
+    /// `Sl.fit`'s `reml.pen`: the REML terms other than the fit to the
+    /// working data, which `bam` adds to the family's AIC/2 to report REML.
+    pub fn reml_penalty(&self, rho: ArrayView1<f64>, phi: f64) -> Result<f64> {
+        let sol = self.solve(rho)?;
+        let mut bsb = 0.0;
+        let mut rank_rho = 0.0;
+        for (range, &r) in self.ranges.iter().zip(rho.iter()) {
+            bsb += r.exp() * sol.beta.slice(s![range.clone()]).mapv(|b| b * b).sum();
+            rank_rho += range.len() as f64 * r;
+        }
+        let mp = self.mp as f64;
+        Ok(
+            (bsb / phi - mp * (2.0 * std::f64::consts::PI * phi).ln() + sol.log_det_h - rank_rho)
+                / 2.0,
+        )
     }
 
     /// β̂, `H⁻¹`, edf and the RSS at `rho`, mapped back to the design basis.
@@ -189,7 +215,7 @@ impl FastRemlScore for FastRemlGaussianScore {
     fn probe(&self, theta: &Array1<f64>) -> Result<FastRemlProbe> {
         let m = self.ranges.len();
         let rho = theta.slice(s![..m]);
-        let phi = theta[m].exp();
+        let phi = self.known_scale.unwrap_or_else(|| theta[m].exp());
         let sol = self.solve(rho)?;
         let lambda: Vec<f64> = rho.iter().map(|r| r.exp()).collect();
 
@@ -233,6 +259,10 @@ impl FastRemlScore for FastRemlGaussianScore {
         grad[m] = 0.5 * (n_mp - dp / phi);
         hess[[m, m]] = dp / (2.0 * phi);
 
+        if self.known_scale.is_some() {
+            grad = grad.slice(s![..m]).to_owned();
+            hess = hess.slice(s![..m, ..m]).to_owned();
+        }
         Ok(FastRemlProbe {
             value,
             grad,
@@ -244,7 +274,7 @@ impl FastRemlScore for FastRemlGaussianScore {
 
 impl ScoreDerivatives for FastRemlGaussianScore {
     fn dim(&self) -> usize {
-        self.ranges.len() + 1
+        self.ranges.len() + usize::from(self.known_scale.is_none())
     }
 
     fn coords(&self) -> CoordsKind {

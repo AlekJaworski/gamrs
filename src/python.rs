@@ -1619,14 +1619,38 @@ fn fit_additive<'py>(
     let term_specs = build_term_specs(&terms)?;
 
     if bam {
-        if family_name != "gaussian" {
-            return Err(PyValueError::new_err(format!(
-                "bam fREML is implemented for family='gaussian' only; got {family_name:?}"
-            )));
+        if theta.is_some() || nu.is_some() || sigma2.is_some() {
+            return Err(PyValueError::new_err(
+                "bam estimates theta like mgcv's nb() and scat(); fixed shape values are not supported",
+            ));
         }
         let design = Additive { terms: term_specs };
         let fitted = py
-            .detach(|| crate::fit::fit_bam(gaussian_identity(), &design, x_view, y_view, w_view))
+            .detach(|| match family_name {
+                "gaussian" => {
+                    crate::fit::fit_bam(gaussian_identity(), &design, x_view, y_view, w_view)
+                }
+                "poisson" => crate::fit::fit_bam(poisson_log(), &design, x_view, y_view, w_view),
+                "bernoulli" | "binomial" => {
+                    crate::fit::fit_bam(bernoulli_logit(), &design, x_view, y_view, w_view)
+                }
+                "gamma" => crate::fit::fit_bam(gamma_log(), &design, x_view, y_view, w_view),
+                "Gamma" => crate::fit::fit_bam(gamma_inverse(), &design, x_view, y_view, w_view),
+                "negbin" | "nb" => {
+                    crate::fit::fit_bam(negbin_log(1.0), &design, x_view, y_view, w_view)
+                }
+                "tdist" | "scat" => crate::fit::fit_bam(
+                    tdist_identity(SCAT_DEFAULT_NU, 1.0),
+                    &design,
+                    x_view,
+                    y_view,
+                    w_view,
+                ),
+                other => Err(GamrsError::InvalidParameter(format!(
+                    "bam is implemented for gaussian, poisson, binomial, gamma, Gamma, negbin \
+                     and scat; got {other:?}"
+                ))),
+            })
             .map_err(map_err)?;
         return Ok(PyFittedGam { inner: fitted });
     }

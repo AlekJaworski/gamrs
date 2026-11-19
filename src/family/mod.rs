@@ -17,6 +17,7 @@
 
 use crate::traits::{Link, Loss, VarianceFn};
 
+pub mod bam;
 pub mod bernoulli;
 pub mod elf;
 pub mod gamma;

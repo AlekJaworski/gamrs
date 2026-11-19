@@ -1,7 +1,8 @@
 #!/usr/bin/env Rscript
 # bam(method = "fREML") reference fits: 3-D additive cr k=10 for gaussian
 # (unweighted and prior-weighted), nb(log) with estimated theta, and
-# scat(identity) with prior weights. n stays under bam's chunk.size, so the
+# scat(identity) with prior weights, and Gamma(log) for the estimated-scale
+# GLM branch. n stays under bam's chunk.size, so the
 # basis is built from every row. x2 enters linearly, so its smooth sits on a
 # flat REML ridge (lambda -> large) where the stopping rule decides lambda.
 #
@@ -21,9 +22,9 @@ summarise <- function(fit) {
               linear_predictors = as.numeric(fit$linear.predictors),
               beta = as.numeric(coef(fit)), edf_per_term = as.numeric(edf_term),
               edf_total = sum(fit$edf), reml = as.numeric(fit$gcv.ubre),
-              iter = as.integer(fit$outer.info$iter))
+              iter = as.integer(fit$outer.info$iter), irls_iter = as.integer(fit$iter))
   th <- fit$family$getTheta
-  if (!is.null(th)) out$theta <- as.numeric(th(TRUE))
+  if (!is.null(th)) out$theta <- I(as.numeric(th(TRUE)))
   out
 }
 
@@ -77,3 +78,13 @@ emit("3d_scat_identity_weighted_bam_freml_n1500_k10_cr.json",
      "3-D additive scat(identity), prior weights U(0.5, 2), bam fREML", "scat", "identity", d,
      bam(f3, data = d, weights = w, family = scat(link = "identity"), method = "fREML"),
      gam(f3, data = d, weights = w, family = scat(link = "identity"), method = "REML"), w = w)
+
+set.seed(20261120)
+n <- 2000
+x0 <- runif(n); x1 <- runif(n); x2 <- runif(n)
+mu <- exp(0.5 + 0.8 * sin(2 * pi * x0) + 0.6 * cos(3 * x1) + 0.4 * x2)
+d <- data.frame(y = rgamma(n, shape = 3, rate = 3 / mu), x0 = x0, x1 = x1, x2 = x2)
+emit("3d_gamma_log_bam_freml_n2000_k10_cr.json", "3-D additive Gamma(log), bam fREML",
+     "gamma", "log", d,
+     bam(f3, data = d, family = Gamma(link = "log"), method = "fREML"),
+     gam(f3, data = d, family = Gamma(link = "log"), method = "REML"))
