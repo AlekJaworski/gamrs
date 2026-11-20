@@ -271,11 +271,10 @@ pub(crate) fn descending_eigh(penalty: ArrayView2<f64>) -> Result<(Array1<f64>, 
 /// `Basis` instance to feed [`SumToZero::from_fit_design`].
 /// R's `var(x)`: two-pass mean with a correction pass, then the sum of
 /// squared deviations over `n − 1`, all accumulated in extended precision
-/// (R uses long double). The values are summed in sorted order with
-/// compensated sums, so columns holding the same values give bitwise-equal
-/// variances: on a discrete covariate whose values sit on the knots, columns
-/// are 0/1 indicators, R's variances tie exactly, and `which.min` must see
-/// the tie (an f64 running sum breaks it by an ulp and drops another column).
+/// (R uses long double); here compensated sums in data order, as R sums. On
+/// a discrete covariate whose values sit on the knots, columns are 0/1
+/// indicators, R's variances tie exactly, and `which.min` must see the tie
+/// (an f64 running sum breaks it by an ulp and drops another column).
 /// The column `sweep_drop` removes: mgcv's `min(which(vcol == min(vcol)))`.
 pub(crate) fn sweep_drop_column(x_fit_design: ArrayView2<f64>) -> usize {
     let var: Vec<f64> = x_fit_design.columns().into_iter().map(r_var).collect();
@@ -308,12 +307,10 @@ fn r_mean(x: ArrayView1<f64>) -> f64 {
 }
 
 fn r_var(x: ArrayView1<f64>) -> f64 {
-    let mut v = x.to_vec();
-    v.sort_unstable_by(|a, b| a.total_cmp(b));
-    let n = v.len() as f64;
-    let mut mean = neumaier(v.iter().copied()) / n;
-    mean += neumaier(v.iter().map(|&a| a - mean)) / n;
-    neumaier(v.iter().map(|&a| (a - mean) * (a - mean))) / (n - 1.0)
+    let n = x.len() as f64;
+    let mut mean = neumaier(x.iter().copied()) / n;
+    mean += neumaier(x.iter().map(|&a| a - mean)) / n;
+    neumaier(x.iter().map(|&a| (a - mean) * (a - mean))) / (n - 1.0)
 }
 
 pub(crate) fn neumaier(values: impl Iterator<Item = f64>) -> f64 {
@@ -383,6 +380,27 @@ mod tests {
     use super::*;
     use crate::basis::CrSpline;
     use ndarray::array;
+
+    #[test]
+    fn sweep_drop_ties_columns_holding_the_same_values_in_any_order() {
+        // Non-dyadic values, so an f64 running sum would depend on the order.
+        let n = 997;
+        let mut s: u64 = 7;
+        let mut u = || {
+            s = s
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (s >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let a: Vec<f64> = (0..n).map(|_| 0.1 * u()).collect();
+        for shift in [1, 2, 13, 500] {
+            let b: Vec<f64> = (0..n).map(|i| a[(i * 7 + shift) % n]).collect();
+            let wide: Vec<f64> = (0..n).map(|_| u()).collect();
+            let x = Array2::from_shape_fn((n, 3), |(i, j)| [wide[i], b[i], a[i]][j]);
+            assert_eq!(r_var(x.column(1)).to_bits(), r_var(x.column(2)).to_bits());
+            assert_eq!(sweep_drop_column(x.view()), 1);
+        }
+    }
 
     fn col(x: &Array1<f64>) -> Array2<f64> {
         x.view().insert_axis(ndarray::Axis(1)).to_owned()
