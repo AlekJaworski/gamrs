@@ -17,6 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Build host CPU (the wheel's contents depend on it)
+        id: cpu
         # Two release runs 18 minutes apart, same commit config and the same
         # manylinux image digest, produced wheels with 0 and with many AVX-512
         # instructions respectively (runs 32381555130 and 32383338377). The only
@@ -28,10 +29,22 @@ jobs:
           grep -m1 'model name' /proc/cpuinfo
           flags=$(grep -m1 -o 'avx512[a-z0-9_]*' /proc/cpuinfo | tr '\n' ' ')
           echo "avx512 flags: ${flags:-(none)}"
+          echo "avx512=$([ -n "$flags" ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
+          echo "openblas=$(grep -A1 '^name = "openblas-src"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')" >> "$GITHUB_OUTPUT"
+      # Compiling OpenBLAS is most of this job. openblas-src's `cache` feature
+      # builds it under $XDG_DATA_HOME/openblas_build/<hash of its config> and
+      # reuses a finished build found there. The key carries the host's AVX-512
+      # support because the DYNAMIC_ARCH core list depends on it (see above).
+      - name: Cache the OpenBLAS build
+        uses: actions/cache@v6
+        with:
+          path: ${{ github.workspace }}/.openblas-cache
+          key: openblas-${{ steps.cpu.outputs.openblas }}-linux-${{ matrix.target }}-PRESCOTT-avx512-${{ steps.cpu.outputs.avx512 }}-v1
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         env:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+          XDG_DATA_HOME: ${{ github.workspace }}/.openblas-cache
           OPENBLAS_STATIC: "1"
           # Portable static OpenBLAS needs TWO independent knobs:
           #  - DYNAMIC_ARCH=1 builds every CPU KERNEL and dispatches at runtime.
@@ -54,7 +67,7 @@ jobs:
           RUSTFLAGS: "-C target-cpu=x86-64"
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --find-interpreter --no-default-features --features python,blas,blas-static
+          args: --release --out dist --find-interpreter --no-default-features --features python,blas,blas-static,openblas-src/cache
           sccache: "true"
           manylinux: auto
           # The build runs inside the manylinux container, and maturin-action
@@ -65,7 +78,7 @@ jobs:
           # CORE=ZEN on an AVX2 one, which passed by luck. Forwarded, the build
           # is CORE=PRESCOTT common code plus dispatched per-core kernels on any
           # runner, as on macOS.
-          docker-options: -e OPENBLAS_STATIC -e OPENBLAS_DYNAMIC_ARCH -e OPENBLAS_TARGET
+          docker-options: -e OPENBLAS_STATIC -e OPENBLAS_DYNAMIC_ARCH -e OPENBLAS_TARGET -e XDG_DATA_HOME
           before-script-linux: |
             set -e
             if command -v yum &> /dev/null; then
@@ -239,6 +252,21 @@ jobs:
           fi
           echo "libgfortran dir: $gcc_lib"
           echo "LIBRARY_PATH=${gcc_lib}${LIBRARY_PATH:+:${LIBRARY_PATH}}" >> "$GITHUB_ENV"
+      - name: Build host CPU and OpenBLAS version
+        id: cpu
+        run: |
+          set -euo pipefail
+          sysctl -n machdep.cpu.brand_string
+          avx512=$(sysctl -n hw.optional.avx512f 2>/dev/null || echo 0)
+          echo "avx512=$([ "$avx512" = 1 ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
+          echo "openblas=$(grep -A1 '^name = "openblas-src"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')" >> "$GITHUB_OUTPUT"
+      # Same OpenBLAS build cache as the linux job. On macOS openblas-src's
+      # data directory is ~/Library/Application Support.
+      - name: Cache the OpenBLAS build
+        uses: actions/cache@v6
+        with:
+          path: ~/Library/Application Support/openblas_build
+          key: openblas-${{ steps.cpu.outputs.openblas }}-macos-${{ matrix.target }}-${{ matrix.openblas_target }}-${{ matrix.deployment_target }}-avx512-${{ steps.cpu.outputs.avx512 }}-v1
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         env:
@@ -256,7 +284,7 @@ jobs:
           MACOSX_DEPLOYMENT_TARGET: ${{ matrix.deployment_target }}
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --find-interpreter --no-default-features --features python,blas,blas-static
+          args: --release --out dist --find-interpreter --no-default-features --features python,blas,blas-static,openblas-src/cache
           sccache: "true"
       - name: List built wheels, and check the tag is not a lie
         # The point of the x86_64 arm is the platform tag, so print it: a tag
