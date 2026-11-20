@@ -46,6 +46,8 @@ FREML = "fREML"
 EFS = "efs"
 # The prefix of every native refusal of a model bam does not cover.
 BAM_UNSUPPORTED_MARKER = "bam does not support"
+# `design=`: the CR flavour each predictors= column gets unless predictor_basis_map says otherwise.
+SMOOTH_DESIGNS = ("cr", "cr_stable")
 
 ArrayLike = Any  # avoid hard dep on pandas/polars typing
 
@@ -463,6 +465,10 @@ class Gam:
         self.consider_categorical = consider_categorical
         self.auto_k = auto_k
         self.discrete = bool(discrete)
+        if design not in SMOOTH_DESIGNS:
+            raise ValueError(
+                f"design={design!r} is not supported; accepted: {', '.join(SMOOTH_DESIGNS)}"
+            )
         self.design = design
         # Typed-term API alternative to predictors=/predictor_basis_map=.
         # When both are passed, terms= wins and the others are ignored.
@@ -1219,13 +1225,18 @@ class Gam:
                 warn_pc_unapplied(pname, pc, "predictor_basis_map made it a 're' term")
                 out.append(ReTerm(col=col_idx, by=by))
                 continue
-            if bs_override is not None and bs_override not in ("cr",):
+            if bs_override is not None and bs_override not in SMOOTH_DESIGNS:
                 warnings.warn(
                     f"predictor_basis_map[{pname!r}]={bs_override!r} not yet "
-                    "supported by gamrs; falling back to 'cr'.",
+                    f"supported by gamrs; falling back to {self.design!r}.",
                     UserWarning,
                     stacklevel=3,
                 )
+            smooth_term = (
+                CrStableTerm
+                if (bs_override if bs_override in SMOOTH_DESIGNS else self.design) == "cr_stable"
+                else CrTerm
+            )
             requested_k = int(self.term_k_mapping.get(pname, self.k_default))
             n_unique = int(np.unique(X_arr[:, col_idx]).size)
             n_obs = int(X_arr.shape[0])
@@ -1331,7 +1342,7 @@ class Gam:
                     UserWarning,
                     stacklevel=3,
                 )
-            out.append(CrTerm(col=col_idx, k=k, pc=pc, by=by))
+            out.append(smooth_term(col=col_idx, k=k, pc=pc, by=by))
         return out
 
     def _coerce_predict_X(self, X: ArrayLike) -> np.ndarray:

@@ -17,6 +17,16 @@ is locked. Versions correspond to the published PyPI wheels.
   `g.negbin_theta_` on negbin fits (or `np.exp(g.shape_params_[0])`, which
   works on every version).
 
+### Fixed
+
+- **`Gam(design="cr_stable")` fits the stable-reparameterised CR basis.** On
+  the `predictors=` path it was accepted and ignored, so every column got a
+  plain CR smooth. Fitted values are the same up to rounding (the basis is a
+  rotation of CR); coefficients differ. `predictor_basis_map` also accepts
+  `"cr_stable"` per column instead of warning and falling back to CR. Any
+  other `design=` value now raises a `ValueError` listing the accepted ones
+  (`"cr"`, `"cr_stable"`) instead of being ignored.
+
 ## [0.18.0] — 2026-11-20
 
 ### Added

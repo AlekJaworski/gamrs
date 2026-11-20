@@ -368,6 +368,31 @@ def test_parametric_via_predictor_basis_map_matches_typed_term(rng):
     np.testing.assert_allclose(g_typed.lambda_, g_map.lambda_, rtol=1e-10)
 
 
+def test_design_cr_stable_reaches_the_fit(rng):
+    """`design="cr_stable"` turns the predictors= columns into CrStableTerms:
+    a rotated basis (different β) with the same fitted surface as `"cr"`;
+    `predictor_basis_map` can pick it per column too."""
+    pd = pytest.importorskip("pandas")
+    n = 400
+    X = pd.DataFrame({"x": rng.uniform(0, 10, n), "z": rng.uniform(-2, 2, n)})
+    y = np.sin(X.x) + 0.5 * X.z**2 + rng.normal(0, 0.3, n)
+    g_cr = gamrs.Gam().fit(X, y)
+    g_st = gamrs.Gam(design="cr_stable").fit(X, y)
+    assert list(g_st.bs_) == ["cr_stable", "cr_stable"]
+    assert np.max(np.abs(g_st.coef_[1:] - g_cr.coef_[1:])) > 1e-3
+    np.testing.assert_allclose(g_st.predict(X), g_cr.predict(X), rtol=1e-6, atol=1e-8)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        g_map = gamrs.Gam(predictor_basis_map={"z": "cr_stable"}).fit(X, y)
+    np.testing.assert_allclose(g_map.predict(X), g_cr.predict(X), rtol=1e-6, atol=1e-8)
+
+
+@pytest.mark.parametrize("design", ["re", "tp", "CR"])
+def test_unsupported_design_is_refused(design):
+    with pytest.raises(ValueError, match="accepted: cr, cr_stable"):
+        gamrs.Gam(design=design)
+
+
 def test_typed_crterm_k2_auto_promotes_to_parametric(rng):
     """A typed `CrTerm("x", k=2)` auto-promotes to `ParametricTerm` with
     a UserWarning instead of failing with the cryptic 'needs k ≥ 3'
