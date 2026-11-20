@@ -36,7 +36,7 @@ use crate::traits::{CoordsKind, InnerSolver, Loss, OuterSolver};
 
 use super::canonical::FamilyFitWithSolver;
 use super::driver::{fit_pirls_envelope, fit_shape_aware};
-use super::driver::{LambdaInit, MgcvInit, SmartInit};
+use super::driver::{LambdaInit, MgcvInit};
 use super::gaussian::fit_gaussian_from_prep;
 use super::profile_shape::fit_shape_aware_profile;
 use super::quantile::fit_quantile_from_prep;
@@ -253,7 +253,8 @@ impl<S: LinearSolver> FamilyFitWithSolver<LogLink, NegBinVariance, S> for NegBin
         check_y_nonneg(y, "NegBin")?;
 
         let n_terms = prep.s_list.len();
-        let rho_init = SmartInit.init(y, &prep.x_design, &prep.s_list);
+        let rho_init =
+            MgcvInit::glm(&family, y, prior_weights).init(y, &prep.x_design, &prep.s_list);
         let mut theta0_vec: Vec<f64> = rho_init.to_vec();
         theta0_vec.push(init_theta.ln());
         let theta0 = Array1::from_vec(theta0_vec);
@@ -455,7 +456,8 @@ impl<S: LinearSolver> FamilyFitWithSolver<LogLink, TweedieVariance, S> for Tweed
         check_y_nonneg(y, "Tweedie")?;
 
         let n_terms = prep.s_list.len();
-        let rho_init = SmartInit.init(y, &prep.x_design, &prep.s_list);
+        let rho_init =
+            MgcvInit::glm(&family, y, prior_weights).init(y, &prep.x_design, &prep.s_list);
         let mut theta0_vec: Vec<f64> = rho_init.to_vec();
         theta0_vec.push(init_phi.ln());
         if profile_p {
@@ -551,6 +553,19 @@ fn ocat_smart_init(y: ArrayView1<f64>, n_cats: usize) -> Array1<f64> {
     theta
 }
 
+/// The working weights mgcv's `initial.spg` puts on `ocat`'s design: `½·Dmu2`
+/// at `ocat()$initialize`'s `mustart`, the mid-point of each row's category.
+fn ocat_initial_weights(
+    loss: &OcatLoss,
+    y: ArrayView1<f64>,
+    prior_weights: Option<ArrayView1<f64>>,
+) -> Array1<f64> {
+    let mu = loss.initial_mu(y);
+    Array1::from_shape_fn(y.len(), |i| {
+        0.5 * prior_weights.map_or(1.0, |w| w[i]) * loss.d2_loss_dmu(y[i], mu[i])
+    })
+}
+
 // --- Ocat: identity link + Ocat variance, n_cats + thresholds on family ---
 impl<S: LinearSolver> FamilyFitWithSolver<IdentityLink, OcatVariance, S> for OcatLoss {
     fn fit_from_prep_canonical(
@@ -632,8 +647,14 @@ impl<S: LinearSolver> FamilyFitWithSolver<IdentityLink, OcatVariance, S> for Oca
             stats: crate::stats::FitStats::new(),
         };
 
-        // θ₀ = [SmartInit ρ_1, …, SmartInit ρ_T, θ₁, …, θ_{R-2}]
-        let rho_init = SmartInit.init(y, &prep.x_design, &prep.s_list);
+        let rho_init = MgcvInit {
+            weights: Some(ocat_initial_weights(
+                &score.family_base.loss,
+                y,
+                prior_weights,
+            )),
+        }
+        .init(y, &prep.x_design, &prep.s_list);
         let mut theta0 = Array1::<f64>::zeros(n_terms + theta0_shape.len());
         for i in 0..n_terms {
             theta0[i] = rho_init[i];

@@ -84,9 +84,10 @@ impl LambdaInit for SmartInit {
 
 /// mgcv's `initial.sp` on the weighted design `√w·X` — where `initial.spg`
 /// starts every `gam()` smoothing search ([`MgcvInit::glm`] gives the
-/// weights for an exponential family; scat passes its own). Each term's
-/// λ is set from its OWN block: the mean of `diag(X'WX)` over the columns
-/// its penalty acts on, over the mean of `diag(S_j)` there. All λ are then
+/// weights for an exponential family, negative binomial and Tweedie; scat
+/// and ocat pass their own). Each term's λ is set from its OWN block: the
+/// mean of `diag(X'WX)` over the columns its penalty acts on, over the mean
+/// of `diag(S_j)` there. All λ are then
 /// scaled together by powers of 10 until the penalised columns are about
 /// 40% data-dominated (`mean(xx/(xx+ss)) ≥ 0.4`).
 ///
