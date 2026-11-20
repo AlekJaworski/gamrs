@@ -419,10 +419,32 @@ def test_design_cr_stable_reaches_the_fit(rng):
     np.testing.assert_allclose(g_map.predict(X), g_cr.predict(X), rtol=1e-6, atol=1e-8)
 
 
-@pytest.mark.parametrize("design", ["re", "tp", "CR"])
-def test_unsupported_design_is_refused(design):
-    with pytest.raises(ValueError, match="accepted: cr, cr_stable"):
-        gamrs.Gam(design=design)
+@pytest.mark.parametrize(
+    "kw",
+    [{"design": "tp"}, {"design": "CR"}, {"predictor_basis_map": {"x": "ps"}}],
+)
+def test_unknown_basis_name_is_refused(kw):
+    with pytest.raises(ValueError, match="accepted: cr, cr_stable, re, parametric, linear"):
+        gamrs.Gam(**kw)
+
+
+def test_design_re_matches_per_column_re_and_mgcv():
+    """`design="re"` is the per-column "re" map applied to every column, and
+    matches mgcv `gam(y ~ s(g1, bs = "re") + s(g2, bs = "re"))`."""
+    pd = pytest.importorskip("pandas")
+    from conftest import load_fixture
+
+    fx = load_fixture("re_design_gaussian_n300")
+    X = pd.DataFrame(fx["inputs"]["x_train"], columns=fx["inputs"]["columns"])
+    y = np.asarray(fx["inputs"]["y_train"])
+    g = gamrs.Gam(design="re").fit(X, y)
+    g_map = gamrs.Gam(predictor_basis_map={"g1": "re", "g2": "re"}).fit(X, y)
+    np.testing.assert_array_equal(g.coef_, g_map.coef_)
+    mo = fx["mgcv_output"]
+    np.testing.assert_allclose(g.predict(X), mo["fitted"], rtol=1e-7)
+    np.testing.assert_allclose(g.lambda_, mo["sp"], rtol=1e-5)
+    np.testing.assert_allclose(g.scale_, mo["scale"], rtol=1e-7)
+    np.testing.assert_allclose(g.edf_total_, mo["edf_total"], rtol=1e-7)
 
 
 def test_typed_crterm_k2_auto_promotes_to_parametric(rng):

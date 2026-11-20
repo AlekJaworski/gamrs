@@ -46,8 +46,19 @@ FREML = "fREML"
 EFS = "efs"
 # The prefix of every native refusal of a model bam does not cover.
 BAM_UNSUPPORTED_MARKER = "bam does not support"
-# `design=`: the CR flavour each predictors= column gets unless predictor_basis_map says otherwise.
-SMOOTH_DESIGNS = ("cr", "cr_stable")
+# Basis names for `design=` (every predictors= column) and `predictor_basis_map` (per column).
+BASIS_TERMS: dict[str, type] = {
+    "cr": CrTerm,
+    "cr_stable": CrStableTerm,
+    "re": ReTerm,
+    "parametric": ParametricTerm,
+    "linear": ParametricTerm,
+}
+
+
+def check_basis_name(name: Any, where: str) -> None:
+    if name not in BASIS_TERMS:
+        raise ValueError(f"{where}={name!r} is not supported; accepted: {', '.join(BASIS_TERMS)}")
 
 ArrayLike = Any  # avoid hard dep on pandas/polars typing
 
@@ -479,10 +490,9 @@ class Gam:
         self.consider_categorical = consider_categorical
         self.auto_k = auto_k
         self.discrete = bool(discrete)
-        if design not in SMOOTH_DESIGNS:
-            raise ValueError(
-                f"design={design!r} is not supported; accepted: {', '.join(SMOOTH_DESIGNS)}"
-            )
+        check_basis_name(design, "design")
+        for pname, basis in self.predictor_basis_map.items():
+            check_basis_name(basis, f"predictor_basis_map[{pname!r}]")
         self.design = design
         # Typed-term API alternative to predictors=/predictor_basis_map=.
         # When both are passed, terms= wins and the others are ignored.
@@ -1222,35 +1232,22 @@ class Gam:
                 continue
             pc = self.term_pc_mapping.get(pname)
             by_name = self.term_by_mapping.get(pname)
-            bs_override = self.predictor_basis_map.get(pname)
+            basis = self.predictor_basis_map.get(pname, self.design)
+            term_cls = BASIS_TERMS[basis]
             by = None if by_name is None else list(cols).index(by_name)
-            if by_name is not None and bs_override in ("parametric", "linear"):
+            if by_name is not None and term_cls is ParametricTerm:
                 raise ValueError(
                     f"term_by_mapping[{pname!r}]={by_name!r} needs a CR smooth or an 're' term, but "
-                    f"predictor_basis_map makes {pname!r} a {bs_override!r} term."
+                    f"{pname!r} is a {basis!r} term."
                 )
-            if bs_override in ("parametric", "linear"):
-                warn_pc_unapplied(
-                    pname, pc, f"predictor_basis_map made it a {bs_override!r} term"
-                )
+            if term_cls is ParametricTerm:
+                warn_pc_unapplied(pname, pc, f"it is a {basis!r} term")
                 out.append(ParametricTerm(col=col_idx))
                 continue
-            if bs_override == "re":
-                warn_pc_unapplied(pname, pc, "predictor_basis_map made it a 're' term")
+            if term_cls is ReTerm:
+                warn_pc_unapplied(pname, pc, "it is an 're' term")
                 out.append(ReTerm(col=col_idx, by=by))
                 continue
-            if bs_override is not None and bs_override not in SMOOTH_DESIGNS:
-                warnings.warn(
-                    f"predictor_basis_map[{pname!r}]={bs_override!r} not yet "
-                    f"supported by gamrs; falling back to {self.design!r}.",
-                    UserWarning,
-                    stacklevel=3,
-                )
-            smooth_term = (
-                CrStableTerm
-                if (bs_override if bs_override in SMOOTH_DESIGNS else self.design) == "cr_stable"
-                else CrTerm
-            )
             requested_k = int(self.term_k_mapping.get(pname, self.k_default))
             n_unique = int(np.unique(X_arr[:, col_idx]).size)
             n_obs = int(X_arr.shape[0])
@@ -1356,7 +1353,7 @@ class Gam:
                     UserWarning,
                     stacklevel=3,
                 )
-            out.append(smooth_term(col=col_idx, k=k, pc=pc, by=by))
+            out.append(term_cls(col=col_idx, k=k, pc=pc, by=by))
         return out
 
     def _coerce_predict_X(self, X: ArrayLike) -> np.ndarray:

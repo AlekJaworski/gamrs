@@ -22,13 +22,17 @@ is locked. Versions correspond to the published PyPI wheels.
 
 ### Fixed
 
-- **`Gam(design="cr_stable")` fits the stable-reparameterised CR basis.** On
-  the `predictors=` path it was accepted and ignored, so every column got a
-  plain CR smooth. Fitted values are the same up to rounding (the basis is a
-  rotation of CR); coefficients differ. `predictor_basis_map` also accepts
-  `"cr_stable"` per column instead of warning and falling back to CR. Any
-  other `design=` value now raises a `ValueError` listing the accepted ones
-  (`"cr"`, `"cr_stable"`) instead of being ignored.
+- **`Gam(design=...)` sets the basis of every `predictors=` column;
+  `predictor_basis_map` overrides it per column.** Before, `design` was
+  accepted and ignored: every column got a plain CR smooth. Both now accept the
+  same names: `"cr"`, `"cr_stable"`, `"re"`, `"parametric"` and `"linear"`.
+  - `design="cr_stable"` fits the stable-reparameterised CR basis. Fitted
+    values match `"cr"` up to rounding (the basis is a rotation of CR), but the
+    coefficients differ.
+  - `design="re"` makes every column a random effect, like mgcv's
+    `s(g, bs = "re")`.
+  - An unknown name in either place raises a `ValueError` that lists the
+    accepted names. `predictor_basis_map` used to warn and fall back to CR.
 
 ### Performance
 
