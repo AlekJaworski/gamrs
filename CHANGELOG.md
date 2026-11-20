@@ -5,7 +5,7 @@ based on [Keep a Changelog](https://keepachangelog.com/); this project is in
 beta (`0.x`), so minor bumps may carry breaking changes until the 1.0 surface
 is locked. Versions correspond to the published PyPI wheels.
 
-## [Unreleased]
+## [0.18.0] — 2026-11-20
 
 ### Added
 
@@ -95,6 +95,8 @@ is locked. Versions correspond to the published PyPI wheels.
   battery 1,462 → 1,380. Random effect plus four smooths, one thread: poisson
   with 1,000 levels 4.9 → 4.3 s, inverse Gaussian 13.0 → 11.4 s, gaussian
   with 1,000 levels 1.36 → 1.63 s (one extra Newton step).
+- Rust API: new `Loss::mgcv_mustart` (default `μ = y`); new `gamrs::fit_bam`,
+  `family::bam::BamFamily`, `Additive::prepare_with` and `Centring`.
 
 ## [0.17.5] — 2026-11-19
 

@@ -1,6 +1,6 @@
 [package]
 name = "gamrs"
-version = "0.17.5"
+version = "0.18.0"
 edition = "2021"
 description = "Generalised additive models in Rust; a reimplementation of R's mgcv"
 license = "MIT"
