@@ -80,9 +80,14 @@ impl<B: Basis> SumToZero<B> {
     /// column but the dropped one, `m` their means), which equals mgcv's
     /// `X[, -drop] − m'` only because the basis rows sum to one (true of CR).
     pub fn sweep_drop(inner: B, x_fit_design: ArrayView2<f64>) -> Self {
+        let drop = sweep_drop_column(x_fit_design);
+        Self::sweep_drop_at(inner, x_fit_design, drop)
+    }
+
+    /// [`Self::sweep_drop`] with the dropped column already chosen.
+    pub(crate) fn sweep_drop_at(inner: B, x_fit_design: ArrayView2<f64>, drop: usize) -> Self {
         let k = x_fit_design.ncols();
         let mean: Array1<f64> = x_fit_design.columns().into_iter().map(r_mean).collect();
-        let drop = sweep_drop_column(x_fit_design);
         let mut c = Array2::<f64>::zeros((k, k - 1));
         for (out, j) in (0..k).filter(|&j| j != drop).enumerate() {
             c[[j, out]] = 1.0;
@@ -304,7 +309,7 @@ fn r_mean(x: ArrayView1<f64>) -> f64 {
 
 fn r_var(x: ArrayView1<f64>) -> f64 {
     let mut v = x.to_vec();
-    v.sort_by(|a, b| a.total_cmp(b));
+    v.sort_unstable_by(|a, b| a.total_cmp(b));
     let n = v.len() as f64;
     let mut mean = neumaier(v.iter().copied()) / n;
     mean += neumaier(v.iter().map(|&a| a - mean)) / n;

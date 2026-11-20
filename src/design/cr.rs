@@ -178,11 +178,15 @@ impl CrPredictor {
         };
 
         let w = by.map(|b| x.column(b));
-        let centring = constraint_map(cr, raw.view(), pc, w, Centring::SweepDrop)?;
         let sweeps = pc.is_none() && !w.is_some_and(varies);
-        let mgcv = MgcvCentring {
-            sweep_drop: sweeps.then(|| sweep_drop_column(raw.view())),
+        let sweep_drop = sweeps.then(|| sweep_drop_column(raw.view()));
+        let centring = match sweep_drop {
+            Some(d) => SumToZero::sweep_drop_at(cr, raw.view(), d)
+                .matrix()
+                .to_owned(),
+            None => constraint_map(cr, raw.view(), pc, w, Centring::SweepDrop)?,
         };
+        let mgcv = MgcvCentring { sweep_drop };
         let mut centred = mgcv.centre(raw.view(), centring.view());
         scale_rows(&mut centred, w);
         let s_smooth = match mgcv.sweep_drop {
