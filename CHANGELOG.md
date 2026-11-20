@@ -5,6 +5,34 @@ based on [Keep a Changelog](https://keepachangelog.com/); this project is in
 beta (`0.x`), so minor bumps may carry breaking changes until the 1.0 surface
 is locked. Versions correspond to the published PyPI wheels.
 
+## [Unreleased]
+
+### Changed
+
+- **Negative binomial, Tweedie and ocat `method="REML"` fits start the
+  smoothing-parameter search where mgcv's `gam()` does,** at `initial.sp` on
+  `√w·X`, as gaussian and the GLM families have since 0.18.0. The weights are
+  mgcv's: `prior·μ'(η)²/V(μ)` at the family's `mustart` (`y = 0` taken as 1/6
+  for negative binomial, 0.1 for Tweedie), with V at the starting θ or p; for
+  ocat, `½·Dmu2` at the middle of each row's category. They used to start from
+  one global `‖S_j‖/‖X‖²` ratio per term.
+  - A negative binomial fit on a covariate spanning 1e3 to 2.5e8 (lot size,
+    2,000 rows, k = 10) used to stop after one outer step, 228 REML units
+    above mgcv, its second-largest lot (4e7) fitted at 160,500 against mgcv's
+    5,048. It now lands on mgcv's optimum: REML within 0.001, edf 5.631 and
+    1.005 against 5.631 and 1.003, fitted values within 1.2e-5 relative. On
+    twelve such draws the old start was 194 to 237 REML units off; all twelve
+    now match within 0.0014.
+  - Two five-smooth fits with two REML optima now land on mgcv's: a negative
+    binomial one that ended 0.105 above it (a smooth at edf 1.00 against
+    mgcv's 2.98), and a Tweedie one that ended 0.30 *below* it, on the optimum
+    mgcv does not find (edf 1.67 against 2.56). Both now match REML within
+    0.0005 and fitted values within 2.1e-5 relative.
+  - Python's negative binomial starts θ at 1, as `nb()` does, instead of 2.
+  - ocat: the start changes nothing on the fits tried. Its REML criterion
+    still differs from mgcv's, so ocat edf can differ from mgcv's by up to 2.9
+    per smooth.
+
 ## [0.18.0] — 2026-11-20
 
 ### Added

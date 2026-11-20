@@ -31,6 +31,15 @@ impl Loss for NegBin {
         y.iter().map(|&yi| yi.max(0.1)).collect()
     }
 
+    /// `nb()$initialize`.
+    fn mgcv_mustart(
+        &self,
+        y: ndarray::ArrayView1<f64>,
+        _prior_weights: Option<ndarray::ArrayView1<f64>>,
+    ) -> ndarray::Array1<f64> {
+        y.mapv(|yi| if yi == 0.0 { 1.0 / 6.0 } else { yi })
+    }
+
     /// `D(y, μ) = 2[y·log(max(1,y)/μ) - (y+θ)·log((y+θ)/(μ+θ))]`. mgcv
     /// `negbin$dev.resids`. For y=0: `D = 2θ·log((μ+θ)/θ)`.
     fn deviance_per_obs(&self, y: f64, mu: f64) -> f64 {

@@ -46,6 +46,15 @@ impl Loss for Tweedie {
         y.iter().map(|&yi| yi.max(0.1)).collect()
     }
 
+    /// `tw()$initialize` (and `Tweedie(p)`'s).
+    fn mgcv_mustart(
+        &self,
+        y: ndarray::ArrayView1<f64>,
+        _prior_weights: Option<ndarray::ArrayView1<f64>>,
+    ) -> ndarray::Array1<f64> {
+        y.mapv(|yi| if yi == 0.0 { 0.1 } else { yi })
+    }
+
     fn deviance_per_obs(&self, y: f64, mu: f64) -> f64 {
         let p = self.p;
         let mu = mu.max(1e-300);
