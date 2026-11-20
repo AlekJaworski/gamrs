@@ -1074,7 +1074,7 @@ where
 /// - `"Gamma"` → `gamma_inverse()` (mgcv's canonical default for `Gamma()`)
 /// - `"gamma"` → `gamma_log()` (backwards-compatible log-link alias)
 /// - `"inverse_gaussian"` / `"inverse.gaussian"` → `inverse_gaussian_log()`
-/// - `"negbin"` / `"nb"` → `negbin_log(theta=1.0)`, mgcv's `nb()` start (or user-passed theta)
+/// - `"negbin"` / `"nb"` → `negbin_log(theta=2.0)` (or user-passed theta)
 /// - `"tdist"` / `"scat"` → `tdist_identity(nu=5, sigma2=1)`
 /// - `"tweedie"` / `"tw"` → Tweedie + log link. `tweedie_p` toggles the
 ///   mode (mgcv_rust convention): `tweedie_p=None` → **profile-p** (mgcv
@@ -1160,7 +1160,7 @@ fn fit<'py>(
             k,
         )?,
         "negbin" | "nb" => {
-            let theta_val = theta.unwrap_or(1.0);
+            let theta_val = theta.unwrap_or(2.0);
             if theta_val <= 0.0 {
                 return Err(PyValueError::new_err(format!(
                     "negbin theta must be > 0; got theta={theta_val}"
@@ -1685,7 +1685,7 @@ fn fit_additive<'py>(
             term_specs,
         )?,
         "negbin" | "nb" => {
-            let theta_val = theta.unwrap_or(1.0);
+            let theta_val = theta.unwrap_or(2.0);
             if theta_val <= 0.0 {
                 return Err(PyValueError::new_err(format!(
                     "negbin theta must be > 0; got theta={theta_val}"

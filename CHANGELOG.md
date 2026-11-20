@@ -28,7 +28,6 @@ is locked. Versions correspond to the published PyPI wheels.
     mgcv's 2.98), and a Tweedie one that ended 0.30 *below* it, on the optimum
     mgcv does not find (edf 1.67 against 2.56). Both now match REML within
     0.0005 and fitted values within 2.1e-5 relative.
-  - Python's negative binomial starts θ at 1, as `nb()` does, instead of 2.
   - ocat: the start changes nothing on the fits tried. Its REML criterion
     still differs from mgcv's, so ocat edf can differ from mgcv's by up to 2.9
     per smooth.
