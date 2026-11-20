@@ -32,7 +32,7 @@ jobs:
           echo "avx512=$([ -n "$flags" ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
           echo "openblas=$(grep -A1 '^name = "openblas-src"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')" >> "$GITHUB_OUTPUT"
       # Compiling OpenBLAS is most of this job. openblas-src's `cache` feature
-      # builds it under $XDG_DATA_HOME/openblas_build/<hash of its config> and
+      # builds it under <data dir>/openblas_build/<hash of its config> and
       # reuses a finished build found there. The key carries the host's AVX-512
       # support because the DYNAMIC_ARCH core list depends on it (see above).
       - name: Cache the OpenBLAS build
@@ -44,7 +44,6 @@ jobs:
         uses: PyO3/maturin-action@v1
         env:
           PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
-          XDG_DATA_HOME: ${{ github.workspace }}/.openblas-cache
           OPENBLAS_STATIC: "1"
           # Portable static OpenBLAS needs TWO independent knobs:
           #  - DYNAMIC_ARCH=1 builds every CPU KERNEL and dispatches at runtime.
@@ -78,7 +77,10 @@ jobs:
           # CORE=ZEN on an AVX2 one, which passed by luck. Forwarded, the build
           # is CORE=PRESCOTT common code plus dispatched per-core kernels on any
           # runner, as on macOS.
-          docker-options: -e OPENBLAS_STATIC -e OPENBLAS_DYNAMIC_ARCH -e OPENBLAS_TARGET -e XDG_DATA_HOME
+          # The OpenBLAS cache is mounted at openblas-src's data directory
+          # inside the container. Setting XDG_DATA_HOME instead also moves where
+          # maturin-action installs sccache, and the build then cannot find it.
+          docker-options: -e OPENBLAS_STATIC -e OPENBLAS_DYNAMIC_ARCH -e OPENBLAS_TARGET -v ${{ github.workspace }}/.openblas-cache:/root/.local/share/openblas_build
           before-script-linux: |
             set -e
             if command -v yum &> /dev/null; then
