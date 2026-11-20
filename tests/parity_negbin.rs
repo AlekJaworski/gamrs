@@ -67,7 +67,7 @@ fn nb_log_n300_k10_cr() {
     let abs_e = max_abs_err(&mu_gamrs, &fx.mgcv_output.predictions_train);
     println!(
         "[nb n300 k10] max_rel = {rel:.3e}; max_abs = {abs_e:.3e}; θ̂ gamrs = {:.3}; ρ̂ = {:.3}; iters = {}; edf = {:.2}",
-        fit.scale, fit.rho[0], fit.n_iters, fit.edf_total,
+        fit.shape_params[0].exp(), fit.rho[0], fit.n_iters, fit.edf_total,
     );
     // Observed 2.5e-7. The bar was 1e-2 until 0.14.6, wide enough to hide a
     // wrong criterion: the θ probes scored a frozen β, and log|H| dropped its

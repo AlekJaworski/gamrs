@@ -5,6 +5,18 @@ based on [Keep a Changelog](https://keepachangelog.com/); this project is in
 beta (`0.x`), so minor bumps may carry breaking changes until the 1.0 surface
 is locked. Versions correspond to the published PyPI wheels.
 
+## [Unreleased]
+
+### Changed
+
+- **Negative binomial `scale_` is now 1, as mgcv's `scale`/`sig2` for `nb()`;
+  it used to return the estimated θ.** θ moves to the new
+  **`negbin_theta_`** (mgcv's `family$getTheta(TRUE)`). Standard errors,
+  `vcov_` and confidence intervals are unchanged: they already used scale 1.
+  `method="bam"` already reported 1. Migration: replace `g.scale_` with
+  `g.negbin_theta_` on negbin fits (or `np.exp(g.shape_params_[0])`, which
+  works on every version).
+
 ## [0.18.0] — 2026-11-20
 
 ### Added

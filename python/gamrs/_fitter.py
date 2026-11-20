@@ -1753,10 +1753,19 @@ class Gam:
         return np.asarray(self._require_fitted().shape_params)
 
     @property
+    def negbin_theta_(self) -> float:
+        """Estimated negative binomial θ, as mgcv's ``family$getTheta(TRUE)``
+        (variance ``μ + μ²/θ``). ``scale_`` is 1 for nb, as in mgcv."""
+        if self._gamrs_family != "negbin":
+            raise AttributeError("negbin_theta_ is only available for family='negbin'")
+        return float(np.exp(self._require_fitted().shape_params[0]))
+
+    @property
     def shape_params_(self) -> np.ndarray:
         """Family-specific fitted shape parameters. Empty for fixed-shape
         families (Gaussian, Bernoulli, Poisson, etc.). Per family: ocat →
-        log-gap θ; scat → [log σ², log(ν − 3)], so ν = 3 + exp(θ[1]).
+        log-gap θ; scat → [log σ², log(ν − 3)], so ν = 3 + exp(θ[1]);
+        negbin → [log θ].
         """
         return np.asarray(self._require_fitted().shape_params)
 

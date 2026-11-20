@@ -277,7 +277,8 @@ impl<S: LinearSolver> FamilyFitWithSolver<LogLink, NegBinVariance, S> for NegBin
                 f.set_shape_params(&[theta[n_terms]]);
                 f
             },
-            |family, _fit, _theta| family.loss.theta,
+            // mgcv: nb's scale is known (1); θ̂ is reported via shape_params.
+            |_family, _fit, _theta| 1.0,
             LinkKind::Log,
         )
     }
