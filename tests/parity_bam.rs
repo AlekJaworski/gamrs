@@ -165,10 +165,11 @@ const PIRLS: Tol = Tol {
 };
 /// A covariate spanning 1e3–2.5e8: X'WX squares the basis's ~1e10 condition
 /// number, so gamrs sits 8e-6 (fitted) and 1e-8 (REML) from bam's QR.
+// REML and scale move by ~4e-7 between CI CPUs: OpenBLAS picks its kernels by CPU.
 const ILL_CONDITIONED: Tol = Tol {
     fitted: 1e-4,
     sp: 1e-6,
-    reml: 1e-7,
+    reml: 1e-6,
 };
 
 #[test]
