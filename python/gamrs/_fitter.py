@@ -51,6 +51,20 @@ SMOOTH_DESIGNS = ("cr", "cr_stable")
 
 ArrayLike = Any  # avoid hard dep on pandas/polars typing
 
+# mgcv `tw(a = 1.01, b = 1.99)`: p = a + (b − a)·logistic(θ).
+TWEEDIE_P_MIN, TWEEDIE_P_MAX = 1.01, 1.99
+# (native family, number of shape params or None for any) → mgcv `getTheta(TRUE)` from shape_params_.
+# A fixed-p Tweedie has one shape param (log φ) and no θ, as mgcv's Tweedie(p).
+THETA_FROM_SHAPE_PARAMS = {
+    ("negbin", 1): lambda sp: float(np.exp(sp[0])),
+    ("tdist", 2): lambda sp: np.array([3.0 + np.exp(sp[1]), np.exp(sp[0] / 2)]),
+    ("tweedie", 2): lambda sp: float(
+        TWEEDIE_P_MIN + (TWEEDIE_P_MAX - TWEEDIE_P_MIN) / (1.0 + np.exp(-sp[1]))
+    ),
+    # Any number of categories: R − 2 log gaps.
+    ("ocat", None): lambda sp: np.concatenate([[-1.0], -1.0 + np.cumsum(np.exp(sp))]),
+}
+
 
 def _normal_quantile(p: float) -> float:
     """Φ⁻¹(p) without a scipy dependency. Beasley-Springer-Moro
@@ -1754,22 +1768,27 @@ class Gam:
 
     @property
     def ocat_theta_(self) -> np.ndarray:
-        """Converged log-gap thresholds for ocat. Length `r - 2` — one
-        threshold per gap between adjacent categories above the first.
-        The full `r + 1` category boundary vector is
-        `α = [-∞, -1, -1 + exp(θ₀), -1 + exp(θ₀) + exp(θ₁), …, +∞]`.
-        """
+        """Converged log-gap thresholds for ocat (mgcv ``getTheta(FALSE)``).
+        ``theta_`` gives the cut points themselves."""
         if self.family != "ocat":
             raise AttributeError("ocat_theta_ is only available for family='ocat'")
         return np.asarray(self._require_fitted().shape_params)
 
     @property
-    def negbin_theta_(self) -> float:
-        """Estimated negative binomial θ, as mgcv's ``family$getTheta(TRUE)``
-        (variance ``μ + μ²/θ``). ``scale_`` is 1 for nb, as in mgcv."""
-        if self._gamrs_family != "negbin":
-            raise AttributeError("negbin_theta_ is only available for family='negbin'")
-        return float(np.exp(self._require_fitted().shape_params[0]))
+    def theta_(self) -> Union[float, np.ndarray]:
+        """What mgcv's ``family$getTheta(TRUE)`` returns for the fitted family:
+        nb → θ; ocat → the cut points ``[-1, α₂, …, α_{R-1}]``; scat → ``[ν, σ]``;
+        tw → p (only when p is estimated)."""
+        sp = np.asarray(self._require_fitted().shape_params)
+        to_theta = THETA_FROM_SHAPE_PARAMS.get(
+            (self._gamrs_family, len(sp)), THETA_FROM_SHAPE_PARAMS.get((self._gamrs_family, None))
+        )
+        if to_theta is None:
+            raise AttributeError(
+                f"theta_ is not defined for family={self.family!r} (mgcv has no estimated "
+                "theta for it); its raw shape parameters, if any, are in shape_params_"
+            )
+        return to_theta(sp)
 
     @property
     def shape_params_(self) -> np.ndarray:

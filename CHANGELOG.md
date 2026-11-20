@@ -10,12 +10,15 @@ is locked. Versions correspond to the published PyPI wheels.
 ### Changed
 
 - **Negative binomial `scale_` is now 1, as mgcv's `scale`/`sig2` for `nb()`;
-  it used to return the estimated θ.** θ moves to the new
-  **`negbin_theta_`** (mgcv's `family$getTheta(TRUE)`). Standard errors,
-  `vcov_` and confidence intervals are unchanged: they already used scale 1.
-  `method="bam"` already reported 1. Migration: replace `g.scale_` with
-  `g.negbin_theta_` on negbin fits (or `np.exp(g.shape_params_[0])`, which
-  works on every version).
+  it used to return the estimated θ.** Standard errors, `vcov_` and
+  confidence intervals are unchanged: they already used scale 1, and
+  `method="bam"` already reported 1. θ is in the new **`theta_`**, which
+  returns what mgcv's `family$getTheta(TRUE)` does for the fitted family: θ
+  for nb, the cut points for ocat, `[ν, σ]` for scat and p for `tw` (not for
+  a fixed-p Tweedie). Other families raise `AttributeError`. `ocat_theta_`
+  still returns the log gaps, as before. Migration: replace `g.scale_` with
+  `g.theta_` on negbin fits, or with `np.exp(g.shape_params_[0])` in code
+  that must also run on older versions.
 
 ### Fixed
 
