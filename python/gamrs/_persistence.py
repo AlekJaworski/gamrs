@@ -36,6 +36,7 @@ def _gather_meta(gam: "Gam") -> dict[str, Any]:
         "family": gam.family,
         "link": gam.link,
         "method": gam.method,
+        "select": gam.select,
         "design": gam.design,
         "target": gam.target,
         "predictors": list(gam.predictors) if gam.predictors is not None else None,
@@ -90,6 +91,7 @@ def load_gam(cls: type, path: Union[str, "os.PathLike[str]"]) -> "Gam":
     gam.family = meta.get("family", "gaussian")
     gam.link = meta.get("link", "identity")
     gam.method = meta.get("method", "REML")
+    gam.select = meta.get("select", False)
     gam.design = meta.get("design", "cr")
     gam.target = meta.get("target", "y")
     gam.predictors = meta.get("predictors")

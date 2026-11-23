@@ -55,6 +55,7 @@ More in [docs/quickstart.md](docs/quickstart.md).
 | `ScTerm("x", "increasing")`, `TeScTerm(...)` | `s(x, bs = "sc")`, `te(..., bs = "sc")` as fitted by `scasm()` |
 | `ParametricTerm("x")` | a linear term |
 | `by=` on `CrTerm`, `TeTerm`, `ReTerm` | `s(x, by = w)` |
+| `Gam(select=True)` | `gam(select = TRUE)` |
 
 **Families:** `gaussian`, `binomial`, `poisson`, `quasipoisson`, `quasibinomial`,
 `Gamma`, `inverse_gaussian`, `nb`, `tw`, `scat`, `ocat`. Also quantile

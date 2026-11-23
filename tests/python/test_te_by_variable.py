@@ -52,10 +52,7 @@ def test_te_by_matches_mgcv(name):
     assert np.max(np.abs(g.predict(X_new) - m["predictions_new"])) < 5e-5
     assert np.max(np.abs(g.predict(X, type="terms").T - m["term_train"])) < 5e-5
     assert np.max(np.abs(g.predict(X_new, type="terms").T - m["term_new"])) < 5e-5
-    # edf_ has one entry per penalty and the tensor holds the first two.
-    other = g.edf_[2:]
-    edf = np.concatenate([[g.edf_total_ - 1 - other.sum()], other])
-    assert np.max(np.abs(edf - m["edf_per_term"])) < 1e-3
+    assert np.max(np.abs(g.edf_ - m["edf_per_term"])) < 1e-3
     assert g.reml_value_ == pytest.approx(m["reml"], abs=1e-5)
 
     w = cols.index(by_col(name))

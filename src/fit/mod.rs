@@ -155,9 +155,9 @@ pub struct FittedGam {
     pub scale: f64,
     /// Effective dof = `tr(H⁻¹ X'WX)`.
     pub edf_total: f64,
-    /// Per-term effective dof: `edf_per_term[j] = tr(H⁻¹ X'WX_j)` =
-    /// `dim(term_j) - λ_j · tr(H⁻¹ S_j)`. Sums to `edf_total - 1` (the
-    /// intercept contributes a fixed dof of 1). Length matches `rho`.
+    /// Per-smooth effective dof, one entry per penalised term (a tensor's
+    /// penalties count once): `Σ_{i ∈ term} F_ii`, as mgcv's `summary`.
+    /// Parametric terms have none.
     pub edf_per_term: Array1<f64>,
     pub n: usize,
     pub n_iters: usize,
@@ -582,47 +582,33 @@ pub(crate) fn compute_edf<S: crate::inner::LinearSolver>(
 }
 
 /// Per-term EDF for a multi-smooth fit. Uses the identity
-/// `edf_per_term[j] = dim(S_j) - λ_j · tr(H⁻¹ S_j)` where `dim(S_j)` is
-/// the column-block size of term j (the rank+nullspace of its embedded
-/// penalty restricted to its block). Sums to `edf_total - 1` modulo
-/// per-term null spaces that contribute to the intercept's dof of 1.
-///
-/// For the single-smooth path with `s_list.len() == 1`,
-/// `edf_per_term[0] = edf_total - 1` (the intercept's fixed dof).
+/// mgcv's per-smooth edf: one entry per term, `dim(term) − Σ_j λ_j·tr(H⁻¹S_j)`
+/// over the term's penalties. A tensor's margins (and a `select` null-space
+/// penalty) share the term's coefficients, so they are summed into one entry.
 pub(crate) fn compute_edf_per_term<S: crate::inner::LinearSolver>(
     s_list: &[ndarray::Array2<f64>],
     rho: &Array1<f64>,
     p_design: usize,
     fit: &crate::inner::GaussianInnerFit<S>,
 ) -> Array1<f64> {
-    let n_terms = s_list.len();
-    debug_assert_eq!(n_terms, rho.len());
-    let mut edf_j = Array1::<f64>::zeros(n_terms);
-    // `dim_j` = number of columns the term occupies in the embedded
-    // penalty (i.e. count of rows with any nonzero entry in S_j). For
-    // block-diagonal penalty layout each term's block has full coverage
-    // over its column range.
-    for j in 0..n_terms {
-        let s_j = &s_list[j];
-        let lambda_j = rho[j].exp();
-        let mut dim_j = 0usize;
-        for r in 0..p_design {
-            let mut row_nonzero = false;
-            for c in 0..p_design {
-                if s_j[[r, c]] != 0.0 {
-                    row_nonzero = true;
-                    break;
-                }
-            }
-            if row_nonzero {
-                dim_j += 1;
-            }
-        }
-        let tr_hinv_s_j = match fit.fisher.as_ref() {
-            Some((f, _)) => S::trace_a_inv(f, s_j.view()),
-            None => fit.trace_a_inv(s_j.view()),
-        };
-        edf_j[j] = (dim_j as f64) - lambda_j * tr_hinv_s_j;
-    }
-    edf_j
+    debug_assert_eq!(s_list.len(), rho.len());
+    debug_assert!(s_list.iter().all(|s| s.nrows() == p_design));
+    let groups = crate::design::shared_coef_groups(s_list, &vec![0; s_list.len()]);
+    groups
+        .iter()
+        .map(|g| {
+            let penalised: f64 = g
+                .penalties
+                .iter()
+                .map(|&j| {
+                    let tr = match fit.fisher.as_ref() {
+                        Some((f, _)) => S::trace_a_inv(f, s_list[j].view()),
+                        None => fit.trace_a_inv(s_list[j].view()),
+                    };
+                    rho[j].exp() * tr
+                })
+                .sum();
+            g.coefs.len() as f64 - penalised
+        })
+        .collect()
 }

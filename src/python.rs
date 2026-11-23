@@ -1532,6 +1532,12 @@ fn build_term_specs(terms: &Bound<'_, pyo3::types::PyList>) -> PyResult<Vec<Term
     Ok(out)
 }
 
+/// The terms of an additive fit, and whether to add mgcv's `select` penalties.
+struct AdditiveSpec {
+    terms: Vec<TermSpec>,
+    select: bool,
+}
+
 /// Run `gamrs::fit_with_design(..., Additive { terms })` for a typed family.
 /// String dispatch on `family_name` happens here at the FFI boundary.
 fn fit_additive_dispatch<'py, L, K, V>(
@@ -1540,7 +1546,7 @@ fn fit_additive_dispatch<'py, L, K, V>(
     x: ArrayView2<f64>,
     y: ArrayView1<f64>,
     weights: Option<ArrayView1<f64>>,
-    terms: Vec<TermSpec>,
+    spec: AdditiveSpec,
 ) -> PyResult<FittedGam>
 where
     // `+ Send` so the GIL-released closure satisfies pyo3's `Ungil` — see
@@ -1553,7 +1559,12 @@ where
     // `weights` view caller-owned arrays and `terms` is owned, so the closure
     // never touches a live Python object. See `fit_dispatch_design`.
     py.detach(move || {
-        let prep = Additive { terms }.prepare(x)?;
+        let additive = Additive { terms: spec.terms };
+        let prep = if spec.select {
+            crate::design::Select(additive).prepare(x)?
+        } else {
+            additive.prepare(x)?
+        };
         L::fit_from_prep(family, prep, x, y, weights)
     })
     .map_err(map_err)
@@ -1588,6 +1599,7 @@ where
     elf_sigma=None,
     elf_lambda=None,
     bam=false,
+    select=false,
 ))]
 fn fit_additive<'py>(
     py: Python<'py>,
@@ -1606,6 +1618,7 @@ fn fit_additive<'py>(
     elf_sigma: Option<f64>,
     elf_lambda: Option<f64>,
     bam: bool,
+    select: bool,
 ) -> PyResult<PyFittedGam> {
     // Own the numpy inputs so the dispatch can release the GIL during the solve
     // (see `fit_dispatch_design`). `term_specs` is built under the GIL (it reads
@@ -1616,7 +1629,10 @@ fn fit_additive<'py>(
     let x_view: ArrayView2<f64> = x_owned.view();
     let y_view: ArrayView1<f64> = y_owned.view();
     let w_view: Option<ArrayView1<f64>> = w_owned.as_ref().map(|a| a.view());
-    let term_specs = build_term_specs(&terms)?;
+    let term_specs = AdditiveSpec {
+        terms: build_term_specs(&terms)?,
+        select,
+    };
 
     if bam {
         if theta.is_some() || nu.is_some() || sigma2.is_some() {
@@ -1624,7 +1640,14 @@ fn fit_additive<'py>(
                 "bam does not support fixed shape values: it estimates theta like mgcv's nb() and scat()",
             ));
         }
-        let design = Additive { terms: term_specs };
+        if select {
+            return Err(PyValueError::new_err(
+                "bam does not support select=True: it fits one penalty per term",
+            ));
+        }
+        let design = Additive {
+            terms: term_specs.terms,
+        };
         let fitted = py
             .detach(|| match family_name {
                 "gaussian" => {

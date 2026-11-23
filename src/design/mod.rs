@@ -379,6 +379,29 @@ pub struct PenaltyGroup {
 }
 
 pub fn penalty_groups(s_list: &[Array2<f64>], rank_s_list: &[usize]) -> Vec<PenaltyGroup> {
+    let mut groups = shared_coef_groups(s_list, rank_s_list);
+    for g in groups.iter_mut().filter(|g| g.penalties.len() > 1) {
+        let mut total = Array2::<f64>::zeros((g.coefs.len(), g.coefs.len()));
+        for &j in &g.penalties {
+            let block = s_list[j]
+                .select(Axis(0), &g.coefs)
+                .select(Axis(1), &g.coefs);
+            let norm = block.iter().fold(0.0_f64, |a, v| a.max(v.abs()));
+            if norm > 0.0 {
+                total.scaled_add(1.0 / norm, &block);
+            }
+        }
+        g.rank = rank_and_log_pseudo_det(total.view()).map_or(0, |(r, _)| r);
+    }
+    groups
+}
+
+/// [`penalty_groups`] without the rank of merged groups (they keep the rank
+/// of their first penalty): the grouping alone, with no eigendecomposition.
+pub(crate) fn shared_coef_groups(
+    s_list: &[Array2<f64>],
+    rank_s_list: &[usize],
+) -> Vec<PenaltyGroup> {
     let support = |s: &Array2<f64>| -> Vec<usize> {
         (0..s.nrows())
             .filter(|&r| s.row(r).iter().any(|&v| v != 0.0))
@@ -405,21 +428,82 @@ pub fn penalty_groups(s_list: &[Array2<f64>], rank_s_list: &[usize]) -> Vec<Pena
         group.coefs.dedup();
         groups.push(group);
     }
-    for g in groups.iter_mut().filter(|g| g.penalties.len() > 1) {
-        let mut total = Array2::<f64>::zeros((g.coefs.len(), g.coefs.len()));
-        for &j in &g.penalties {
-            let block = s_list[j]
-                .select(Axis(0), &g.coefs)
-                .select(Axis(1), &g.coefs);
-            let norm = block.iter().fold(0.0_f64, |a, v| a.max(v.abs()));
-            if norm > 0.0 {
-                total.scaled_add(1.0 / norm, &block);
-            }
-        }
-        g.rank = rank_and_log_pseudo_det(total.view()).map_or(0, |(r, _)| r);
-    }
     groups.sort_by_key(|g| g.penalties[0]);
     groups
+}
+
+/// A design with mgcv's `select = TRUE` penalties: see [`add_null_space_penalties`].
+pub struct Select<D>(pub D);
+
+impl<D: DesignStrategy> DesignStrategy for Select<D> {
+    fn prepare(&self, x: ArrayView2<f64>) -> Result<PreparedDesign> {
+        let mut prep = self.0.prepare(x)?;
+        add_null_space_penalties(&mut prep)?;
+        Ok(prep)
+    }
+}
+
+/// mgcv's `gam(select = TRUE)`: give every penalised term one more penalty,
+/// on the directions its own penalties leave free, so REML can shrink the
+/// whole term to zero. As mgcv's `smoothCon(null.space.penalty = TRUE)`: the
+/// projector `UU'` onto the eigenvectors of `S_1 + Σ_i S_i` below
+/// `max eig · ε^0.66`, placed after the term's own penalties.
+pub fn add_null_space_penalties(prep: &mut PreparedDesign) -> Result<()> {
+    if prep.constraints.is_some() {
+        return Err(GamrsError::InvalidParameter(
+            "select=True does not support shape-constrained terms".into(),
+        ));
+    }
+    let p = prep.x_design.ncols();
+    let ranges = match &prep.predictor {
+        Predictor::Additive(ap) => ap.term_col_ranges.clone(),
+        _ => vec![(1, p)],
+    };
+    let in_range = |s: &Array2<f64>, (a, b): (usize, usize)| {
+        let r = PenaltyBlock::of(s.view()).range;
+        !r.is_empty() && r.start >= a && r.end <= b
+    };
+    let tol = f64::EPSILON.powf(0.66);
+    let old = std::mem::take(&mut prep.s_list);
+    let old_rank = std::mem::take(&mut prep.rank_s_list);
+    let old_log_det = std::mem::take(&mut prep.log_pseudo_det_s_list);
+    let mut done = vec![false; old.len()];
+    for &(a, b) in &ranges {
+        let term: Vec<usize> = (0..old.len())
+            .filter(|&j| in_range(&old[j], (a, b)))
+            .collect();
+        for &j in &term {
+            prep.s_list.push(old[j].clone());
+            prep.rank_s_list.push(old_rank[j]);
+            prep.log_pseudo_det_s_list.push(old_log_det[j]);
+            done[j] = true;
+        }
+        let Some(&first) = term.first() else { continue };
+        let block = |j: usize| old[j].slice(s![a..b, a..b]).to_owned();
+        let st = term.iter().fold(block(first), |acc, &j| acc + block(j));
+        let (vals, vecs) = st.eigh(ndarray_linalg::UPLO::Lower).map_err(|e| {
+            GamrsError::Linalg(format!("select: penalty eigendecomposition failed: {e}"))
+        })?;
+        let max = vals.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        let free: Vec<usize> = (0..vals.len()).filter(|&i| vals[i] < max * tol).collect();
+        if free.is_empty() {
+            continue;
+        }
+        let u = vecs.select(Axis(1), &free);
+        let mut sf = Array2::<f64>::zeros((p, p));
+        sf.slice_mut(s![a..b, a..b]).assign(&u.dot(&u.t()));
+        let (rank, log_det) = rank_and_log_pseudo_det(sf.view())?;
+        prep.s_list.push(sf);
+        prep.rank_s_list.push(rank);
+        prep.log_pseudo_det_s_list.push(log_det);
+    }
+    if done.iter().any(|d| !d) {
+        return Err(GamrsError::InvalidParameter(
+            "select=True: a penalty spans more than one term".into(),
+        ));
+    }
+    prep.mp = penalty_null_space_dim(p, &prep.s_list, &prep.rank_s_list);
+    Ok(())
 }
 
 /// mgcv's `Mp`: the dimension of the null space of the total penalty.

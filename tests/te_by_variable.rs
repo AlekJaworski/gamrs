@@ -160,12 +160,7 @@ fn assert_parity(name: &str) {
             ]
         })
         .fold(0.0, f64::max);
-    // `edf_per_term` has one entry per penalty; the by-tensor holds the first
-    // two and each other term one, so the tensor's edf is what is left.
-    let other_edf = f.edf_per_term.slice(s![2..]).to_vec();
-    let edf: Vec<f64> = std::iter::once(f.edf_total - 1.0 - other_edf.iter().sum::<f64>())
-        .chain(other_edf)
-        .collect();
+    let edf = f.edf_per_term.to_vec();
     let d_edf = max_abs_diff(&edf, &m.edf_per_term);
     let d_reml = (f.reml_value - m.reml).abs();
     let d_scale = (f.scale - m.scale).abs() / m.scale;

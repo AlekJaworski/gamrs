@@ -97,7 +97,7 @@ fn run_tensor_parity(fixture_name: &str, mu_rel_bound: f64, scale_rel_bound: f64
     // 2 smoothing params (one per margin) for the single tensor term.
     assert_eq!(fit.rho.len(), 2, "rho should have one entry per margin");
     assert_eq!(fit.lambda.len(), 2);
-    assert_eq!(fit.edf_per_term.len(), 2);
+    assert_eq!(fit.edf_per_term.len(), 1, "one edf for the one tensor term");
 
     // Predictions vs mgcv.
     let pred = fit
@@ -107,14 +107,8 @@ fn run_tensor_parity(fixture_name: &str, mu_rel_bound: f64, scale_rel_bound: f64
     let scale_rel = (fit.scale - fx.mgcv_output.scale).abs() / fx.mgcv_output.scale.max(1e-12);
     println!(
         "[{fixture_name}] max_rel = {rel:.3e}; scale_rel = {scale_rel:.3e} \
-         (gamrs {:.6e} vs mgcv {:.6e}); ρ̂ = [{:.3}, {:.3}]; edf = ({:.2}, {:.2}); iters = {}",
-        fit.scale,
-        fx.mgcv_output.scale,
-        fit.rho[0],
-        fit.rho[1],
-        fit.edf_per_term[0],
-        fit.edf_per_term[1],
-        fit.n_iters,
+         (gamrs {:.6e} vs mgcv {:.6e}); ρ̂ = [{:.3}, {:.3}]; edf = {:.2}; iters = {}",
+        fit.scale, fx.mgcv_output.scale, fit.rho[0], fit.rho[1], fit.edf_per_term[0], fit.n_iters,
     );
     assert!(
         rel < mu_rel_bound,

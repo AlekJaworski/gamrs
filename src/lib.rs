@@ -63,7 +63,8 @@ pub mod python;
 
 pub use design::{
     combined_s, Additive, AdditivePredictor, Centring, Cr, CrPredictor, CrStable,
-    CrStablePredictor, DesignStrategy, Predictor, PreparedDesign, Re, RePredictor, TermSpec,
+    CrStablePredictor, DesignStrategy, Predictor, PreparedDesign, Re, RePredictor, Select,
+    TermSpec,
 };
 pub use error::{GamrsError, Result};
 pub use family::{ocat_init_theta, OcatLoss, OcatVariance};

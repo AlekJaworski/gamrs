@@ -306,6 +306,40 @@ def _resolve_term_cols(term: Term, col_names: Sequence[str]) -> Term:
 # =============================================================================
 
 
+def _term_ks(term_objs: Sequence[Term]) -> list[int]:
+    return [
+        t.k if isinstance(t, (CrTerm, CrStableTerm, ScTerm)) else
+        (t.k[0] * t.k[1] if isinstance(t, (TeTerm, TeScTerm)) else 0)
+        for t in term_objs
+    ]
+
+
+def _term_label(t: Term, cols: Sequence[str]) -> str:
+    """mgcv-style term label: ``x``, ``te(x,z)``, ``ti(x,z)``, ``s(x,z)``,
+    with ``:w`` for a ``by=`` variable."""
+    def name(c: Any) -> str:
+        return cols[c] if isinstance(c, int) and 0 <= c < len(cols) else str(c)
+
+    if isinstance(t, (TeTerm, TeScTerm, TeMultiTerm)):
+        label = f"te({','.join(name(c) for c in t.cols)})"
+    elif isinstance(t, TiTerm):
+        label = f"ti({','.join(name(c) for c in t.cols)})"
+    elif isinstance(t, TpsTerm):
+        label = f"s({','.join(name(c) for c in t.cols)})"
+    else:
+        label = name(t.col)
+    by = getattr(t, "by", None)
+    return f"{label}:{name(by)}" if by is not None else label
+
+
+def _n_penalties(t: Term, select: bool) -> int:
+    """Smoothing parameters a term gets: one per margin, plus ``select``'s
+    null-space penalty on terms whose penalty leaves directions free (a
+    random effect's and gamrs's thin-plate penalty are full rank)."""
+    n = len(t.cols) if isinstance(t, (TeTerm, TeScTerm, TeMultiTerm, TiTerm)) else 1
+    return n + int(select and not isinstance(t, (ReTerm, TpsTerm)))
+
+
 class Gam:
     """Sklearn-style GAM with smoothing-parameter selection by REML or fREML (bam).
 
@@ -338,6 +372,13 @@ class Gam:
     ``docs/perf.md``). It was only ported to the GLM envelope driver, so on
     the gaussian closed-form path, the quantile path or a shape-parameter
     family it warns and fits by REML.
+
+    ``select=True`` is mgcv's ``gam(select=TRUE)``: each smooth gets one more
+    penalty, on the directions its own penalty leaves unpenalised, so REML can
+    shrink the whole term to zero. ``lambda_`` gains that penalty's λ after
+    each term's own. REML only; ``method="bam"`` raises and ``"fREML"`` warns
+    and fits by REML. Random effects and gamrs's thin-plate terms already have
+    full-rank penalties and get no extra one.
 
     Compatible with the v0.x ``mgcv_rust.Gam`` API surface; a textual
     substitution of ``from mgcv_rust import Gam`` → ``from gamrs import Gam``
@@ -379,6 +420,7 @@ class Gam:
         # gamrs-only knobs:
         design: str = "cr",
         terms: Optional[Sequence[Term]] = None,
+        select: bool = False,
         **kwargs: Any,
     ) -> None:
         if family not in FAMILY_TO_GAMRS:
@@ -434,6 +476,7 @@ class Gam:
         if method is None:
             method = "REML"
         self.method = method
+        self.select = bool(select)
         self.family = family
         gamrs_family, canonical_link = FAMILY_TO_GAMRS[family]
         self._gamrs_family = gamrs_family
@@ -891,11 +934,16 @@ class Gam:
         """Run one native fit at the given term list. Updates `_fitted`
         and `_k_used`; doesn't mutate `_auto_k_*`."""
         family_kw = self._family_kwargs_for_native()
-        self._k_used = [
-            t.k if isinstance(t, (CrTerm, CrStableTerm, ScTerm)) else
-            (t.k[0] * t.k[1] if isinstance(t, (TeTerm, TeScTerm)) else 0)
-            for t in term_objs
+        names = self.term_names()
+        if len(names) != len(term_objs):
+            cols = list(self._effective_predictors or [])
+            names = [_term_label(t, cols) for t in term_objs]
+        self._smooth_terms = [
+            (name, k, _n_penalties(t, self.select))
+            for name, t, k in zip(names, term_objs, _term_ks(term_objs))
+            if not isinstance(t, ParametricTerm)
         ]
+        self._k_used = _term_ks(term_objs)
         if self.method == BAM:
             self._fitted = _gamrs_native.fit_additive(
                 self._gamrs_family,
@@ -904,6 +952,7 @@ class Gam:
                 [_term_to_tuple(t) for t in term_objs],
                 weights=self.sample_weight,
                 bam=True,
+                select=self.select,
                 **family_kw,
             )
             return
@@ -913,7 +962,8 @@ class Gam:
         # smooth takes the additive door — bit-identical either way
         # (tests/entry_point_equivalence.rs).
         if (
-            len(term_objs) == 1
+            not self.select
+            and len(term_objs) == 1
             and isinstance(term_objs[0], (CrTerm, ReTerm, CrStableTerm))
             and getattr(term_objs[0], "pc", None) is None
             and getattr(term_objs[0], "by", None) is None
@@ -943,6 +993,7 @@ class Gam:
             y_arr,
             term_tuples,
             weights=self.sample_weight,
+            select=self.select,
             **family_kw,
         )
 
@@ -1185,6 +1236,9 @@ class Gam:
 
     def term_names(self) -> list[str]:
         """One name per fitted term, in term order."""
+        if self.terms is not None:
+            cols = list(self._effective_predictors or [])
+            return [_term_label(t, cols) for t in self.terms]
         by_only = self.by_only_columns()
         return [p for p in self._effective_predictors or [] if p not in by_only]
 
@@ -1846,6 +1900,30 @@ class Gam:
             for i, (start, end) in enumerate(ranges)
         ]
 
+    def _smooth_terms_for(self, n: int) -> list[tuple[str, int, int]]:
+        """(name, k, number of penalties) per smooth term, matching the
+        ``n`` entries of ``edf_``. A loaded model does not carry its term
+        list, so it falls back to the term names with one penalty each."""
+        terms = getattr(self, "_smooth_terms", None)
+        if terms is not None and len(terms) == n:
+            return terms
+        names = self.term_names()
+        names = names if len(names) == n else [f"term_{i}" for i in range(n)]
+        ks = list(self.k_) if len(self.k_) == n else [0] * n
+        return [(name, k, 1) for name, k in zip(names, ks)]
+
+    def _lambda_by_term(self, terms: list[tuple[str, int, int]]) -> list:
+        """`lambda_` split by term: a float for a term with one penalty, a
+        tuple for a tensor or a ``select`` term."""
+        lam = [float(v) for v in self.lambda_]
+        if sum(c for _, _, c in terms) != len(lam):
+            return [None] * len(terms)
+        out, i = [], 0
+        for _, _, c in terms:
+            out.append(lam[i] if c == 1 else tuple(lam[i:i + c]))
+            i += c
+        return out
+
     def get_edf_df(self) -> Any:
         """Per-term EDF as a pandas DataFrame with columns
         ``['predictor', 'edf']``. Sum (plus intercept dof=1) ≈ edf_total."""
@@ -1855,9 +1933,8 @@ class Gam:
             raise ImportError(
                 "get_edf_df() needs pandas; install with `pip install pandas`."
             ) from exc
-        f = self._require_fitted()
-        edf = np.asarray(f.edf_per_term)
-        names = self.term_names() or [f"term_{i}" for i in range(len(edf))]
+        edf = self.edf_
+        names = [name for name, _, _ in self._smooth_terms_for(len(edf))]
         return pd.DataFrame({"predictor": names, "edf": edf})
 
     def get_posterior_samples(
@@ -1990,13 +2067,14 @@ class Gam:
                 "summary() requires pandas. pip install pandas"
             ) from exc
 
-        names = self.term_names() or [f"term_{i}" for i in range(len(self.edf_))]
+        edf = self.edf_
+        terms = self._smooth_terms_for(len(edf))
         smooths_df = pd.DataFrame(
             {
-                "predictor": list(names),
-                "k": list(self.k_),
-                "edf": list(self.edf_),
-                "lambda": list(self.lambda_),
+                "predictor": [name for name, _, _ in terms],
+                "k": [k for _, k, _ in terms],
+                "edf": list(edf),
+                "lambda": self._lambda_by_term(terms),
             }
         )
 

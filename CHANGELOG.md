@@ -5,6 +5,39 @@ based on [Keep a Changelog](https://keepachangelog.com/); this project is in
 beta (`0.x`), so minor bumps may carry breaking changes until the 1.0 surface
 is locked. Versions correspond to the published PyPI wheels.
 
+## [Unreleased]
+
+### Added
+
+- **`Gam(select=True)`, mgcv's `gam(select = TRUE)`.** Each smooth gets one
+  more penalty, on the directions its own penalties leave unpenalised (a
+  centred CR term's linear part; the 4 directions of an uncentred
+  `te(k=c(4, 3), by=w)`), with its own λ, so REML can shrink a whole term to
+  zero. Built as mgcv's `smoothCon(null.space.penalty = TRUE)` and placed after
+  each term's own penalties, so `lambda_` lines up with mgcv's `sp`. Parity
+  against mgcv on CR, `te` and `te(by=)` fits (`tests/select.rs`); a tensor
+  with no signal goes from edf ≥ 4 to below 0.01. REML only: `method="bam"`
+  raises and `"fREML"` warns and fits by REML. Random effects and thin-plate
+  terms keep one penalty: theirs are already full rank. In Rust,
+  `design::Select(design)` or `design::add_null_space_penalties`. The default
+  `select=False` leaves every fit as it was.
+
+### Changed
+
+- **`edf_` has one entry per smooth term, as mgcv's `summary`; a tensor used
+  to get one entry per margin penalty, and those entries were wrong** (each
+  counted the term's full width against its own penalty alone, so a tensor
+  with true edf 4.05 reported 6 and 10.05). Fits without tensors report the
+  same numbers as before. `edf_total_` and the fits themselves never changed.
+- `term_names()` on a `terms=` model names the terms mgcv-style (`te(x,z):w`,
+  `v`), not the predictor columns.
+
+### Fixed
+
+- `get_edf_df()` and `summary()` no longer fail on models with a tensor or a
+  parametric term; `summary()`'s `lambda` column holds a tuple for a term with
+  more than one penalty.
+
 ## [0.19.0] — 2026-11-20
 
 ### Changed
