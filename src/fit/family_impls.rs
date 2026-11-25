@@ -319,13 +319,12 @@ pub(crate) fn scat_response_scale(y: ArrayView1<f64>) -> f64 {
 }
 
 /// Undo scat's internal standardization on a fit of `ỹ = y/s`. With the
-/// identity link `μ = Xβ`, every fitted quantity is homogeneous in `s`:
-/// `β, μ ∝ s`, `Var(β̂), σ² ∝ s²`. Rescaling these makes `predict`, `vcov`,
-/// `scale`, and the reported `σ²` come out in the original `y` units (predict
-/// goes through `β` so beta rescaling suffices). `reml_value` stays on the
-/// standardized scale — it shifts by a `y`-independent constant and is only
-/// ever compared at fixed `s`. No-op when `s == 1.0`.
-fn rescale_scat_fit(mut fit: FittedGam, s: f64) -> FittedGam {
+/// identity link `μ = Xβ`, `β, μ ∝ s` and `Var(β̂), σ² ∝ s²`, and the penalty
+/// `λ·β'Sβ` is unchanged only if `λ ∝ 1/s²`, so `λ` comes back on mgcv's `sp`
+/// scale. The REML score shifts by `(n − Mp)·ln s`: the log-likelihood by
+/// `−n·ln s`, `log|X'WX + λS|` by `−2p·ln s` and `log|λS|₊` by `−2·rank·ln s`.
+/// No-op when `s == 1.0`.
+fn rescale_scat_fit(mut fit: FittedGam, s: f64, mp: usize) -> FittedGam {
     if s == 1.0 {
         return fit;
     }
@@ -337,6 +336,9 @@ fn rescale_scat_fit(mut fit: FittedGam, s: f64) -> FittedGam {
     if !fit.shape_params.is_empty() {
         fit.shape_params[0] += 2.0 * s.ln();
     }
+    fit.rho.mapv_inplace(|r| r - 2.0 * s.ln());
+    fit.lambda.mapv_inplace(|l| l / s2);
+    fit.reml_value += (fit.n as f64 - mp as f64) * s.ln();
     fit
 }
 
@@ -398,6 +400,7 @@ impl<S: LinearSolver> FamilyFitWithSolver<IdentityLink, TVariance, S> for TDist 
         let init_sigma2_std = init_sigma2 / (s * s);
 
         let n_terms = prep.s_list.len();
+        let mp = prep.mp;
         let rho_init = MgcvInit {
             weights: Some(scat_initial_weights(ys.view(), init_nu, init_sigma2_std)),
         }
@@ -424,7 +427,7 @@ impl<S: LinearSolver> FamilyFitWithSolver<IdentityLink, TVariance, S> for TDist 
             move |_family, _fit, theta| theta[n_terms].exp(),
             LinkKind::Identity,
         )?;
-        Ok(rescale_scat_fit(fit, s))
+        Ok(rescale_scat_fit(fit, s, mp))
     }
 }
 
