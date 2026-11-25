@@ -37,6 +37,8 @@ pub struct NewtonOpts {
     /// Cap on the L_∞ norm of a single Newton step in θ-space — keeps the
     /// outer loop from leaping into the degenerate-σ² regime.
     pub max_step: f64,
+    /// Score-relative axis-freezing threshold; see [`OuterTuning::dim_tol`].
+    pub dim_tol: f64,
     /// Handle an indefinite Hessian the way mgcv's `newton` does: the
     /// direction from [`step::mgcv_newton_direction`] (no diagonal
     /// preconditioning), and, when the Hessian is not positive definite, a
@@ -114,6 +116,11 @@ pub struct OuterTuning {
     /// L∞ cap on a single Newton step in θ-space. Per-axis caps from
     /// `axis_step_caps` override this when present. mgcv default 5.0.
     pub max_step: f64,
+    /// Score-relative threshold below which an axis is frozen out of the
+    /// Newton step. mgcv ties it to the gradient test (`gam.fit3.r:1643`), so
+    /// a tighter `grad_tol` needs a tighter `dim_tol` too, or a term heading
+    /// to λ = ∞ is frozen part-way out. mgcv default `1e-7`.
+    pub dim_tol: f64,
 }
 
 impl OuterTuning {
@@ -126,6 +133,7 @@ impl OuterTuning {
             reml_tol: 1.0e-7,
             max_iters: 200,
             max_step: 5.0,
+            dim_tol: step::DIM_TOL_REL,
         }
     }
 
@@ -140,6 +148,7 @@ impl OuterTuning {
             step_min: 1e-3,
             hess_floor: 1e-8,
             max_step: self.max_step,
+            dim_tol: self.dim_tol,
             mgcv_indefinite: false,
         }
     }
@@ -303,6 +312,7 @@ impl Default for NewtonOpts {
             step_min: 1e-3,
             hess_floor: 1e-8,
             max_step: 5.0,
+            dim_tol: step::DIM_TOL_REL,
             mgcv_indefinite: false,
         }
     }
@@ -421,7 +431,7 @@ impl OuterSolver for NewtonWithHalving {
             // candidate lives in `step.rs` so it can be tested without a score;
             // the ordering (Newton direction → project onto box → cap) is fixed
             // here and each stage documents why it sits where it does.
-            let dim_tol = score_scale * step::DIM_TOL_REL;
+            let dim_tol = score_scale * opts.dim_tol;
             let active = step::active_axes(&g, &h, dim_tol);
             let (raw_step, pdef) = if opts.mgcv_indefinite {
                 step::mgcv_newton_direction(&g, &h, &active)
@@ -461,7 +471,7 @@ impl OuterSolver for NewtonWithHalving {
                         _ => None,
                     }
                 };
-                let accept_margin = 1e-10 * v.abs();
+                let accept_margin = 1e-14 * v.abs();
                 let improves = |vt: f64| vt < v - accept_margin;
                 let qerr_of = |s: &Array1<f64>, vt: f64| -> f64 {
                     step::quadratic_model_error(&g, &h, s, vt - v, score_scale, step::MGCV_CONV_TOL)
