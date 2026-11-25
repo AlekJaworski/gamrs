@@ -8,13 +8,14 @@
 //! outer Newton's θ has length `prep.s_list.len()`; the σ̂² closed form
 //! aggregates `Σ_j λ_j β'S_j β` for `Dp = D + Σ_j λ_j β'S_j β`.
 
-use ndarray::{Array1, Array2, ArrayView1, ArrayView2};
+use ndarray::{s, Array1, Array2, ArrayView1, ArrayView2};
 
 use crate::design::PreparedDesign;
 use crate::error::Result;
 use crate::family::Gaussian;
 use crate::inner::{DesignMatrix, GaussianClosedFormInner, LinearSolver};
 use crate::outer::NewtonWithHalving;
+use crate::score::joint_scale::JointScaleScore;
 use crate::score::{EnvelopeScore, MgcvTwoSigmaProfile};
 use crate::traits::{InnerSolver, OuterFit, OuterSolver, ScoreDerivatives};
 
@@ -139,15 +140,61 @@ pub(super) fn gaussian_reml<S: LinearSolver>(
         }
     } else {
         crate::outer::reject_unsupported_algorithm("gaussian closed-form")?;
-        let outer_solver =
-            NewtonWithHalving::new(crate::outer::resolve_tuning(&score.loss).to_newton_opts());
-        outer_solver.minimize(&score, rho0)?
+        let tuning = crate::outer::resolve_tuning(&score.loss);
+        // Overlapping penalties (tensor margins) keep the default axis-freezing
+        // threshold. `design::reparam` cleans their joint null space but not
+        // each margin's own, so when one margin heads to λ = ∞ while another
+        // stays small, the score past log λ ≈ 20 carries ~1e-5 of rounding
+        // noise; following that axis further only descends into the noise
+        // (`te_by_covariate_matches_mgcv`). The cure is mgcv's λ-dependent
+        // reparameterisation (`gam.reparam`), not yet ported.
+        // Search (ρ, log φ) jointly from mgcv's τ₀ = log(null.scale/10),
+        // where `null.scale` is the intercept-only model's mean deviance
+        // (`estimate.gam`, `get.null.coef`): the same search as mgcv's, so on
+        // a multimodal REML it settles in the same minimum. See
+        // `score::joint_scale`.
+        let n = y.len();
+        let null_scale = match weights {
+            Some(w) => {
+                let mean = y.dot(&w) / w.sum();
+                y.iter()
+                    .zip(w)
+                    .map(|(yi, wi)| wi * (yi - mean).powi(2))
+                    .sum::<f64>()
+            }
+            None => {
+                let mean = y.sum() / n as f64;
+                y.iter().map(|yi| (yi - mean).powi(2)).sum::<f64>()
+            }
+        } / n as f64;
+        let outer_solver = NewtonWithHalving::new(tuning.to_newton_opts());
+        if null_scale > 0.0 && n > mp {
+            let joint = JointScaleScore::new(&score, n, mp);
+            let joint_solver = NewtonWithHalving::new(crate::outer::NewtonOpts {
+                mgcv_indefinite: true,
+                ..tuning.to_newton_opts()
+            });
+            let mut theta0 = Array1::<f64>::zeros(n_terms + 1);
+            theta0.slice_mut(s![..n_terms]).assign(&rho0);
+            theta0[n_terms] = (null_scale / 10.0).ln();
+            let fit = joint_solver.minimize(&joint, theta0)?;
+            let rho = fit.theta.slice(s![..n_terms]).to_owned();
+            // Report the profiled score at ρ̂ — what mgcv reports, and equal
+            // to the joint one once τ has converged to log φ̂.
+            OuterFit {
+                value: score.value(&rho)?,
+                theta: rho,
+                ..fit
+            }
+        } else {
+            outer_solver.minimize(&score, rho0)?
+        }
     };
     Ok((score, outer))
 }
 
 /// The Gaussian closed-form REML score of one penalised design.
-pub(super) fn gaussian_score<S: LinearSolver>(
+pub(crate) fn gaussian_score<S: LinearSolver>(
     x_design: &DesignMatrix,
     s_list: &[Array2<f64>],
     rank_s_list: &[usize],
@@ -174,5 +221,5 @@ pub(super) fn gaussian_score<S: LinearSolver>(
     )
 }
 
-pub(super) type GaussianScore<S> =
+pub(crate) type GaussianScore<S> =
     EnvelopeScore<Gaussian, GaussianClosedFormInner<S>, MgcvTwoSigmaProfile, S>;

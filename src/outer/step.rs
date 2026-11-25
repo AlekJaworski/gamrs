@@ -118,6 +118,53 @@ pub(super) fn newton_direction(
     step
 }
 
+/// mgcv's own Newton direction (`newton`, mgcv 1.9-4): the eigen-fix of the
+/// active block of `H` with NO diagonal preconditioning — negative
+/// eigenvalues flipped, all floored at `max|d|·ε^0.7` — plus whether `H` was
+/// positive definite there (no eigenvalue flipped or floored). When it was
+/// not, mgcv also searches along steepest descent and keeps the lower point;
+/// [`NewtonOpts::mgcv_indefinite`](super::NewtonOpts) runs the outer that way.
+pub(super) fn mgcv_newton_direction(
+    g: &Array1<f64>,
+    h: &Array2<f64>,
+    active: &[usize],
+) -> (Array1<f64>, bool) {
+    let k = active.len();
+    let mut sub = Array2::<f64>::zeros((k, k));
+    for (r, &a) in active.iter().enumerate() {
+        for (c, &b) in active.iter().enumerate() {
+            sub[[r, c]] = 0.5 * (h[[a, b]] + h[[b, a]]);
+        }
+    }
+    let mut step = Array1::<f64>::zeros(g.len());
+    let Ok((eigs, vecs)) = sub.eigh(UPLO::Lower) else {
+        for &a in active {
+            step[a] = -g[a];
+        }
+        return (step, false);
+    };
+    let mut pdef = !eigs.iter().any(|&e| e < 0.0);
+    let abs: Vec<f64> = eigs.iter().map(|e| e.abs()).collect();
+    let low_d = abs.iter().cloned().fold(0.0_f64, f64::max) * f64::EPSILON.powf(0.7);
+    let g_sub: Array1<f64> = active.iter().map(|&a| g[a]).collect();
+    let ug = vecs.t().dot(&g_sub);
+    let mut scaled = Array1::<f64>::zeros(k);
+    for i in 0..k {
+        let d = if abs[i] < low_d {
+            pdef = false;
+            low_d
+        } else {
+            abs[i]
+        };
+        scaled[i] = if d != 0.0 { ug[i] / d } else { 0.0 };
+    }
+    let sub_step = vecs.dot(&scaled);
+    for (i, &a) in active.iter().enumerate() {
+        step[a] = -sub_step[i];
+    }
+    (step, pdef)
+}
+
 /// Zero out the step components that push outward at an active bound.
 ///
 /// Such a component is clamped back to the bound at every trial point anyway, so
@@ -550,6 +597,55 @@ pub(super) fn make_psd_gmw(h: &Array2<f64>, floor: f64) -> Array2<f64> {
 mod tests {
     use super::*;
     use ndarray::array;
+
+    #[test]
+    fn mgcv_direction_is_plain_newton_on_a_positive_definite_hessian() {
+        let g = array![1.0, -2.0];
+        let h = array![[4.0, 1.0], [1.0, 3.0]];
+        let (step, pdef) = mgcv_newton_direction(&g, &h, &[0, 1]);
+        assert!(pdef);
+        // −H⁻¹g, with H⁻¹ = [[3, −1], [−1, 4]] / 11.
+        let want = array![-(3.0 * 1.0 + 2.0) / 11.0, -(-1.0 - 8.0) / 11.0];
+        assert!(
+            (&step - &want).iter().all(|d| d.abs() < 1e-14),
+            "{step} vs {want}"
+        );
+    }
+
+    #[test]
+    fn mgcv_direction_flips_a_negative_eigenvalue_and_reports_it() {
+        // No preconditioning: the −1 becomes +1, so the step on that axis is
+        // −g/1, not the preconditioned GMW floor.
+        let (step, pdef) =
+            mgcv_newton_direction(&array![1.0, 1.0], &array![[-1.0, 0.0], [0.0, 2.0]], &[0, 1]);
+        assert!(!pdef);
+        assert!(
+            (step[0] + 1.0).abs() < 1e-14 && (step[1] + 0.5).abs() < 1e-14,
+            "{step}"
+        );
+    }
+
+    #[test]
+    fn mgcv_direction_calls_a_floored_eigenvalue_not_positive_definite() {
+        let (step, pdef) = mgcv_newton_direction(
+            &array![1.0, 0.0],
+            &array![[1.0, 0.0], [0.0, 1e-20]],
+            &[0, 1],
+        );
+        assert!(
+            !pdef,
+            "an eigenvalue below max·ε^0.7 is floored, as in mgcv"
+        );
+        assert!((step[0] + 1.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn mgcv_direction_leaves_inactive_axes_alone() {
+        let (step, _) =
+            mgcv_newton_direction(&array![1.0, 5.0], &array![[2.0, 0.3], [0.3, 1.0]], &[0]);
+        assert_eq!(step[1], 0.0);
+        assert!((step[0] + 0.5).abs() < 1e-14);
+    }
 
     /// The reported 0.14.x defect, at unit level: an axis pinned at its bound
     /// asking for a huge step must not shrink the axes that can still move.

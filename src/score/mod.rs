@@ -86,6 +86,7 @@ pub(crate) fn weighted_saturated_log_lik<L: crate::traits::Loss>(
 pub mod envelope;
 pub mod fast_reml;
 pub(crate) mod hess_ift;
+pub(crate) mod joint_scale;
 pub mod penalty_det;
 pub mod profile;
 pub mod shape_aware;

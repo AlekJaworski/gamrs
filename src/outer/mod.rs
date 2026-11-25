@@ -37,6 +37,16 @@ pub struct NewtonOpts {
     /// Cap on the L_∞ norm of a single Newton step in θ-space — keeps the
     /// outer loop from leaping into the degenerate-σ² regime.
     pub max_step: f64,
+    /// Handle an indefinite Hessian the way mgcv's `newton` does: the
+    /// direction from [`step::mgcv_newton_direction`] (no diagonal
+    /// preconditioning), and, when the Hessian is not positive definite, a
+    /// steepest-descent search beside the (full or halved) Newton step,
+    /// keeping the lower of the two.
+    /// Off by default: the steepest-descent search costs up to 40 probes, which
+    /// the shape families cannot afford (see the note on (iv) in `minimize`).
+    /// The joint Gaussian search turns it on, because on a REML with several
+    /// minima the basin it settles in depends on these steps.
+    pub mgcv_indefinite: bool,
 }
 
 /// Family-facing outer-Newton tuning. The fit drivers consume this via
@@ -130,6 +140,7 @@ impl OuterTuning {
             step_min: 1e-3,
             hess_floor: 1e-8,
             max_step: self.max_step,
+            mgcv_indefinite: false,
         }
     }
 }
@@ -169,6 +180,34 @@ pub fn resolve_tuning<L: crate::traits::Loss>(loss: &L) -> OuterTuning {
     OUTER_TUNING_OVERRIDE
         .with(|c| c.get())
         .unwrap_or_else(|| loss.outer_tuning())
+}
+
+thread_local! {
+    /// Iterates recorded by [`record_outer_path`]; `None` when not recording.
+    static OUTER_PATH: std::cell::RefCell<Option<Vec<Vec<f64>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` and return, with its result, θ at the start of every outer Newton
+/// iteration it ran on this thread — the point mgcv's `newton` prints with
+/// `sp.trace`. For the Gaussian fit, θ is `(ρ, log φ)`. For tests that hold
+/// the search to mgcv's path (`tests/parity_gaussian_path.rs`), which can
+/// drift long before it changes which minimum a fit reaches.
+pub fn record_outer_path<R>(f: impl FnOnce() -> R) -> (R, Vec<Vec<f64>>) {
+    OUTER_PATH.with(|p| *p.borrow_mut() = Some(Vec::new()));
+    let r = f();
+    let path = OUTER_PATH
+        .with(|p| p.borrow_mut().take())
+        .unwrap_or_default();
+    (r, path)
+}
+
+fn push_outer_path(theta: &Array1<f64>) {
+    OUTER_PATH.with(|p| {
+        if let Some(path) = p.borrow_mut().as_mut() {
+            path.push(theta.to_vec());
+        }
+    });
 }
 
 /// Which outer optimiser to use. Maps to mgcv R's `method` argument.
@@ -264,6 +303,7 @@ impl Default for NewtonOpts {
             step_min: 1e-3,
             hess_floor: 1e-8,
             max_step: 5.0,
+            mgcv_indefinite: false,
         }
     }
 }
@@ -333,6 +373,7 @@ impl OuterSolver for NewtonWithHalving {
             if let Some(s) = score.stats() {
                 s.bump_outer();
             }
+            push_outer_path(&theta);
             // Score-relative gradient tolerance, matching mgcv gam.fit3.r:1644.
             let score_scale = v.abs() + 1.0;
             let grad_tol_abs = opts.grad_tol * score_scale;
@@ -382,7 +423,14 @@ impl OuterSolver for NewtonWithHalving {
             // here and each stage documents why it sits where it does.
             let dim_tol = score_scale * step::DIM_TOL_REL;
             let active = step::active_axes(&g, &h, dim_tol);
-            let raw_step = step::newton_direction(&g, &h, &active, opts.hess_floor);
+            let (raw_step, pdef) = if opts.mgcv_indefinite {
+                step::mgcv_newton_direction(&g, &h, &active)
+            } else {
+                (
+                    step::newton_direction(&g, &h, &active, opts.hess_floor),
+                    true,
+                )
+            };
             let projected = step::project_onto_box(&raw_step, &theta, axis_bounds.as_ref());
             let scaled_step = step::cap_step(&projected, axis_caps.as_ref(), opts.max_step);
 
@@ -463,6 +511,7 @@ impl OuterSolver for NewtonWithHalving {
                         _ => false,
                     };
 
+                    let mut sd_used = false;
                     if !first_ok {
                         // (2) mgcv's halving loop (`gam.fit3.r:1490-1552`),
                         // including its mid-loop switch to steepest descent at the
@@ -471,7 +520,6 @@ impl OuterSolver for NewtonWithHalving {
                         // length".
                         let mut ii = 0usize;
                         let mut alpha = 1.0_f64;
-                        let mut sd_used = false;
                         while ii < max_half {
                             if ii == 3 && iter < 10 && !sd_used {
                                 // Built here, not per iteration: this branch is the
@@ -521,6 +569,47 @@ impl OuterSolver for NewtonWithHalving {
                                 )
                             {
                                 break;
+                            }
+                        }
+                    }
+                    // (3) With `mgcv_indefinite`, an indefinite Hessian also gets
+                    // mgcv's steepest-descent search (`newton`, the
+                    // `!pdef && sd.unused` block): from `Sstep = −g/max|g|`,
+                    // halving, keep the lowest point that also matches the
+                    // quadratic model (the first trial is kept regardless), stop
+                    // once a trial is worse than that point and it improves on
+                    // `v`, at most 40 trials. The result replaces the halved
+                    // Newton step if it is lower. Unlike mgcv, never uphill.
+                    if opts.mgcv_indefinite && !pdef && !sd_used {
+                        let gmax = inf_norm(&g);
+                        if gmax > 0.0 {
+                            let sstep = g.mapv(|x| -x / gmax);
+                            let mut trial_step = &sstep * 2.0;
+                            let mut sd_best: Option<(Array1<f64>, f64)> = None;
+                            for _ in 0..40 {
+                                trial_step = &trial_step * 0.5;
+                                let trial =
+                                    step::clamp_to_box(&theta + &trial_step, axis_bounds.as_ref());
+                                let Some(vt) = probe(&trial) else { continue };
+                                let keep = match &sd_best {
+                                    None => true,
+                                    Some((_, vb)) => {
+                                        vt <= *vb && qerr_of(&trial_step, vt) < step::QERROR_THRESH
+                                    }
+                                };
+                                if keep {
+                                    sd_best = Some((trial, vt));
+                                }
+                                let vb = sd_best.as_ref().map_or(f64::INFINITY, |b| b.1);
+                                if vb < v && vt > vb {
+                                    break;
+                                }
+                            }
+                            if let Some((t, vt)) = sd_best {
+                                let newton_v = best.as_ref().map_or(f64::INFINITY, |b| b.1);
+                                if improves(vt) && vt < newton_v {
+                                    best = Some((t, vt));
+                                }
                             }
                         }
                     }
@@ -892,6 +981,82 @@ mod tests {
         fn value_grad_hess(&self, theta: &Array1<f64>) -> Result<(f64, Array1<f64>, Array2<f64>)> {
             let (v, g) = self.value_and_grad(theta)?;
             Ok((v, g, self.m.clone()))
+        }
+    }
+
+    /// `V = x⁴ − 2x² + y²`: a double well in x, minima at x = ±1.
+    struct DoubleWell;
+    impl ScoreDerivatives for DoubleWell {
+        fn dim(&self) -> usize {
+            2
+        }
+        fn coords(&self) -> CoordsKind {
+            CoordsKind::Identity
+        }
+        fn value(&self, t: &Array1<f64>) -> Result<f64> {
+            Ok(t[0].powi(4) - 2.0 * t[0].powi(2) + t[1].powi(2))
+        }
+        fn value_and_grad(&self, t: &Array1<f64>) -> Result<(f64, Array1<f64>)> {
+            let (v, g, _) = self.value_grad_hess(t)?;
+            Ok((v, g))
+        }
+        fn value_grad_hess(&self, t: &Array1<f64>) -> Result<(f64, Array1<f64>, Array2<f64>)> {
+            let g = array![4.0 * t[0].powi(3) - 4.0 * t[0], 2.0 * t[1]];
+            let h = array![[12.0 * t[0].powi(2) - 4.0, 0.0], [0.0, 2.0]];
+            Ok((self.value(t)?, g, h))
+        }
+    }
+
+    fn first_iterate(score: &impl ScoreDerivatives, theta0: Array1<f64>, mgcv: bool) -> Vec<f64> {
+        let solver = NewtonWithHalving::new(NewtonOpts {
+            mgcv_indefinite: mgcv,
+            ..NewtonOpts::default()
+        });
+        let (fit, path) = record_outer_path(|| solver.minimize(score, theta0).unwrap());
+        assert!(fit.converged);
+        path[1].clone()
+    }
+
+    /// From x = 0.3, where V'' < 0: the (flipped) Newton step reaches
+    /// x ≈ 0.674, V ≈ −0.70; mgcv's steepest-descent search, from
+    /// `Sstep = −g/max|g|` (x-component 1) halved once, reaches x = 0.8,
+    /// V ≈ −0.87, and wins. Without `mgcv_indefinite` the Newton step stands.
+    #[test]
+    fn mgcv_indefinite_takes_the_lower_steepest_descent_point() {
+        let theta0 = array![0.3, 0.05];
+        let g = DoubleWell.value_grad_hess(&theta0).unwrap().1;
+        let with = first_iterate(&DoubleWell, theta0.clone(), true);
+        assert!((with[0] - 0.8).abs() < 1e-12, "x after step 1: {}", with[0]);
+        assert!((with[1] - (0.05 - 0.5 * g[1] / g[0].abs())).abs() < 1e-12);
+        let without = first_iterate(&DoubleWell, theta0, false);
+        assert!(
+            (without[0] - 0.674).abs() < 1e-3,
+            "x after step 1: {}",
+            without[0]
+        );
+    }
+
+    /// On a positive-definite problem the mgcv mode changes nothing.
+    #[test]
+    fn mgcv_indefinite_is_inert_when_the_hessian_is_positive_definite() {
+        let score = QuadScore {
+            m: array![[2.0, 0.5], [0.5, 1.5]],
+            opt: array![1.3, -0.7],
+        };
+        let run = |mgcv| {
+            let solver = NewtonWithHalving::new(NewtonOpts {
+                mgcv_indefinite: mgcv,
+                ..NewtonOpts::default()
+            });
+            record_outer_path(|| solver.minimize(&score, array![0.0, 0.0]).unwrap()).1
+        };
+        let (a, b) = (run(true), run(false));
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(&b) {
+            assert!(
+                x.iter().zip(y).all(|(p, q)| (p - q).abs() < 1e-12),
+                "{x:?} vs {y:?}"
+            );
         }
     }
 

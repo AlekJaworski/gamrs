@@ -288,7 +288,7 @@ where
 }
 
 /// Score returned for a probe the profile finds unphysical.
-const UNPHYSICAL_SCORE: f64 = 1e12;
+pub(crate) const UNPHYSICAL_SCORE: f64 = 1e12;
 
 struct ValueParts {
     reml: f64,
@@ -928,6 +928,76 @@ where
         }
         Ok(h)
     }
+
+    /// `d_j = λ_j β'S_jβ` per term, and `Dp = D + Σ_j d_j`.
+    fn penalty_parts(
+        &self,
+        theta: &Array1<f64>,
+        inner: &GaussianInnerFit<S>,
+    ) -> (Array1<f64>, f64) {
+        let d: Array1<f64> = self
+            .s_list
+            .iter()
+            .enumerate()
+            .map(|(j, s_j)| theta[j].exp() * inner.beta.dot(&s_j.dot(&inner.beta)))
+            .collect();
+        let dp = inner.deviance + d.sum();
+        (d, dp)
+    }
+
+    /// The profiled score at `theta` and the penalised deviance `Dp` there,
+    /// from one inner fit — the value probe of [`super::JointScaleScore`].
+    pub(crate) fn value_with_dp(&self, theta: &Array1<f64>) -> Result<(f64, f64)> {
+        let inner: GaussianInnerFit<S> = self.inner.fit(theta)?;
+        self.stats.record_pirls_call(inner.iterations);
+        let v = self.compute_value_from_fit(theta, &inner)?;
+        Ok((v, self.penalty_parts(theta, &inner).1))
+    }
+
+    /// The profiled `(value, grad, hess)` at `theta`, plus what
+    /// [`super::JointScaleScore`] needs to un-profile the scale: `Dp`,
+    /// `d_j = λ_j β'S_jβ`, and `∂d_j/∂ρ_i = δ_ij d_j − 2λ_iλ_j β'S_i A⁻¹ S_jβ`
+    /// (`dβ/dρ_i = −λ_i A⁻¹S_iβ`, the envelope identity).
+    pub(crate) fn value_grad_hess_with_scale_parts(
+        &self,
+        theta: &Array1<f64>,
+    ) -> Result<(f64, Array1<f64>, Array2<f64>, ScaleParts)> {
+        let inner: GaussianInnerFit<S> = self.inner.fit(theta)?;
+        self.stats.record_pirls_call(inner.iterations);
+        let (v, g, hin) = self.compute_value_grad_from_fit(theta, &inner)?;
+        let (d, dp) = self.penalty_parts(theta, &inner);
+        let m = self.s_list.len();
+        let mut d2 = Array2::<f64>::zeros((m, m));
+        if hin.a_inv.nrows() == inner.p {
+            let s_beta: Vec<Array1<f64>> = self.s_list.iter().map(|s| s.dot(&inner.beta)).collect();
+            let ainv_s_beta: Vec<Array1<f64>> = s_beta.iter().map(|sb| hin.a_inv.dot(sb)).collect();
+            for i in 0..m {
+                for j in i..m {
+                    let lam = theta[i].exp() * theta[j].exp();
+                    let x = -2.0 * lam * s_beta[i].dot(&ainv_s_beta[j]);
+                    d2[[i, j]] = x;
+                    d2[[j, i]] = x;
+                }
+                d2[[i, i]] += d[i];
+            }
+        }
+        let hess = match self.hess_analytic(&inner, &hin) {
+            Some(h) => h,
+            None => self.hess_via_fd(theta)?,
+        };
+        Ok((v, g, hess, ScaleParts { dp, d, d2 }))
+    }
+}
+
+/// The penalty pieces [`EnvelopeScore::value_grad_hess_with_scale_parts`]
+/// returns alongside the profiled score.
+pub(crate) struct ScaleParts {
+    /// `Dp = D + Σ_j λ_j β'S_jβ`.
+    pub(crate) dp: f64,
+    /// `d_j = λ_j β'S_jβ`.
+    pub(crate) d: Array1<f64>,
+    /// `∂d_j/∂ρ_i`.
+    pub(crate) d2: Array2<f64>,
 }
 
 // =============================================================================
