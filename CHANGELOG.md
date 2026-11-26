@@ -5,6 +5,27 @@ based on [Keep a Changelog](https://keepachangelog.com/); this project is in
 beta (`0.x`), so minor bumps may carry breaking changes until the 1.0 surface
 is locked. Versions correspond to the published PyPI wheels.
 
+## [Unreleased]
+
+### Fixed
+
+- **Gaussian REML lands in mgcv's minimum when REML has more than one.**
+  The outer search now runs on (log λ, log φ) jointly from mgcv's start
+  (`log(null.scale/10)`) and handles an indefinite Hessian the way mgcv's
+  `newton()` does. Before, some fits with several smooths near a straight
+  line settled in a different local minimum (REML 0.57 higher on the test
+  fixture). Costs about 3% more work over the
+  test suite, up to 16% on the largest Gaussian benchmark.
+- The outer Newton accepts any REML decrease, not only one larger than
+  `1e-10·|REML|`.
+
+### Changed
+
+- **scat reports `lambda_` and REML on mgcv's scale.** gamrs fits scat on a
+  standardised response; λ is now divided by s² and REML shifted by
+  `(n − Mp)·log s`, so both equal `mgcv::gam(family = scat())`. Fitted values
+  are unchanged.
+
 ## [0.20.0] — 2026-11-23
 
 ### Added
