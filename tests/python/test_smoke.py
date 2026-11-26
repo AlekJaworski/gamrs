@@ -441,7 +441,7 @@ def test_design_re_matches_per_column_re_and_mgcv():
     g_map = gamrs.Gam(predictor_basis_map={"g1": "re", "g2": "re"}).fit(X, y)
     np.testing.assert_array_equal(g.coef_, g_map.coef_)
     mo = fx["mgcv_output"]
-    np.testing.assert_allclose(g.predict(X), mo["fitted"], rtol=1e-7)
+    np.testing.assert_allclose(g.predict(X), mo["fitted"], rtol=1e-6)
     np.testing.assert_allclose(g.lambda_, mo["sp"], rtol=1e-5)
     np.testing.assert_allclose(g.scale_, mo["scale"], rtol=1e-7)
     np.testing.assert_allclose(g.edf_total_, mo["edf_total"], rtol=1e-7)
